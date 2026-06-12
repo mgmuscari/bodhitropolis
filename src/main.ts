@@ -16,6 +16,9 @@ import { Renderer } from './ui/renderer';
 import { attachInput } from './ui/input';
 import { statLines, eraHeadline, challengeText } from './ui/openingContent';
 import { mountOpening, type OpeningContent } from './ui/opening';
+import { TECH_TREE } from './tech/tree';
+import { createTechState } from './tech/state';
+import { accrue } from './tech/effort';
 
 const DEFAULT_SEED = 'bodhitropolis';
 const SIM_TICK_MS = 100;
@@ -27,6 +30,9 @@ export function main(): void {
   const params = new URLSearchParams(window.location.search);
   const seed = params.get('seed') ?? DEFAULT_SEED;
   const world = runPipeline({ seed }, [terrainStage(), mosesCenturyStage()]);
+
+  // Tech-tree state: communal effort accrues into it each sim tick (see below).
+  const tech = createTechState(TECH_TREE);
 
   let cssWidth = window.innerWidth;
   let cssHeight = window.innerHeight;
@@ -73,8 +79,13 @@ export function main(): void {
     markDirty();
   });
 
-  // Simulation loop is wired but has no stages yet; it just advances ticks.
-  const sim = new FixedTickLoop(SIM_TICK_MS, () => {});
+  // Simulation loop: communal effort accrues each tick — the first real
+  // per-tick work. The tech panel and its separate panelDirty refresh flag are
+  // wired in a later task (they land together so the flag has a consumer); for
+  // now the tick just funds the tech state, untouched by the canvas `dirty` flag.
+  const sim = new FixedTickLoop(SIM_TICK_MS, () => {
+    accrue(tech, world, 1);
+  });
   let last = performance.now();
   const frame = (now: number): void => {
     sim.advance(now - last);
