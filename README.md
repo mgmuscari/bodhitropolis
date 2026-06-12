@@ -94,6 +94,34 @@ history is legible. Like every stage it is **deterministic** (same seed → same
 city) and touches only the `built`/`parcel` layers and parcel attributes — the
 four terrain layers are byte-identical before and after.
 
+### The opening challenge
+
+When the app loads, an overlay turns the generated history into the game's
+first move: it names the city, tells its century, shows its wounds, and asks
+the player to heal it. The pipeline is pure and headless-tested; only the final
+overlay touches the DOM.
+
+- **City name** (`engine/names.ts`) — `cityName(rng)` builds a pronounceable,
+  title-cased name from a `'city-name'` fork of the world seed (so the name is
+  reproducible and independent of the worldgen streams).
+- **Chronicle** (`worldgen/chronicle.ts`) — `parseChronicle(world.log)` groups
+  the era log lines into entries with fixed year ranges (1900–2000), skipping
+  the bare stage names and preserving event text verbatim.
+- **Blight report** (`worldgen/report.ts`) — `buildReport(world)` reads the
+  final state: parcels standing, condition mean/median and derelict/struggling
+  shares, projects still standing, and — sourced from the era-5 chronicle line,
+  so the numbers match the prose beside them — the abandoned/cratered counts.
+  The core-vs-periphery gradient is reported as a survivorship-free abandonment
+  share (the highway core loses far more than the far suburbs).
+- **Copy** (`ui/openingContent.ts`, pure) — `statLines`, `eraHeadline`, and
+  `challengeText` turn the report and chronicle into legible strings; the
+  overlay shell (`ui/opening.ts`) mounts them.
+
+Dismiss the overlay with **Begin**, **Enter**, or **Escape**; the map is live
+beneath it. Append **`?nointro=1`** to skip the overlay entirely. Because every
+input is the deterministic world, `?seed=<anything>` reproduces an identical
+name, chronicle, and numbers on every load.
+
 ## Methodology
 
 This project is built with the Dialectic development methodology. See
