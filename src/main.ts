@@ -19,6 +19,8 @@ import { mountOpening, type OpeningContent } from './ui/opening';
 import { TECH_TREE } from './tech/tree';
 import { createTechState } from './tech/state';
 import { accrue } from './tech/effort';
+import { branchColumns, effortLine } from './ui/techContent';
+import { mountTechPanel } from './ui/techPanel';
 
 const DEFAULT_SEED = 'bodhitropolis';
 const SIM_TICK_MS = 100;
@@ -33,6 +35,11 @@ export function main(): void {
 
   // Tech-tree state: communal effort accrues into it each sim tick (see below).
   const tech = createTechState(TECH_TREE);
+
+  // The opening overlay owns its own keydown and exposes no active-state; the
+  // single composition root tracks whether it is up so the tech panel can
+  // suppress its `T` toggle underneath it (init: up unless `?nointro=1`).
+  let overlayActive = params.get('nointro') !== '1';
 
   let cssWidth = window.innerWidth;
   let cssHeight = window.innerHeight;
@@ -68,8 +75,25 @@ export function main(): void {
       stats: statLines(report),
       challenge: challengeText(name, report, chronicle),
     };
-    mountOpening(document.body, content, markDirty);
+    mountOpening(document.body, content, () => {
+      overlayActive = false;
+      markDirty();
+    });
   }
+
+  // Tech panel: right-docked, toggled by `T`. Zero game imports — it receives its
+  // content and the unlock action through deps. The `T` gate is suppressed while
+  // the opening overlay is up (isOverlayActive), so it never toggles beneath it.
+  const techPanel = mountTechPanel(document.body, {
+    getContent: () => ({ effort: effortLine(tech), columns: branchColumns(TECH_TREE, tech) }),
+    onUnlock: (id) => tech.unlock(id),
+    isOverlayActive: () => overlayActive,
+  });
+
+  // panelDirty is DISTINCT from the canvas `dirty` flag: `dirty` drives only
+  // renderer.render(world, camera); panelDirty drives a FULL panel re-derive so
+  // nodes flip locked -> affordable as effort accrues, without needing a click.
+  let panelDirty = false;
 
   window.addEventListener('resize', () => {
     cssWidth = window.innerWidth;
@@ -79,12 +103,12 @@ export function main(): void {
     markDirty();
   });
 
-  // Simulation loop: communal effort accrues each tick — the first real
-  // per-tick work. The tech panel and its separate panelDirty refresh flag are
-  // wired in a later task (they land together so the flag has a consumer); for
-  // now the tick just funds the tech state, untouched by the canvas `dirty` flag.
+  // Simulation loop: communal effort accrues each tick — the first real per-tick
+  // work. When the panel is open, the tick marks panelDirty so the next frame
+  // re-derives its full content (node affordability tracks the rising effort).
   const sim = new FixedTickLoop(SIM_TICK_MS, () => {
     accrue(tech, world, 1);
+    if (techPanel.isOpen()) panelDirty = true;
   });
   let last = performance.now();
   const frame = (now: number): void => {
@@ -93,6 +117,10 @@ export function main(): void {
     if (dirty) {
       renderer.render(world, camera);
       dirty = false;
+    }
+    if (panelDirty) {
+      techPanel.refresh();
+      panelDirty = false;
     }
     window.requestAnimationFrame(frame);
   };

@@ -89,6 +89,85 @@
         outline: 2px solid #e6e2d0;
         outline-offset: 2px;
       }
+
+      /* Tech panel: right-docked over the live map, toggled by T. Palette matches
+         the opening overlay (#1c1a2a panel, #969e4a meadow border). Internal
+         scroll keeps all seven branch columns reachable on short viewports. */
+      .tech-panel {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: min(440px, 92vw);
+        z-index: 9;
+        box-sizing: border-box;
+        overflow-y: auto;
+        padding: 1rem 1.25rem 2rem;
+        background: #1c1a2a;
+        border-left: 2px solid #969e4a;
+        box-shadow: -8px 0 28px rgba(0, 0, 0, 0.5);
+        font-family: "Courier New", ui-monospace, monospace;
+        color: #e6e2d0;
+      }
+      .tech-panel[hidden] {
+        display: none;
+      }
+      .tech-panel-header {
+        position: sticky;
+        top: 0;
+        margin: -1rem -1.25rem 0.75rem;
+        padding: 0.85rem 1.25rem;
+        background: #1c1a2a;
+        border-bottom: 1px solid #3a3850;
+        font-size: 1.05rem;
+        letter-spacing: 0.03em;
+        color: #c8c264;
+      }
+      .tech-column {
+        margin-bottom: 1rem;
+      }
+      .tech-column-title {
+        margin: 0.5rem 0 0.35rem;
+        font-size: 0.92rem;
+        letter-spacing: 0.04em;
+        color: #b6b2c6;
+      }
+      .tech-node {
+        padding: 0.4rem 0.55rem;
+        margin: 0.3rem 0;
+        border: 1px solid #3a3850;
+        border-radius: 2px;
+      }
+      .tech-node-name {
+        font-size: 0.84rem;
+      }
+      .tech-node-flavor {
+        margin-top: 0.18rem;
+        font-size: 0.72rem;
+        color: #8f8ba4;
+      }
+      .tech-node-missing {
+        margin-top: 0.18rem;
+        font-size: 0.7rem;
+        color: #b98c7a;
+      }
+      .tech-node-locked {
+        opacity: 0.55;
+      }
+      .tech-node-affordable {
+        border-color: #c8c264;
+        background: #221f33;
+      }
+      .tech-node-clickable {
+        cursor: pointer;
+      }
+      .tech-node-clickable:hover {
+        background: #2a2740;
+      }
+      .tech-node-unlocked {
+        border-color: #6a8a4a;
+        color: #cfe0b0;
+      }
     </style>
   </head>
   <body>
