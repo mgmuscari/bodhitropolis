@@ -13,6 +13,7 @@ import { ecologyTick } from './ecology/tick';
 import { ECO_CADENCE } from './ecology/influence';
 import { ecologyReport } from './ecology/report';
 import { biodiversityField } from './ecology/biodiversity';
+import { Water } from './engine/map';
 import { createRng } from './engine/rng';
 import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
@@ -141,7 +142,10 @@ export function main(): void {
   // biodiversity → off). soil/flora/fauna sources read the LIVE layers, so they
   // auto-reflect each ecology tick; the DERIVED biodiversity field is recomputed
   // and re-pushed on each ecology tick while that view is active (plan review
-  // MINOR-b).
+  // MINOR-b). Water tiles are NOT tinted (tint → null): ecology lives on land —
+  // water is habitat 0 / soil 0 by convention, not "the worst soil", so the
+  // terrain water colour shows through unobscured.
+  const overlayWater = world.map.water;
   let overlayState: OverlayState = null;
   const applyOverlay = (): void => {
     if (overlayState === null) {
@@ -150,7 +154,9 @@ export function main(): void {
     }
     if (overlayState === 'biodiversity') {
       const field = biodiversityField(world.map);
-      renderer.setOverlay({ tint: (i) => overlayTint('biodiversity', field[i]!) });
+      renderer.setOverlay({
+        tint: (i) => (overlayWater[i] !== Water.None ? null : overlayTint('biodiversity', field[i]!)),
+      });
       return;
     }
     const view = overlayState;
@@ -160,7 +166,9 @@ export function main(): void {
         : view === 'flora'
           ? world.map.floraVitality
           : world.map.faunaPresence;
-    renderer.setOverlay({ tint: (i) => overlayTint(view, layer[i]!) });
+    renderer.setOverlay({
+      tint: (i) => (overlayWater[i] !== Water.None ? null : overlayTint(view, layer[i]!)),
+    });
   };
 
   // E self-binds (the tech panel's T pattern): its own keydown routed through the
