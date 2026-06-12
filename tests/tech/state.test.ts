@@ -115,6 +115,47 @@ describe('TechState unlock', () => {
   });
 });
 
+describe('TechState.spend (guarded single-writer beside unlock)', () => {
+  it('debits exactly and returns true when affordable', () => {
+    const s = createTechState(TECH_TREE);
+    s.effort = 20;
+    expect(s.spend(8)).toBe(true);
+    expect(s.effort).toBe(12);
+  });
+
+  it('rejects an over-spend, mutating nothing (snapshotBytes unchanged)', () => {
+    const s = createTechState(TECH_TREE);
+    s.effort = 5;
+    const snap = s.snapshotBytes();
+    expect(s.spend(6)).toBe(false);
+    expect(s.effort).toBe(5);
+    expect(s.snapshotBytes()).toEqual(snap);
+  });
+
+  it('rejects a non-integer spend without mutation', () => {
+    const s = createTechState(TECH_TREE);
+    s.effort = 10;
+    const snap = s.snapshotBytes();
+    expect(s.spend(2.5)).toBe(false);
+    expect(s.effort).toBe(10);
+    expect(s.snapshotBytes()).toEqual(snap);
+  });
+
+  it('rejects a negative spend without mutation', () => {
+    const s = createTechState(TECH_TREE);
+    s.effort = 10;
+    expect(s.spend(-3)).toBe(false);
+    expect(s.effort).toBe(10);
+  });
+
+  it('allows an exact-to-zero spend', () => {
+    const s = createTechState(TECH_TREE);
+    s.effort = 7;
+    expect(s.spend(7)).toBe(true);
+    expect(s.effort).toBe(0);
+  });
+});
+
 describe('TechState snapshot determinism', () => {
   it('is byte-equal for the same action sequence and start effort', () => {
     expect(run(['walkable-streets', 'road-diets'], 100)).toEqual(

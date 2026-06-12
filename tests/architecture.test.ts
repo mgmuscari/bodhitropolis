@@ -18,6 +18,11 @@ const worldgenDir = path.join(root, 'src/worldgen');
 // deterministic (it imports only from the engine layer). The scan auto-covers
 // future tech files — see the behavioral probe test below.
 const techDir = path.join(root, 'src/tech');
+// src/tools is scanned fail-closed too: the tool system + pure input geometry are
+// deterministic functions of (world, tech, action) and must stay headless (they
+// import only from the engine + tech layers, never ui). Auto-covers tools.ts and
+// inputGeometry.ts — see the behavioral probe test below.
+const toolsDir = path.join(root, 'src/tools');
 
 // DOM globals that must never appear in headless layers.
 const FORBIDDEN_DOM = /\b(window|document|HTMLCanvasElement|requestAnimationFrame|navigator|localStorage)\b/;
@@ -47,6 +52,7 @@ function tsFiles(dir: string): string[] {
 const engineFiles = tsFiles(engineDir);
 const worldgenFiles = tsFiles(worldgenDir);
 const techFiles = tsFiles(techDir);
+const toolsFiles = tsFiles(toolsDir);
 
 // Pure-ui allowlist: ui modules that carry NO DOM and NO transcendental Math, so
 // they can be headless-tested like the engine/worldgen layers. The src/ui dir as
@@ -63,7 +69,7 @@ describe('architecture guard: headless + deterministic', () => {
     expect(worldgenFiles.length).toBeGreaterThan(0);
   });
 
-  for (const file of [...engineFiles, ...worldgenFiles, ...techFiles]) {
+  for (const file of [...engineFiles, ...worldgenFiles, ...techFiles, ...toolsFiles]) {
     const rel = path.relative(root, file);
     it(`${rel} is DOM-free, ui-free, and transcendental-Math-free`, () => {
       const code = stripComments(fs.readFileSync(file, 'utf8'));
@@ -96,6 +102,28 @@ describe('architecture guard: src/tech scanned fail-closed', () => {
     fs.writeFileSync(probe, 'export const el = document.getElementById("probe");\n');
     try {
       const discovered = tsFiles(techDir);
+      expect(discovered, 'scan did not discover the probe file').toContain(probe);
+      const code = stripComments(fs.readFileSync(probe, 'utf8'));
+      expect(FORBIDDEN_DOM.test(code), 'scan did not flag the DOM token').toBe(true);
+    } finally {
+      fs.unlinkSync(probe);
+    }
+  });
+});
+
+describe('architecture guard: src/tools scanned fail-closed', () => {
+  it('scans src/tools and finds at least one file (tools.ts)', () => {
+    expect(toolsFiles.length).toBeGreaterThan(0);
+  });
+
+  // Behavioral proof the scan covers src/tools: drop a throwaway file holding a
+  // DOM token, re-run the scan primitives, assert it is discovered AND flagged,
+  // then unlink. Fail-closed: any future tools file is auto-covered.
+  it('discovers and flags a synthetic DOM violation dropped into src/tools', () => {
+    const probe = path.join(toolsDir, '__guard_probe__.ts');
+    fs.writeFileSync(probe, 'export const el = window.document;\n');
+    try {
+      const discovered = tsFiles(toolsDir);
       expect(discovered, 'scan did not discover the probe file').toContain(probe);
       const code = stripComments(fs.readFileSync(probe, 'utf8'));
       expect(FORBIDDEN_DOM.test(code), 'scan did not flag the DOM token').toBe(true);

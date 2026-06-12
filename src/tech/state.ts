@@ -60,6 +60,20 @@ export class TechState {
     return true;
   }
 
+  /**
+   * Spend `n` communal effort. The guarded SECOND debit path beside {@link unlock}:
+   * build-tools' applyTool calls this instead of mutating the public field, so the
+   * u32-snapshot effort invariant stays enforced in one place (single-writer
+   * discipline — a drifting second writer could silently corrupt the snapshot).
+   * Returns false and mutates NOTHING unless `n` is a non-negative integer no
+   * greater than the current effort.
+   */
+  spend(n: number): boolean {
+    if (!Number.isInteger(n) || n < 0 || n > this.effort) return false;
+    this.effort -= n;
+    return true;
+  }
+
   /** Union of build kinds granted by every unlocked node. */
   grantedKinds(): ReadonlySet<BuiltKind> {
     const out = new Set<BuiltKind>();
