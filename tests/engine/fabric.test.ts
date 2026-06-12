@@ -16,6 +16,9 @@ import {
   parcelTouchesRoad,
   demolishParcel,
   demolishTransportAt,
+  TRANSPORT_CONVERSIONS,
+  canConvertTransport,
+  convertTransport,
 } from '../../src/engine/fabric';
 import { GameMap, Water } from '../../src/engine/map';
 import { runPipeline } from '../../src/worldgen/pipeline';
@@ -390,11 +393,13 @@ describe('canPlaceTransport / placeTransport', () => {
   });
 });
 
-describe('canPlaceTransport placement fence (transit kinds 5..9)', () => {
-  // The junction merge resolves overlaps via max(existing, kind), which is
-  // capacity-ordered only for classic kinds 1..4. Transit kinds 5..9 are NOT
-  // capacity-ordered (QuietStreet=7 would "win" over Highway=3), so placement is
-  // fenced off entirely until build-tools replaces max() with a capacity table.
+describe('canPlaceTransport transit-kind placement rule (5..9 on empty land only)', () => {
+  // build-tools replaces the old blanket fence: transit kinds 5..9 are now
+  // placeable, but ONLY on empty land. They never merge and never cross — the
+  // junction-merge predicate (isRoadKind && isRoadKind / Rail===Rail) is
+  // unchanged, and isRoadKind(7..9) is false, so every >4 kind is excluded from
+  // merging on both sides. (This is the REQUIRED rewrite of the old fence test;
+  // the no-merge / no-crossing property it carried is preserved below.)
   const TRANSIT_KINDS = [
     BuiltKind.BikePath,
     BuiltKind.Streetcar,
@@ -404,13 +409,157 @@ describe('canPlaceTransport placement fence (transit kinds 5..9)', () => {
   ];
 
   for (const kind of TRANSIT_KINDS) {
-    it(`refuses to place transit kind ${kind} on empty land, writing nothing`, () => {
+    it(`places transit kind ${kind} on empty land`, () => {
       const map = new GameMap(8, 8);
-      expect(canPlaceTransport(map, 1, 1, kind)).toBe(false);
-      expect(placeTransport(map, 1, 1, kind)).toBe(false);
-      expect(map.getBuilt(1, 1)).toBe(0);
+      expect(canPlaceTransport(map, 1, 1, kind)).toBe(true);
+      expect(placeTransport(map, 1, 1, kind)).toBe(true);
+      expect(map.getBuilt(1, 1)).toBe(kind);
+    });
+
+    it(`refuses transit kind ${kind} onto an occupied tile (no merge / no crossing)`, () => {
+      // Onto a road, a rail, the same transit kind, and a building: all refused,
+      // tile left intact. Transit kinds reach a tile only via the empty-land branch.
+      for (const occupant of [BuiltKind.RoadStreet, BuiltKind.Rail, kind]) {
+        const map = new GameMap(8, 8);
+        expect(placeTransport(map, 2, 2, occupant)).toBe(true);
+        expect(canPlaceTransport(map, 2, 2, kind)).toBe(false);
+        expect(placeTransport(map, 2, 2, kind)).toBe(false);
+        expect(map.getBuilt(2, 2)).toBe(occupant);
+      }
+
+      const map = new GameMap(8, 8);
+      const store = new ParcelStore();
+      placeParcel(map, store, { x: 4, y: 4, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+      expect(canPlaceTransport(map, 4, 4, kind)).toBe(false);
+      expect(placeTransport(map, 4, 4, kind)).toBe(false);
+      expect(map.getBuilt(4, 4)).toBe(BuiltKind.HouseSingle);
     });
   }
+});
+
+describe('transport merge-hazard guard (the predicate stays isRoadKind, not category)', () => {
+  // QuietStreet(7) is connection-category road, so a transportCategory-based merge
+  // test would admit Street(1)<->QuietStreet(7) and resolve max(1,7)=7 — the exact
+  // capacity-unsafe regression. Because the predicate stays isRoadKind (false for 7),
+  // placing a classic road onto a QuietStreet must be REFUSED. The tile already
+  // holds 7, and max(7, 1..3)=7 no-ops it either way, so the RETURN VALUE is the
+  // ONLY observable tell of the regression — asserting `built` alone would pass
+  // under the bug.
+  const ROADS = [BuiltKind.RoadStreet, BuiltKind.RoadAvenue, BuiltKind.RoadHighway];
+
+  for (const road of ROADS) {
+    it(`refuses road kind ${road} onto a QuietStreet (return value is the only tell)`, () => {
+      const map = new GameMap(8, 8);
+      expect(placeTransport(map, 3, 3, BuiltKind.QuietStreet)).toBe(true);
+      expect(map.getBuilt(3, 3)).toBe(BuiltKind.QuietStreet); // 7
+      expect(placeTransport(map, 3, 3, road)).toBe(false); // the tell
+      expect(map.getBuilt(3, 3)).toBe(BuiltKind.QuietStreet); // unchanged, still 7
+    });
+
+    it(`refuses a QuietStreet onto road kind ${road} (empty-only fence)`, () => {
+      const map = new GameMap(8, 8);
+      expect(placeTransport(map, 3, 3, road)).toBe(true);
+      expect(placeTransport(map, 3, 3, BuiltKind.QuietStreet)).toBe(false);
+      expect(map.getBuilt(3, 3)).toBe(road); // unchanged
+    });
+  }
+});
+
+describe('TRANSPORT_CONVERSIONS table + canConvertTransport / convertTransport', () => {
+  // Every designed (from -> to) entry. `from` kinds are all classic 1..4 OR
+  // empty-land-placeable transit kinds, so each fixture can be placed directly.
+  const CONVERSION_CASES: ReadonlyArray<readonly [number, number]> = [
+    [BuiltKind.RoadStreet, BuiltKind.QuietStreet],
+    [BuiltKind.RoadStreet, BuiltKind.Promenade],
+    [BuiltKind.RoadStreet, BuiltKind.BikePath],
+    [BuiltKind.RoadAvenue, BuiltKind.RoadStreet],
+    [BuiltKind.RoadAvenue, BuiltKind.QuietStreet],
+    [BuiltKind.RoadHighway, BuiltKind.RoadAvenue],
+    [BuiltKind.Rail, BuiltKind.Streetcar],
+  ];
+
+  it('exposes the designed conversion entries in order', () => {
+    expect([...TRANSPORT_CONVERSIONS.get(BuiltKind.RoadStreet)!]).toEqual([
+      BuiltKind.QuietStreet,
+      BuiltKind.Promenade,
+      BuiltKind.BikePath,
+    ]);
+    expect([...TRANSPORT_CONVERSIONS.get(BuiltKind.RoadAvenue)!]).toEqual([
+      BuiltKind.RoadStreet,
+      BuiltKind.QuietStreet,
+    ]);
+    expect([...TRANSPORT_CONVERSIONS.get(BuiltKind.RoadHighway)!]).toEqual([BuiltKind.RoadAvenue]);
+    expect([...TRANSPORT_CONVERSIONS.get(BuiltKind.Rail)!]).toEqual([BuiltKind.Streetcar]);
+  });
+
+  for (const [from, to] of CONVERSION_CASES) {
+    it(`converts ${from} -> ${to} in place, touching only that tile`, () => {
+      const map = new GameMap(8, 8);
+      expect(placeTransport(map, 3, 3, from)).toBe(true);
+      placeTransport(map, 5, 5, BuiltKind.RoadStreet); // witness tile, must survive
+      expect(canConvertTransport(map, 3, 3, to)).toBe(true);
+      expect(convertTransport(map, 3, 3, to)).toBe(true);
+      expect(map.getBuilt(3, 3)).toBe(to);
+      expect(map.getParcel(3, 3)).toBe(0); // never touches the parcel layer
+      expect(map.getBuilt(5, 5)).toBe(BuiltKind.RoadStreet); // map otherwise stable
+    });
+  }
+
+  // Non-entries: reverse directions, off-table classic targets, empty/building
+  // tiles. Each rejected by BOTH canConvertTransport and convertTransport, with no
+  // mutation.
+  const REJECT_CASES: ReadonlyArray<readonly [number, number]> = [
+    [BuiltKind.RoadStreet, BuiltKind.RoadAvenue], // Street has no avenue entry
+    [BuiltKind.RoadStreet, BuiltKind.RoadHighway],
+    [BuiltKind.RoadStreet, BuiltKind.Rail],
+    [BuiltKind.RoadAvenue, BuiltKind.RoadHighway],
+    [BuiltKind.RoadHighway, BuiltKind.RoadStreet],
+    [BuiltKind.QuietStreet, BuiltKind.RoadStreet], // reverse of a real entry
+    [BuiltKind.Streetcar, BuiltKind.Rail], // reverse of Rail -> Streetcar
+    [BuiltKind.Rail, BuiltKind.ElevatedRail], // Rail only converts to Streetcar
+  ];
+
+  for (const [from, to] of REJECT_CASES) {
+    it(`rejects non-entry ${from} -> ${to} without mutation`, () => {
+      const map = new GameMap(8, 8);
+      expect(placeTransport(map, 2, 2, from)).toBe(true);
+      expect(canConvertTransport(map, 2, 2, to)).toBe(false);
+      expect(convertTransport(map, 2, 2, to)).toBe(false);
+      expect(map.getBuilt(2, 2)).toBe(from);
+    });
+  }
+
+  it('rejects converting an empty tile', () => {
+    const map = new GameMap(8, 8);
+    expect(canConvertTransport(map, 1, 1, BuiltKind.QuietStreet)).toBe(false);
+    expect(convertTransport(map, 1, 1, BuiltKind.QuietStreet)).toBe(false);
+    expect(map.getBuilt(1, 1)).toBe(0);
+  });
+
+  it('rejects converting a building tile without mutation', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    placeParcel(map, store, { x: 2, y: 2, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    expect(canConvertTransport(map, 2, 2, BuiltKind.QuietStreet)).toBe(false);
+    expect(convertTransport(map, 2, 2, BuiltKind.QuietStreet)).toBe(false);
+    expect(map.getBuilt(2, 2)).toBe(BuiltKind.HouseSingle);
+    expect(map.getParcel(2, 2)).toBe(1);
+  });
+
+  it('rejects an out-of-bounds conversion', () => {
+    const map = new GameMap(8, 8);
+    expect(canConvertTransport(map, -1, 0, BuiltKind.QuietStreet)).toBe(false);
+    expect(convertTransport(map, 8, 8, BuiltKind.QuietStreet)).toBe(false);
+  });
+
+  it('leaves the bidirectional agreement sweep clean after a frontage conversion', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    placeParcel(map, store, { x: 2, y: 2, width: 2, height: 2, kind: BuiltKind.Apartments });
+    placeTransport(map, 1, 2, BuiltKind.RoadStreet); // west frontage
+    expect(convertTransport(map, 1, 2, BuiltKind.QuietStreet)).toBe(true);
+    expect(checkParcelAgreement(map, store)).toEqual([]);
+  });
 });
 
 describe('checkParcelAgreement (bidirectional sweep)', () => {
