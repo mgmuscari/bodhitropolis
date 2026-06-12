@@ -17,11 +17,16 @@ import { BuiltKind } from '../engine/fabric';
  * boost is positive, a suppressor negative); `fragmenting === true` marks a busy
  * road that fauna cannot cross (and whose own fauna is pinned to 0 in the tick).
  */
+// Fields are `readonly`: influenceOf() returns SHARED singletons (the same
+// Map-entry object for every tile of a kind, and ZERO_INFLUENCE for every neutral
+// kind), so a consumer that mutated a returned KindInfluence would silently poison
+// the global table for ALL tiles of that kind. The read-only contract enforces the
+// house single-writer discipline at the type level (code-review Task 2 Minor).
 export interface KindInfluence {
-  soil: number;
-  flora: number;
-  fauna: number;
-  fragmenting: boolean;
+  readonly soil: number;
+  readonly flora: number;
+  readonly fauna: number;
+  readonly fragmenting: boolean;
 }
 
 /** The neutral influence — what every off-table (neutral-by-default) kind feels. */
