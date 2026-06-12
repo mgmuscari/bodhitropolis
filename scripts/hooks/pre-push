@@ -3,15 +3,19 @@
 #
 # Replace with your stack's equivalents:
 #   Python: pytest tests/ -v --tb=short
-#   JS/TS:  npm test
+#   JS/TS:  vitest run
 #   Rust:   cargo test
 #   Go:     go test ./...
 
 set -e
 
 # Skip if no test files exist (e.g., template repo with only .gitkeep)
-find tests/ -name '*.py' -print -quit 2>/dev/null | grep -q . || exit 0
+find tests/ -name '*.ts' -print -quit 2>/dev/null | grep -q . || exit 0
 
 # --- Customize below for your stack ---
 
-pytest tests/ -v --tb=short
+# Guard: without installed deps, npx attempts a (slow / offline-failing)
+# registry fetch instead of running the local toolchain. Fail with guidance.
+[ -d node_modules ] || { echo "run 'npm install' first (node_modules missing)"; exit 1; }
+
+npx vitest run

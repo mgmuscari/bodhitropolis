@@ -1,18 +1,21 @@
 #!/bin/bash
-# Dialectic pre-commit hook: Lint + type check (fast gate)
+# Dialectic pre-commit hook: type check (fast gate)
 #
 # Replace these commands with your stack's equivalents:
 #   Python: ruff check src/ --fix && mypy src/ --ignore-missing-imports
-#   JS/TS:  eslint src/ --fix && tsc --noEmit
+#   JS/TS:  tsc --noEmit
 #   Rust:   cargo clippy -- -D warnings && cargo check
 #   Go:     golangci-lint run ./... && go vet ./...
 
 set -e
 
 # Skip if no source files exist (e.g., template repo with only .gitkeep)
-find src/ -name '*.py' -print -quit 2>/dev/null | grep -q . || exit 0
+find src/ -name '*.ts' -print -quit 2>/dev/null | grep -q . || exit 0
 
 # --- Customize below for your stack ---
 
-ruff check src/ --fix
-mypy src/ --ignore-missing-imports
+# Guard: without installed deps, npx attempts a (slow / offline-failing)
+# registry fetch instead of running the local toolchain. Fail with guidance.
+[ -d node_modules ] || { echo "run 'npm install' first (node_modules missing)"; exit 1; }
+
+npx tsc --noEmit
