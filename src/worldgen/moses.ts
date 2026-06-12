@@ -46,6 +46,13 @@ export interface MosesParams {
   era1Parcels: number; // total parcels to place (clipped by space)
   era1Commercial: number; // commercial strips near the crossroads
   commercialRadius: number; // "near the crossroads" = within this Manhattan radius
+  coreRadius: number; // downtown core radius (Manhattan), used by later eras
+  // Era 2 motor age
+  era2GrowthRings: number; // extra grid rings beyond the founding blocks
+  era2Industry: number; // industrial parcels on rail/water frontage
+  industryFrontage: number; // an industrial footprint must be within this of rail/water
+  era2Parking: number; // parking lots near the crossroads
+  era2Parcels: number; // extra houses/strips filling new frontage
 }
 
 export const DEFAULT_MOSES_PARAMS: MosesParams = {
@@ -63,6 +70,12 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era1Parcels: 40,
   era1Commercial: 6,
   commercialRadius: 6,
+  coreRadius: 8,
+  era2GrowthRings: 2,
+  era2Industry: 4,
+  industryFrontage: 2,
+  era2Parking: 2,
+  era2Parcels: 24,
 };
 
 // --- Shared state --------------------------------------------------------
@@ -175,6 +188,7 @@ function placeAdjacent(
   h: number,
   kind: BuiltKind,
   rng: Rng,
+  accept?: (ax: number, ay: number) => boolean,
 ): number {
   const anchors: ReadonlyArray<readonly [number, number]> = [
     [rx, ry - h], // N: parcel's south edge abuts the road
@@ -184,11 +198,36 @@ function placeAdjacent(
   ];
   for (const [ax, ay] of anchors) {
     if (!canPlaceParcel(map, ax, ay, w, h)) continue;
+    if (accept && !accept(ax, ay)) continue;
     const density = 1 + rng.nextInt(2);
     const condition = 200 + rng.nextInt(56);
     return placeParcel(map, store, { x: ax, y: ay, width: w, height: h, kind, density, condition });
   }
   return -1;
+}
+
+/** Minimum value of `field` over a w×h footprint anchored at (ax, ay). */
+function footprintMin(map: GameMap, field: Int32Array, ax: number, ay: number, w: number, h: number): number {
+  let lo = Infinity;
+  for (let dy = 0; dy < h; dy++) {
+    for (let dx = 0; dx < w; dx++) {
+      const v = field[map.idx(ax + dx, ay + dy)]!;
+      if (v >= 0 && v < lo) lo = v;
+    }
+  }
+  return lo;
+}
+
+/** Collect the road tiles inside [x0,x1]×[y0,y1], row-major. */
+function collectRoadTiles(map: GameMap, x0: number, y0: number, x1: number, y1: number): number[] {
+  const out: number[] = [];
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = map.idx(x, y);
+      if (isRoadKind(map.built[i]!)) out.push(i);
+    }
+  }
+  return out;
 }
 
 // --- Era 1: founding & streetcar town ------------------------------------
@@ -351,13 +390,7 @@ export function era1Founding(world: WorldState, rng: Rng, p: MosesParams, state:
   // Fabric: civic core, commercial near the crossroads, housing filling the
   // remaining frontage. Walk grid road tiles; place into adjacent lanes.
   const fabRng = rng.fork('fabric');
-  const roadTiles: number[] = [];
-  for (let y = bbox.y0; y <= bbox.y1; y++) {
-    for (let x = bbox.x0; x <= bbox.x1; x++) {
-      const i = map.idx(x, y);
-      if (isRoadKind(map.built[i]!)) roadTiles.push(i);
-    }
-  }
+  const roadTiles = collectRoadTiles(map, bbox.x0, bbox.y0, bbox.x1, bbox.y1);
   const manhattanToCore = (i: number): number => {
     const x = i % map.width;
     const y = (i - x) / map.width;
@@ -399,4 +432,137 @@ export function era1Founding(world: WorldState, rng: Rng, p: MosesParams, state:
   }
 
   world.log.push(`era1: fabric — ${placed} parcels (${commercial} commercial)`);
+}
+
+// --- Era 2: motor age ----------------------------------------------------
+
+/** Upgrade an arterial line (street→avenue) along its existing road tiles only. */
+function upgradeArterialRow(map: GameMap, y: number, x0: number, x1: number): number {
+  let n = 0;
+  for (let x = x0; x <= x1; x++) {
+    const i = map.idx(x, y);
+    if (isRoadKind(map.built[i]!) && placeTransport(map, x, y, BuiltKind.RoadAvenue)) n++;
+  }
+  return n;
+}
+function upgradeArterialCol(map: GameMap, x: number, y0: number, y1: number): number {
+  let n = 0;
+  for (let y = y0; y <= y1; y++) {
+    const i = map.idx(x, y);
+    if (isRoadKind(map.built[i]!) && placeTransport(map, x, y, BuiltKind.RoadAvenue)) n++;
+  }
+  return n;
+}
+
+/**
+ * Era 2 — motor age. Upgrades the two founding arterials to avenues, extends the
+ * grid outward by era2GrowthRings (clipped to land, blocked by the streetcar
+ * rail so the avenues grow in the non-rail directions), then adds the car-era
+ * fabric: rail/water-frontage industry beyond the core, parking lots near the
+ * crossroads, and more housing on the new frontage. No-ops if never founded.
+ */
+export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state: MosesState): void {
+  if (!state.founded) return;
+  const { map, parcels } = world;
+  const { siteX, siteY, arterialRow, arterialCol } = state;
+  const fabRng = rng.fork('fabric');
+
+  const bbox: BBox = { x0: state.gridX0, y0: state.gridY0, x1: state.gridX1, y1: state.gridY1 };
+
+  // 1. Arterial upgrade: street -> avenue along the existing arterials.
+  let avenues = upgradeArterialRow(map, arterialRow, state.gridX0, state.gridX1);
+  avenues += upgradeArterialCol(map, arterialCol, state.gridY0, state.gridY1);
+
+  // 2. Grid extension: extend the arterials (as avenue), then add parallel
+  //    streets within the extended spans. Avenues stop at rail/water.
+  const ext = p.era2GrowthRings * p.blockSpacing;
+  growArm(map, state.gridX1, arterialRow, 1, 0, ext, BuiltKind.RoadAvenue, bbox);
+  growArm(map, state.gridX0, arterialRow, -1, 0, ext, BuiltKind.RoadAvenue, bbox);
+  growArm(map, arterialCol, state.gridY1, 0, 1, ext, BuiltKind.RoadAvenue, bbox);
+  growArm(map, arterialCol, state.gridY0, 0, -1, ext, BuiltKind.RoadAvenue, bbox);
+  const X0 = bbox.x0;
+  const X1 = bbox.x1;
+  const Y0 = bbox.y0;
+  const Y1 = bbox.y1;
+  for (let k = 1; k <= p.era2GrowthRings; k++) {
+    const off = (p.foundingBlocks + k) * p.blockSpacing;
+    const rs = arterialRow + off;
+    const rn = arterialRow - off;
+    const ce = arterialCol + off;
+    const cw = arterialCol - off;
+    if (rs <= Y1) {
+      roadAt(map, arterialCol, rs, BuiltKind.RoadStreet, bbox);
+      growArm(map, arterialCol, rs, 1, 0, X1 - arterialCol, BuiltKind.RoadStreet, bbox);
+      growArm(map, arterialCol, rs, -1, 0, arterialCol - X0, BuiltKind.RoadStreet, bbox);
+    }
+    if (rn >= Y0) {
+      roadAt(map, arterialCol, rn, BuiltKind.RoadStreet, bbox);
+      growArm(map, arterialCol, rn, 1, 0, X1 - arterialCol, BuiltKind.RoadStreet, bbox);
+      growArm(map, arterialCol, rn, -1, 0, arterialCol - X0, BuiltKind.RoadStreet, bbox);
+    }
+    if (ce <= X1) {
+      roadAt(map, ce, arterialRow, BuiltKind.RoadStreet, bbox);
+      growArm(map, ce, arterialRow, 0, 1, Y1 - arterialRow, BuiltKind.RoadStreet, bbox);
+      growArm(map, ce, arterialRow, 0, -1, arterialRow - Y0, BuiltKind.RoadStreet, bbox);
+    }
+    if (cw >= X0) {
+      roadAt(map, cw, arterialRow, BuiltKind.RoadStreet, bbox);
+      growArm(map, cw, arterialRow, 0, 1, Y1 - arterialRow, BuiltKind.RoadStreet, bbox);
+      growArm(map, cw, arterialRow, 0, -1, arterialRow - Y0, BuiltKind.RoadStreet, bbox);
+    }
+  }
+  state.gridX0 = bbox.x0;
+  state.gridY0 = bbox.y0;
+  state.gridX1 = bbox.x1;
+  state.gridY1 = bbox.y1;
+
+  // Fabric over the (now larger) grid.
+  const roadTiles = collectRoadTiles(map, bbox.x0, bbox.y0, bbox.x1, bbox.y1);
+  const toCore = (i: number): number => {
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    return Math.abs(x - siteX) + Math.abs(y - siteY);
+  };
+
+  // 3. Industry on rail/water frontage beyond the core. Sorted nearest-first so
+  //    placements cluster on the streetcar/freight spine and the waterfront.
+  const railWaterDist = distanceField(map, (i) => map.built[i] === BuiltKind.Rail || map.water[i] !== Water.None);
+  const indCands = roadTiles
+    .filter((i) => toCore(i) > p.coreRadius)
+    .sort((a, b) => railWaterDist[a]! - railWaterDist[b]! || a - b);
+  let industry = 0;
+  for (const i of indCands) {
+    if (industry >= p.era2Industry) break;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const accept = (ax: number, ay: number): boolean =>
+      footprintMin(map, railWaterDist, ax, ay, 3, 3) <= p.industryFrontage;
+    if (placeAdjacent(map, parcels, x, y, 3, 3, BuiltKind.Industrial, fabRng, accept) !== -1) industry++;
+  }
+
+  // 4. Parking near the crossroads.
+  const byCore = [...roadTiles].sort((a, b) => toCore(a) - toCore(b) || a - b);
+  let parking = 0;
+  for (const i of byCore) {
+    if (parking >= p.era2Parking) break;
+    if (toCore(i) > p.commercialRadius) continue;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    if (placeAdjacent(map, parcels, x, y, 2, 2, BuiltKind.ParkingLot, fabRng) !== -1) parking++;
+  }
+
+  // 5. More houses (and the occasional strip) fill the new frontage.
+  let filled = 0;
+  for (const i of roadTiles) {
+    if (filled >= p.era2Parcels) break;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const kind = filled % 6 === 5 ? BuiltKind.CommercialStrip : BuiltKind.HouseSingle;
+    const w = kind === BuiltKind.CommercialStrip ? 2 : 1;
+    if (placeAdjacent(map, parcels, x, y, w, 1, kind, fabRng) !== -1) filled++;
+  }
+
+  world.log.push(
+    `era2: motor age — ${avenues} avenue tiles, ${industry} industry, ${parking} parking, ${filled} infill`,
+  );
 }

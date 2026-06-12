@@ -13,20 +13,36 @@ import {
 import {
   createMosesState,
   era1Founding,
+  era2MotorAge,
   DEFAULT_MOSES_PARAMS,
+  type MosesParams,
   type MosesState,
 } from '../../src/worldgen/moses';
 
 const SEEDS = ['moses-1', 'moses-2', 'moses-3'];
 const P = DEFAULT_MOSES_PARAMS;
 
-// Runs terrain, then era 1 alone, forking the era rng the way the stage will —
-// so per-era invariants are measurable between eras (the design's selling point).
-function runEra1(seed: string, width = 128, height = 128): { world: WorldState; state: MosesState } {
+// The era functions in order; the test runner forks each era's rng exactly the
+// way the stage does, so a prefix of history is reproducible and measurable.
+const ERAS = [era1Founding, era2MotorAge] as const;
+const ERA_NAMES = ['era1', 'era2'] as const;
+
+// Runs terrain, then the first `n` eras, forking each era rng like the stage.
+function runEras(
+  seed: string,
+  n: number,
+  width = 128,
+  height = 128,
+  params: MosesParams = P,
+): { world: WorldState; state: MosesState } {
   const world = runPipeline({ seed, width, height }, [terrainStage()]);
   const state = createMosesState();
-  era1Founding(world, createRng(seed).fork('era1'), P, state);
+  for (let k = 0; k < n; k++) ERAS[k]!(world, createRng(seed).fork(ERA_NAMES[k]!), params, state);
   return { world, state };
+}
+
+function runEra1(seed: string, width = 128, height = 128): { world: WorldState; state: MosesState } {
+  return runEras(seed, 1, width, height);
 }
 
 function aliveKindCount(world: WorldState, kind: number): number {
@@ -177,6 +193,80 @@ describe('era1Founding settlement', () => {
         expect(parcelTouchesRoad(map, parcels, i)).toBe(true);
       }
       expect(checkParcelAgreement(map, parcels)).toEqual([]);
+    });
+  }
+});
+
+// Manhattan distance from any tile of parcel `i`'s footprint to the nearest
+// rail or water tile, capped at `cap` (searches a small neighbourhood).
+function nearRailOrWater(map: GameMap, parcels: WorldState['parcels'], i: number, cap = 2): boolean {
+  const e = parcels.get(i);
+  for (let yy = e.y; yy < e.y + e.height; yy++) {
+    for (let xx = e.x; xx < e.x + e.width; xx++) {
+      for (let dy = -cap; dy <= cap; dy++) {
+        for (let dx = -cap; dx <= cap; dx++) {
+          if (Math.abs(dx) + Math.abs(dy) > cap) continue;
+          const nx = xx + dx;
+          const ny = yy + dy;
+          if (!map.inBounds(nx, ny)) continue;
+          const j = map.idx(nx, ny);
+          if (map.built[j] === BuiltKind.Rail || map.water[j] !== Water.None) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function avenueTileCount(map: GameMap): number {
+  let n = 0;
+  for (let i = 0; i < map.built.length; i++) if (map.built[i] === BuiltKind.RoadAvenue) n++;
+  return n;
+}
+
+describe('era2MotorAge determinism', () => {
+  it('produces an identical canonical hash for the same seed', () => {
+    expect(hashWorld(runEras('moses-1', 2).world)).toBe(hashWorld(runEras('moses-1', 2).world));
+  });
+
+  it('produces different canonical hashes for different seeds', () => {
+    expect(hashWorld(runEras('moses-1', 2).world)).not.toBe(hashWorld(runEras('moses-2', 2).world));
+  });
+});
+
+describe('era2MotorAge', () => {
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": upgrades arterials to avenues (>= 20 tiles)`, () => {
+      const { map } = runEras(seed, 2).world;
+      expect(avenueTileCount(map)).toBeGreaterThanOrEqual(20);
+    });
+
+    it(`seed "${seed}": places industry on rail/water frontage`, () => {
+      const { world } = runEras(seed, 2);
+      const { map, parcels } = world;
+      const industry = parcels.aliveIndices().filter((i) => parcels.kindAt(i) === BuiltKind.Industrial);
+      expect(industry.length).toBeGreaterThanOrEqual(2);
+      for (const i of industry) {
+        expect(nearRailOrWater(map, parcels, i, P.industryFrontage)).toBe(true);
+      }
+    });
+
+    it(`seed "${seed}": places at least one parking lot`, () => {
+      const { world } = runEras(seed, 2);
+      const parking = world.parcels.aliveIndices().filter((i) => world.parcels.kindAt(i) === BuiltKind.ParkingLot);
+      expect(parking.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it(`seed "${seed}": road network stays a single connected component`, () => {
+      const { map } = runEras(seed, 2).world;
+      const net = roadNetwork(map);
+      expect(net.total).toBeGreaterThanOrEqual(100);
+      expect(net.largestComponent).toBe(net.total);
+    });
+
+    it(`seed "${seed}": tiles still agree with the store`, () => {
+      const { world } = runEras(seed, 2);
+      expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
     });
   }
 });
