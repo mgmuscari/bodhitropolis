@@ -728,6 +728,47 @@ describe('parcelTouchesRoad', () => {
   });
 });
 
+describe('parcelTouchesRoad: quiet-street frontage (transportCategory road)', () => {
+  // build-tools widens road frontage from isRoadKind (1..3) to connection-category
+  // road (transportCategory === 1), so QuietStreet(7) now counts. The ONLY
+  // behavioral delta is QuietStreet: rail (cat 2), bike (cat 3) and pedestrian
+  // (cat 4) kinds are still NOT road frontage, which is why every existing
+  // frontage test above stays green unchanged.
+  it('counts a quiet street along a footprint edge as road frontage', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    const i = placeParcel(map, store, { x: 2, y: 2, width: 2, height: 2, kind: BuiltKind.Apartments });
+    placeTransport(map, 1, 2, BuiltKind.QuietStreet); // west edge, category road
+    expect(parcelTouchesRoad(map, store, i)).toBe(true);
+  });
+
+  it('does not count a promenade (pedestrian) as road frontage', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    const i = placeParcel(map, store, { x: 2, y: 2, width: 2, height: 2, kind: BuiltKind.Offices });
+    placeTransport(map, 1, 2, BuiltKind.Promenade); // category pedestrian
+    expect(parcelTouchesRoad(map, store, i)).toBe(false);
+  });
+
+  it('does not count a bike path as road frontage', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    const i = placeParcel(map, store, { x: 2, y: 2, width: 2, height: 2, kind: BuiltKind.Offices });
+    placeTransport(map, 1, 2, BuiltKind.BikePath); // category bike
+    expect(parcelTouchesRoad(map, store, i)).toBe(false);
+  });
+
+  it('stays fronted after a street frontage is converted to a quiet street', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    const i = placeParcel(map, store, { x: 2, y: 2, width: 2, height: 2, kind: BuiltKind.Apartments });
+    placeTransport(map, 1, 2, BuiltKind.RoadStreet); // west frontage
+    expect(parcelTouchesRoad(map, store, i)).toBe(true);
+    expect(convertTransport(map, 1, 2, BuiltKind.QuietStreet)).toBe(true);
+    expect(parcelTouchesRoad(map, store, i)).toBe(true); // quiet street still fronts
+  });
+});
+
 describe('ParcelStore aliveness (tombstones)', () => {
   it('add marks a parcel alive; aliveCount and aliveIndices track it', () => {
     const map = new GameMap(16, 16);

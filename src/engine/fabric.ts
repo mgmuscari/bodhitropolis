@@ -490,8 +490,10 @@ export function transportMask(map: GameMap, x: number, y: number): number {
 
 /**
  * True iff any tile orthogonally adjacent to parcel `i`'s footprint perimeter
- * (and outside the footprint) is a road kind. Diagonals do not count — only the
- * 4-neighbours of footprint tiles are examined. Rail is not road frontage.
+ * (and outside the footprint) is a connection-category ROAD tile
+ * (transportCategory === 1: classic roads 1..3 AND QuietStreet). Diagonals do not
+ * count — only the 4-neighbours of footprint tiles are examined. Rail (cat 2),
+ * bike (cat 3) and pedestrian (cat 4) kinds are not road frontage.
  */
 export function parcelTouchesRoad(map: GameMap, store: ParcelStore, i: number): boolean {
   const p = store.get(i);
@@ -506,7 +508,7 @@ export function parcelTouchesRoad(map: GameMap, store: ParcelStore, i: number): 
         const ny = ty + ddy;
         if (inside(nx, ny)) continue;
         if (!map.inBounds(nx, ny)) continue;
-        if (isRoadKind(map.getBuilt(nx, ny))) return true;
+        if (transportCategory(map.getBuilt(nx, ny)) === 1) return true;
       }
     }
   }
