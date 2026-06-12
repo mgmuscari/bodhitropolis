@@ -21,6 +21,10 @@ import { createTechState } from './tech/state';
 import { accrue } from './tech/effort';
 import { branchColumns, effortLine } from './ui/techContent';
 import { mountTechPanel } from './ui/techPanel';
+import { isTransportKind } from './engine/fabric';
+import { availableTools, previewTool, applyTool, toolDef, type ToolId } from './tools/tools';
+import { toolbarRows } from './ui/toolbarContent';
+import { mountToolbar } from './ui/toolbar';
 
 const DEFAULT_SEED = 'bodhitropolis';
 const SIM_TICK_MS = 100;
@@ -59,8 +63,6 @@ export function main(): void {
     dirty = true;
   };
 
-  attachInput(canvas, camera, markDirty);
-
   // Opening challenge overlay. Computed from the same world, mounted over the
   // live map unless `?nointro=1`. The map input stays attached beneath; the
   // overlay captures pointer events until the player dismisses it (Begin /
@@ -95,6 +97,74 @@ export function main(): void {
   // nodes flip locked -> affordable as effort accrues, without needing a click.
   let panelDirty = false;
 
+  // Tool state: the selected tool id (null = none). A "line tool" (transport build
+  // 5..9 or any conversion) paints a dragged line; everything else is point-apply.
+  let selectedToolId: ToolId | null = null;
+  const isLineTool = (id: ToolId | null): boolean => {
+    if (id === null) return false;
+    if (id.startsWith('convert-')) return true;
+    if (id.startsWith('build-')) {
+      const def = toolDef(id);
+      return def?.kind !== undefined && isTransportKind(def.kind);
+    }
+    return false;
+  };
+
+  // Bottom tool dock: always on, derived from tech grants + selection + effort.
+  const toolbar = mountToolbar(document.body, {
+    getRows: () => toolbarRows(availableTools(tech), selectedToolId, tech.effort),
+    onSelect: (id) => {
+      selectedToolId = id as ToolId;
+      renderer.setPreview(null);
+      dirty = true;
+      toolbar.refresh();
+    },
+  });
+
+  const previewAt = (tx: number, ty: number): void => {
+    if (selectedToolId === null) return;
+    const def = toolDef(selectedToolId);
+    if (!def) return;
+    const p = previewTool(world, tech, def, tx, ty);
+    renderer.setPreview([{ x: tx, y: ty, valid: p.valid }]);
+    dirty = true;
+  };
+
+  const applyAt = (tx: number, ty: number): void => {
+    if (selectedToolId === null) return;
+    const def = toolDef(selectedToolId);
+    if (!def) return;
+    const r = applyTool(world, tech, def, tx, ty);
+    if (r.ok) {
+      dirty = true;
+      panelDirty = true; // effort changed → tech-panel affordability
+      toolbar.refresh(); // effort changed → dock affordability
+      previewAt(tx, ty); // re-tint the just-touched tile
+    }
+  };
+
+  attachInput(canvas, camera, {
+    onChange: markDirty,
+    hasTool: () => selectedToolId !== null,
+    isLineTool: () => isLineTool(selectedToolId),
+    applyAt,
+    hover: previewAt,
+    clearHover: () => {
+      renderer.setPreview(null);
+      dirty = true;
+    },
+    onHotkey: (action) => {
+      selectedToolId = action === 'inspect' ? 'inspect' : action === 'bulldoze' ? 'bulldoze' : null;
+      renderer.setPreview(null);
+      dirty = true;
+      toolbar.refresh();
+    },
+  });
+
+  // Refresh the dock's affordability when effort actually changes (it accrues each
+  // sim tick); cheap, and avoids rebuilding the dock on idle frames.
+  let lastEffort = tech.effort;
+
   window.addEventListener('resize', () => {
     cssWidth = window.innerWidth;
     cssHeight = window.innerHeight;
@@ -121,6 +191,10 @@ export function main(): void {
     if (panelDirty) {
       techPanel.refresh();
       panelDirty = false;
+    }
+    if (tech.effort !== lastEffort) {
+      toolbar.refresh();
+      lastEffort = tech.effort;
     }
     window.requestAnimationFrame(frame);
   };
