@@ -23,6 +23,12 @@ const techDir = path.join(root, 'src/tech');
 // import only from the engine + tech layers, never ui). Auto-covers tools.ts and
 // inputGeometry.ts — see the behavioral probe test below.
 const toolsDir = path.join(root, 'src/tools');
+// src/ecology is scanned fail-closed too: the influence table, the ecology tick,
+// and the biodiversity/report derivations are deterministic functions of the map
+// (+ fabric taxonomy) and must stay headless (no DOM) and transcendental-free
+// (Simpson's index is exact-rational, not Shannon). Auto-covers every future
+// ecology file — see the behavioral probe test below.
+const ecologyDir = path.join(root, 'src/ecology');
 
 // DOM globals that must never appear in headless layers.
 const FORBIDDEN_DOM = /\b(window|document|HTMLCanvasElement|requestAnimationFrame|navigator|localStorage)\b/;
@@ -53,6 +59,7 @@ const engineFiles = tsFiles(engineDir);
 const worldgenFiles = tsFiles(worldgenDir);
 const techFiles = tsFiles(techDir);
 const toolsFiles = tsFiles(toolsDir);
+const ecologyFiles = tsFiles(ecologyDir);
 
 // Pure-ui allowlist: ui modules that carry NO DOM and NO transcendental Math, so
 // they can be headless-tested like the engine/worldgen layers. The src/ui dir as
@@ -74,7 +81,7 @@ describe('architecture guard: headless + deterministic', () => {
     expect(worldgenFiles.length).toBeGreaterThan(0);
   });
 
-  for (const file of [...engineFiles, ...worldgenFiles, ...techFiles, ...toolsFiles]) {
+  for (const file of [...engineFiles, ...worldgenFiles, ...techFiles, ...toolsFiles, ...ecologyFiles]) {
     const rel = path.relative(root, file);
     it(`${rel} is DOM-free, ui-free, and transcendental-Math-free`, () => {
       const code = stripComments(fs.readFileSync(file, 'utf8'));
@@ -132,6 +139,29 @@ describe('architecture guard: src/tools scanned fail-closed', () => {
       expect(discovered, 'scan did not discover the probe file').toContain(probe);
       const code = stripComments(fs.readFileSync(probe, 'utf8'));
       expect(FORBIDDEN_DOM.test(code), 'scan did not flag the DOM token').toBe(true);
+    } finally {
+      fs.unlinkSync(probe);
+    }
+  });
+});
+
+describe('architecture guard: src/ecology scanned fail-closed', () => {
+  it('scans src/ecology and finds at least one file (influence.ts)', () => {
+    expect(ecologyFiles.length).toBeGreaterThan(0);
+  });
+
+  // Behavioral proof the scan covers src/ecology: drop a throwaway file holding a
+  // transcendental-Math token (Simpson's index must stay exact-rational), re-run
+  // the scan primitives, assert it is discovered AND flagged, then unlink.
+  // Fail-closed: any future ecology file is auto-covered, no allowlist needed.
+  it('discovers and flags a synthetic transcendental-Math violation dropped into src/ecology', () => {
+    const probe = path.join(ecologyDir, '__guard_probe__.ts');
+    fs.writeFileSync(probe, 'export const x = Math.log(2);\n');
+    try {
+      const discovered = tsFiles(ecologyDir);
+      expect(discovered, 'scan did not discover the probe file').toContain(probe);
+      const code = stripComments(fs.readFileSync(probe, 'utf8'));
+      expect(FORBIDDEN_MATH.test(code), 'scan did not flag the transcendental token').toBe(true);
     } finally {
       fs.unlinkSync(probe);
     }
