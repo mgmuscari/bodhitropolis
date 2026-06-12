@@ -1,0 +1,202 @@
+import { describe, it, expect } from 'vitest';
+import { runPipeline, type WorldgenStage, type WorldState } from '../../src/worldgen/pipeline';
+import { GameMap, Water } from '../../src/engine/map';
+import { createRng } from '../../src/engine/rng';
+import { terrainStage } from '../../src/worldgen/terrain';
+import {
+  BuiltKind,
+  isRoadKind,
+  hashWorld,
+  parcelTouchesRoad,
+  checkParcelAgreement,
+} from '../../src/engine/fabric';
+import {
+  createMosesState,
+  era1Founding,
+  DEFAULT_MOSES_PARAMS,
+  type MosesState,
+} from '../../src/worldgen/moses';
+
+const SEEDS = ['moses-1', 'moses-2', 'moses-3'];
+const P = DEFAULT_MOSES_PARAMS;
+
+// Runs terrain, then era 1 alone, forking the era rng the way the stage will —
+// so per-era invariants are measurable between eras (the design's selling point).
+function runEra1(seed: string, width = 128, height = 128): { world: WorldState; state: MosesState } {
+  const world = runPipeline({ seed, width, height }, [terrainStage()]);
+  const state = createMosesState();
+  era1Founding(world, createRng(seed).fork('era1'), P, state);
+  return { world, state };
+}
+
+function aliveKindCount(world: WorldState, kind: number): number {
+  const { parcels } = world;
+  let c = 0;
+  for (const i of parcels.aliveIndices()) if (parcels.kindAt(i) === kind) c++;
+  return c;
+}
+
+// All road tiles, and the size of the connected component reachable from the
+// first one (4-connected over road kinds).
+function roadNetwork(map: GameMap): { total: number; largestComponent: number } {
+  const { width, height } = map;
+  const isRoad = (i: number) => isRoadKind(map.built[i]!);
+  const all: number[] = [];
+  for (let i = 0; i < width * height; i++) if (isRoad(i)) all.push(i);
+  if (all.length === 0) return { total: 0, largestComponent: 0 };
+  const seen = new Uint8Array(width * height);
+  let largest = 0;
+  for (const start of all) {
+    if (seen[start]) continue;
+    let size = 0;
+    const queue = [start];
+    seen[start] = 1;
+    let head = 0;
+    while (head < queue.length) {
+      const i = queue[head++]!;
+      size++;
+      const x = i % width;
+      const y = (i - x) / width;
+      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]] as const) {
+        if (!map.inBounds(nx, ny)) continue;
+        const ni = map.idx(nx, ny);
+        if (!seen[ni] && isRoad(ni)) {
+          seen[ni] = 1;
+          queue.push(ni);
+        }
+      }
+    }
+    if (size > largest) largest = size;
+  }
+  return { total: all.length, largestComponent: largest };
+}
+
+// Connected components of Rail tiles (4-connected), each as a list of [x, y].
+function railComponents(map: GameMap): Array<Array<[number, number]>> {
+  const { width, height } = map;
+  const isRail = (i: number) => map.built[i] === BuiltKind.Rail;
+  const seen = new Uint8Array(width * height);
+  const comps: Array<Array<[number, number]>> = [];
+  for (let s = 0; s < width * height; s++) {
+    if (!isRail(s) || seen[s]) continue;
+    const comp: Array<[number, number]> = [];
+    const queue = [s];
+    seen[s] = 1;
+    let head = 0;
+    while (head < queue.length) {
+      const i = queue[head++]!;
+      const x = i % width;
+      const y = (i - x) / width;
+      comp.push([x, y]);
+      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]] as const) {
+        if (!map.inBounds(nx, ny)) continue;
+        const ni = map.idx(nx, ny);
+        if (!seen[ni] && isRail(ni)) {
+          seen[ni] = 1;
+          queue.push(ni);
+        }
+      }
+    }
+    comps.push(comp);
+  }
+  return comps;
+}
+
+describe('era1Founding determinism', () => {
+  it('produces an identical canonical hash for the same seed', () => {
+    expect(hashWorld(runEra1('moses-1').world)).toBe(hashWorld(runEra1('moses-1').world));
+  });
+
+  it('produces different canonical hashes for different seeds', () => {
+    expect(hashWorld(runEra1('moses-1').world)).not.toBe(hashWorld(runEra1('moses-2').world));
+  });
+});
+
+describe('era1Founding settlement', () => {
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": founds the town and chronicles it`, () => {
+      const { world, state } = runEra1(seed);
+      expect(state.founded).toBe(true);
+      expect(world.log.some((l) => l.startsWith('era1:'))).toBe(true);
+    });
+
+    it(`seed "${seed}": street network is a single connected component`, () => {
+      const { map } = runEra1(seed).world;
+      const net = roadNetwork(map);
+      expect(net.total).toBeGreaterThanOrEqual(100); // a real grid, not confetti
+      expect(net.largestComponent).toBe(net.total); // single component
+    });
+
+    it(`seed "${seed}": rail runs as radial extensions only (yield point 1)`, () => {
+      const { world, state } = runEra1(seed);
+      const { map } = world;
+      const comps = railComponents(map);
+      const big = comps.filter((c) => c.length >= 6);
+      expect(big.length).toBeGreaterThanOrEqual(2); // >= 2 extensions of >= 6 tiles
+
+      // Zero rail tiles inside the grid bounding box.
+      for (const comp of comps) {
+        for (const [x, y] of comp) {
+          const inGrid = x >= state.gridX0 && x <= state.gridX1 && y >= state.gridY0 && y <= state.gridY1;
+          expect(inGrid).toBe(false);
+        }
+      }
+
+      // Each big extension begins 4-adjacent to an arterial end.
+      const ends: Array<[number, number]> = [
+        [state.gridX1, state.arterialRow],
+        [state.gridX0, state.arterialRow],
+        [state.arterialCol, state.gridY0],
+        [state.arterialCol, state.gridY1],
+      ];
+      for (const comp of big) {
+        const touchesEnd = comp.some(([x, y]) =>
+          ends.some(([ex, ey]) => Math.abs(x - ex) + Math.abs(y - ey) === 1),
+        );
+        expect(touchesEnd).toBe(true);
+      }
+
+      // railPeak chronicles the total rail tile count.
+      let railTiles = 0;
+      for (let i = 0; i < map.built.length; i++) if (map.built[i] === BuiltKind.Rail) railTiles++;
+      expect(state.railPeak).toBe(railTiles);
+      expect(state.railPeak).toBeGreaterThanOrEqual(12); // >= 2 lines * 6 tiles
+    });
+
+    it(`seed "${seed}": grows a coherent early fabric (civic, commerce, housing)`, () => {
+      const { world } = runEra1(seed);
+      expect(aliveKindCount(world, BuiltKind.Civic)).toBeGreaterThanOrEqual(1);
+      expect(aliveKindCount(world, BuiltKind.CommercialStrip)).toBeGreaterThanOrEqual(3);
+      expect(aliveKindCount(world, BuiltKind.HouseSingle)).toBeGreaterThanOrEqual(15);
+    });
+
+    it(`seed "${seed}": every alive parcel touches a road; tiles agree with the store`, () => {
+      const { world } = runEra1(seed);
+      const { map, parcels } = world;
+      for (const i of parcels.aliveIndices()) {
+        expect(parcelTouchesRoad(map, parcels, i)).toBe(true);
+      }
+      expect(checkParcelAgreement(map, parcels)).toEqual([]);
+    });
+  }
+});
+
+describe('era1Founding on a degenerate map', () => {
+  it('no-ops with "no viable site" on an all-water map (no throw)', () => {
+    const allWater: WorldgenStage = {
+      name: 'all-water',
+      apply(world) {
+        world.map.water.fill(Water.Ocean);
+      },
+    };
+    const world = runPipeline({ seed: 'drowned', width: 48, height: 48 }, [allWater]);
+    const state = createMosesState();
+    era1Founding(world, createRng('drowned').fork('era1'), P, state);
+    expect(state.founded).toBe(false);
+    expect(world.log).toContain('era1: no viable site');
+    let built = 0;
+    for (let i = 0; i < world.map.built.length; i++) if (world.map.built[i] !== 0) built++;
+    expect(built).toBe(0);
+    expect(world.parcels.count()).toBe(0);
+  });
+});
