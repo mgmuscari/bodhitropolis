@@ -136,3 +136,24 @@ execution-mechanics note) folded into the PRP, this is ready for execution.
 **Path forward:** Revise the PRP per yield points 1-7 (a regeneration is not
 needed — targeted edits suffice), then proceed to execution via the
 mechanism in yield point 4.
+
+## Resolution Addendum (same day)
+
+All seven yield points were folded into the PRP (see the PRP's `Revised:`
+header line and the revision commit):
+
+1. River test replaced with per-component BFS connectivity assertion — **resolved**
+2. Determinism design rule added (no transcendental `Math` in engine/worldgen;
+   moisture falloff now rational `1/(1+k·d)`); rule enforced by the Task 8
+   architecture guard (`Math.(exp|pow|log|sin|cos|tan|random)` banned) — **resolved**
+3. Hooks now guard on `node_modules` presence before invoking npx — **resolved**
+4. Execution-mechanics note added to PRP §2 (proposer agent via
+   `DIALECTIC_TEAM_AGENT=1` wrapper mechanism; stop-and-surface if unavailable) — **resolved**
+5. `const enum` replaced with `as const` objects + literal-union types;
+   uncertainty entry removed — **resolved**
+6. `npm run build` added to §4 Validation Gates and Task 9 validation — **resolved**
+7. `.gitignore` edit dropped; §2 corrected (Node entries already present at
+   lines 17/29) — **resolved**
+
+**Post-revision verdict: APPROVED** — proceed to execution per the
+execution-mechanics note.

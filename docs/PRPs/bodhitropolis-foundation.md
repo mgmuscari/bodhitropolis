@@ -2,6 +2,7 @@
 
 ## Source PRD: docs/PRDs/bodhitropolis-foundation.md
 ## Date: 2026-06-12
+## Revised: 2026-06-12 per docs/reviews/plans/bodhitropolis-foundation-review.md (yield points 1-7)
 
 ## 1. Context Summary
 
@@ -46,8 +47,24 @@ it.
   - TDD mandatory: RED → GREEN → REFACTOR per task.
 - **Integration points**: none with legacy code. `index.html` + `src/main.ts`
   are the browser entry; everything else is internal modules. `.gitignore`
-  needs `node_modules/`, `dist/` entries (check existing file first — it came
-  from the template and likely lacks Node entries).
+  already covers Node (`dist/` at line 17, `node_modules/` at line 29) — no
+  edit needed.
+
+**Determinism design rule (load-bearing):** engine and worldgen code may use
+only exactly-rounded float operations (`+ - * / sqrt`) and integer math. No
+transcendental `Math` functions (`exp`, `pow`, `log`, `sin`, `cos`, `tan`) —
+their results vary across JS engines, which would break "same seed → same
+world" between browsers. Use rational/polynomial equivalents. Enforced by
+the Task 8 architecture guard.
+
+**Execution mechanics note:** standard tier blocks team-lead edits to
+`src//tests/` via `.claude/hooks/block-solo-implementation.sh`. Team-mode
+spawning is environmentally unavailable this session (iTerm2 split-pane
+failure). Implementation therefore runs through a proposer agent carrying
+`DIALECTIC_TEAM_AGENT=1` (the repo's `scripts/claude-teammate-wrapper.sh`
+mechanism — headless, no panes), keeping the team lead out of `src//tests/`
+per the hook's intent. If that also proves unavailable, stop and surface to
+the human — do not edit around the gate.
 
 ## 3. Implementation Plan
 
@@ -75,9 +92,11 @@ touch the DOM.
 - `src/main.ts`: placeholder that no-ops outside a browser (guard on
   `typeof document !== 'undefined'`) so importing it headless is safe.
 - Hooks: replace Python commands; change self-skip `find` patterns to
-  `*.ts`. pre-commit: `npx tsc --noEmit`. pre-push: `npx vitest run`.
-  Re-run `./scripts/setup.sh` to reinstall if `.git/hooks` holds copies.
-- `.gitignore`: append `node_modules/`, `dist/`.
+  `*.ts`. Guard before npx: `[ -d node_modules ] || { echo "run npm install
+  first"; exit 1; }` (otherwise npx attempts a registry fetch on fresh
+  clones). pre-commit: `npx tsc --noEmit`. pre-push: `npx vitest run`.
+  `scripts/setup.sh` copies (not symlinks) hooks into `.git/hooks/`
+  (setup.sh:36) — re-run it after editing.
 **Tests:** `tests/smoke.test.ts` — vitest runs, imports `src/main.ts` without
 throwing (proves headless-import safety), trivial assertion.
 **Validation:** `npx vitest run` green; `npx tsc --noEmit` clean; commit
@@ -126,8 +145,12 @@ clamping caps ticks per advance; zero/negative elapsed fires nothing.
 **Files:** `src/engine/map.ts`, `tests/engine/map.test.ts`
 **Approach:**
 ```ts
-const enum Water { None, River, Lake, Ocean }
-const enum LandCover { Bare, Meadow, Grass, Forest }
+// Plain consts + literal unions — NOT `const enum` (esbuild/Vite does not
+// erase const enums across modules; review yield point 5)
+const Water = { None: 0, River: 1, Lake: 2, Ocean: 3 } as const;
+type Water = (typeof Water)[keyof typeof Water];
+const LandCover = { Bare: 0, Meadow: 1, Grass: 2, Forest: 3 } as const;
+type LandCover = (typeof LandCover)[keyof typeof LandCover];
 class GameMap {
   constructor(width = 128, height = 128)
   readonly elevation: Float32Array  // [0,1]
@@ -193,17 +216,22 @@ with defaults: `seaLevel 0.32`, `springCount 3`, `forestMoisture 0.6`,
    MapGenerator.java:255) carving `River` and slightly eroding elevation;
    terminate at any water or map edge; on local-minimum stall, fill to
    `Lake` and stop (cheap, plausible).
-4. *Moisture*: BFS distance-to-nearest-water, mapped through exp falloff,
-   blended 70/30 with an independent fBm field.
+4. *Moisture*: BFS distance-to-nearest-water `d`, mapped through the
+   rational falloff `1 / (1 + k·d)` (exactly-rounded ops only — the
+   determinism design rule forbids `Math.exp`), blended 70/30 with an
+   independent fBm field.
 5. *Land cover*: water → Bare; else thresholds on moisture (≥forestMoisture
    → Forest, mid → Grass, low → Meadow) with rng dithering in a ±0.05 band
    at each boundary for organic edges.
 **Tests:** determinism — two full `runPipeline` calls, same seed → equal
 `snapshot()`; different seeds → different snapshots; for seeds
 `['bodhi-1'..'bodhi-5']`: water fraction in [0.08, 0.45], forest fraction in
-[0.05, 0.55]; every `River` cell has a 4-neighbor that is water or is on the
-map edge (connectivity); all springs start above seaLevel; land cover is
-Bare on all water cells.
+[0.05, 0.55]; **river connectivity** — BFS each connected component of
+`River` cells and assert every component contains at least one cell that is
+on the map edge or 4-adjacent to an `Ocean`/`Lake` cell (a stranded river
+loop must FAIL this test; mere river-neighbor adjacency is vacuous since
+river cells are themselves water); all springs start above seaLevel; land
+cover is Bare on all water cells.
 **Validation:** `npx vitest run`
 
 ### Task 8: Architecture guard (DOM-free engine)
@@ -211,7 +239,11 @@ Bare on all water cells.
 **Approach:** Node `fs` walk of `src/engine/` and `src/worldgen/`; fail if
 source matches `\b(window|document|HTMLCanvasElement|requestAnimationFrame|
 navigator|localStorage)\b` or imports from `../ui` / `src/ui`. Also assert
-`src/engine` files never import from `src/worldgen` (dependency direction).
+`src/engine` files never import from `src/worldgen` (dependency direction),
+and enforce the determinism design rule: fail on
+`Math\.(exp|pow|log|sin|cos|tan|random)\b` in engine/worldgen sources
+(exactly-rounded ops and integer math only; `Math.random` is banned
+everywhere in favor of the seeded rng).
 **Tests:** the guard itself (it IS the test) plus a self-check: assert it
 flags a synthetic bad string via the matcher function exported for testing.
 **Validation:** `npx vitest run`
@@ -238,9 +270,10 @@ flags a synthetic bad string via the matcher function exported for testing.
 each zoom; zoomAt keeps cursor-point invariant; pan clamping at all four map
 edges; zoom clamps at min/max. Renderer/input stay untested thin shells
 (manual validation) — keep all logic that can live in camera.ts there.
-**Validation:** `npx vitest run`; manual: `npm run dev` shows pixel-crisp
-terrain; drag/wheel/arrows work; `?seed=x` changes the map, reload with same
-seed reproduces it.
+**Validation:** `npx vitest run`; `npm run build` (first task where the
+full app exists — production transpilation must pass); manual: `npm run dev`
+shows pixel-crisp terrain; drag/wheel/arrows work; `?seed=x` changes the
+map, reload with same seed reproduces it.
 
 ### Task 10: Developer docs
 **Files:** `README.md` (prepend Bodhitropolis section), `docs/PRDs/bodhitropolis-foundation.md` (status flip after merge — leave DRAFT for now)
@@ -260,6 +293,9 @@ npx tsc --noEmit
 
 # Unit tests (also runs as pre-push hook)
 npx vitest run
+
+# Production build (catches transpiler-specific breakage; gate from Task 9 on)
+npm run build
 
 # Manual acceptance (Task 9+)
 npm run dev   # crisp pixel terrain, pan/zoom, ?seed= reproducibility
@@ -282,11 +318,6 @@ restores Python defaults. No data, schema, or deployment surface exists yet.
   hydrology.
 - **npm registry access** is assumed available for `npm install`; versions
   resolved at install time and pinned by lockfile rather than pre-pinned here.
-- **Hook install mechanism**: whether `scripts/setup.sh` copies or symlinks
-  hooks — Task 1 verifies and re-installs if needed.
-- **`const enum` under Vite/esbuild**: esbuild doesn't fully erase
-  `const enum` across files; if it complains, switch to plain `enum` or
-  literal unions — tests are written against values, not enum identity.
 - **DPR + integer zoom interaction** (Task 9) may need rounding care on
   non-integer devicePixelRatio displays; acceptance is visual crispness, not
   a pinned formula.
