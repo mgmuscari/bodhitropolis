@@ -120,6 +120,15 @@ describe('validateTree self-checks (synthetic bad trees)', () => {
     const bad = [cap('x', ['y']), cap('y', ['z']), cap('z', ['y'])];
     expect(validateTree(bad).some((v) => /'x'/.test(v) && /root/i.test(v))).toBe(true);
   });
+
+  it('flags a non-kebab id (the snapshot encoding relies on ASCII ids)', () => {
+    // snapshotBytes encodes ids with charCodeAt & 0xff; runtime-enforcing the
+    // kebab/ASCII charset keeps that byte-identical to UTF-8.
+    const bad: TechNode[] = [
+      { id: 'Bad_Id', branch: Branch.NewUrbanism, name: 'b', flavor: 'x', prereqs: [], cost: 10, grants: { capabilities: ['c'] } },
+    ];
+    expect(validateTree(bad).some((v) => /Bad_Id|kebab|id/i.test(v))).toBe(true);
+  });
 });
 
 describe('root-termination reachability (cross-branch)', () => {

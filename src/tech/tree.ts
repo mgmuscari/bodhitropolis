@@ -143,6 +143,9 @@ export const TECH_TREE: readonly TechNode[] = [
 /** Valid BuiltKind codes, for grant validation. */
 const VALID_KINDS = new Set<number>(Object.values(BuiltKind));
 
+/** kebab-case, lowercase ASCII alphanumerics + single hyphens. */
+const KEBAB_ID = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
 /**
  * Transitive prereq closure of `id` (exclusive of `id` itself). Cycle-safe via a
  * visited set, so a malformed cyclic tree returns a finite set rather than
@@ -191,9 +194,13 @@ function reachesRoot(n: TechNode, byId: Map<string, TechNode>): boolean {
 export function validateTree(nodes: readonly TechNode[]): string[] {
   const violations: string[] = [];
 
-  // 1. duplicate ids
+  // 1. duplicate ids + kebab/ASCII id charset (snapshotBytes encodes ids with
+  //    charCodeAt & 0xff, which is byte-identical to UTF-8 only for ASCII ids —
+  //    so the charset that makes the snapshot correct is enforced here at runtime,
+  //    not just by the test regex).
   const byId = new Map<string, TechNode>();
   for (const n of nodes) {
+    if (!KEBAB_ID.test(n.id)) violations.push(`node id '${n.id}' is not kebab-case ASCII`);
     if (byId.has(n.id)) violations.push(`duplicate node id '${n.id}'`);
     else byId.set(n.id, n);
   }
