@@ -13,10 +13,11 @@
 //   1..15    transport (classic roads 1..3, rail 4; transit 5..9, 10..15 spare)
 //   16..127  buildings (Moses-era 16..23, reserved 24..47, tech-tree 48..60)
 //
-// The transit codes 5..9 and the tech-tree building codes 48..60 are granted by
-// the tech tree but NOT yet placeable: canPlaceTransport fences 5..9 off (the
-// max(kind) junction merge is not capacity-ordered for them) and no build tool
-// requests 48..60 yet. See the tech-tree PRP.
+// The transit codes 5..9 are granted by the tech tree and, since build-tools,
+// placeable on EMPTY land only (they never merge or cross — see canPlaceTransport)
+// or reachable as the target of a conversion (see TRANSPORT_CONVERSIONS). The
+// tech-tree building codes 48..60 are granted but reach the map only through a
+// build tool (see the tools layer). See the tech-tree + build-tools PRPs.
 
 import { GameMap, Water, FNV_OFFSET, FNV_PRIME, fnv1aBytes } from './map';
 
@@ -264,13 +265,26 @@ export function hashWorld(world: HashableWorld): string {
 const MIN_FOOTPRINT = 1;
 const MAX_FOOTPRINT = 3;
 
-// Highest transport code the junction merge can resolve safely. placeTransport
-// merges overlaps with max(existing, kind), which is capacity-ordered only for
-// classic kinds 1..4 (street < avenue < highway < rail by code). Transit kinds
-// 5..9 break that ordering (QuietStreet=7 would "win" over Highway=3), so
-// canPlaceTransport fences them off until build-tools replaces max() with a
-// conversion/capacity table.
-const MERGEABLE_TRANSPORT_MAX = 4;
+/**
+ * Transport conversions: the explicit "road diet" transformation table. A tile
+ * holding a `from` kind may be converted in place to any kind in its entry list.
+ * These are deliberate transformations — a street narrows to a quiet street, a
+ * promenade, or a bike path; an avenue steps down to a street; a highway reverses
+ * to a boulevard-grade avenue; a rail line becomes a streetcar — NOT placements
+ * and NOT junction merges. Conversion is the ONLY way a kind reaches an
+ * already-occupied tile: placement stays empty-land-only, and the junction merge
+ * (max() over same-category classic kinds) is untouched. Joining the single-writer
+ * block keeps every built-layer write in this module (PRD risk #1).
+ */
+export const TRANSPORT_CONVERSIONS: ReadonlyMap<BuiltKind, readonly BuiltKind[]> = new Map<
+  BuiltKind,
+  readonly BuiltKind[]
+>([
+  [BuiltKind.RoadStreet, [BuiltKind.QuietStreet, BuiltKind.Promenade, BuiltKind.BikePath]],
+  [BuiltKind.RoadAvenue, [BuiltKind.RoadStreet, BuiltKind.QuietStreet]],
+  [BuiltKind.RoadHighway, [BuiltKind.RoadAvenue]],
+  [BuiltKind.Rail, [BuiltKind.Streetcar]],
+]);
 
 /**
  * True iff a `w`×`h` building footprint anchored at (x, y) can be placed:
@@ -317,21 +331,26 @@ export function placeParcel(map: GameMap, store: ParcelStore, init: ParcelInit):
  * either empty OR already holds a transport kind of the SAME connectable
  * category — road onto road, rail onto rail (a junction merge). Road-onto-rail
  * and rail-onto-road fail (no crossings in v1); building tiles fail.
+ *
+ * Transit kinds 5..9 are placeable on EMPTY land ONLY. They never merge and never
+ * cross: the junction-merge predicate stays `isRoadKind && isRoadKind` (1..3) and
+ * `Rail === Rail`, and isRoadKind(7..9) is false, so every >4 kind is excluded
+ * from merging on BOTH sides. Do NOT relax this to a transportCategory test —
+ * QuietStreet(7) is category road, so a category predicate would admit
+ * Street(1)<->QuietStreet(7) and resolve max(1,7)=7, the capacity-unsafe outcome
+ * the empty-only rule prevents. Narrowing an existing road to a quiet street is a
+ * CONVERSION (see convertTransport), not a placement.
  */
 export function canPlaceTransport(map: GameMap, x: number, y: number, kind: number): boolean {
   if (!isTransportKind(kind)) return false;
-  // Placement fence: only classic, capacity-orderable kinds may be placed (see
-  // MERGEABLE_TRANSPORT_MAX). Transit kinds 5..9 are granted by the tree but not
-  // placeable until the merge becomes capacity-aware in build-tools.
-  if (kind > MERGEABLE_TRANSPORT_MAX) return false;
   if (!map.inBounds(x, y)) return false;
   const i = map.idx(x, y);
   if (map.water[i] !== Water.None) return false;
   const existing = map.built[i]!;
-  if (existing === 0) return true;
+  if (existing === 0) return true; // empty land: any transport kind (incl. 5..9)
   if (isRoadKind(kind) && isRoadKind(existing)) return true; // road/road junction
   if (kind === BuiltKind.Rail && existing === BuiltKind.Rail) return true; // rail/rail
-  return false; // building tile, or road<->rail crossing
+  return false; // building tile, road<->rail crossing, or a transit kind onto anything
 }
 
 /**
@@ -346,6 +365,30 @@ export function placeTransport(map: GameMap, x: number, y: number, kind: number)
   const i = map.idx(x, y);
   const existing = map.built[i]!;
   map.built[i] = existing === 0 ? kind : Math.max(existing, kind);
+  return true;
+}
+
+/**
+ * True iff the transport tile at (x, y) can be converted to `to`: the tile must
+ * hold a `from` kind whose {@link TRANSPORT_CONVERSIONS} entry contains `to`.
+ * Empty tiles, building tiles, and off-table (from, to) pairs all return false.
+ */
+export function canConvertTransport(map: GameMap, x: number, y: number, to: number): boolean {
+  if (!map.inBounds(x, y)) return false;
+  const from = map.built[map.idx(x, y)]! as BuiltKind;
+  const targets = TRANSPORT_CONVERSIONS.get(from);
+  return targets !== undefined && targets.includes(to as BuiltKind);
+}
+
+/**
+ * Convert the transport tile at (x, y) to `to`, writing only the built layer for
+ * that one tile. Returns false (writing nothing) unless {@link canConvertTransport}
+ * holds. A conversion is a transformation, not a placement or merge — it touches
+ * neither the parcel layer nor the ParcelStore (transport tiles carry no parcel).
+ */
+export function convertTransport(map: GameMap, x: number, y: number, to: number): boolean {
+  if (!canConvertTransport(map, x, y, to)) return false;
+  map.built[map.idx(x, y)] = to;
   return true;
 }
 
@@ -447,8 +490,10 @@ export function transportMask(map: GameMap, x: number, y: number): number {
 
 /**
  * True iff any tile orthogonally adjacent to parcel `i`'s footprint perimeter
- * (and outside the footprint) is a road kind. Diagonals do not count — only the
- * 4-neighbours of footprint tiles are examined. Rail is not road frontage.
+ * (and outside the footprint) is a connection-category ROAD tile
+ * (transportCategory === 1: classic roads 1..3 AND QuietStreet). Diagonals do not
+ * count — only the 4-neighbours of footprint tiles are examined. Rail (cat 2),
+ * bike (cat 3) and pedestrian (cat 4) kinds are not road frontage.
  */
 export function parcelTouchesRoad(map: GameMap, store: ParcelStore, i: number): boolean {
   const p = store.get(i);
@@ -463,7 +508,7 @@ export function parcelTouchesRoad(map: GameMap, store: ParcelStore, i: number): 
         const ny = ty + ddy;
         if (inside(nx, ny)) continue;
         if (!map.inBounds(nx, ny)) continue;
-        if (isRoadKind(map.getBuilt(nx, ny))) return true;
+        if (transportCategory(map.getBuilt(nx, ny)) === 1) return true;
       }
     }
   }
