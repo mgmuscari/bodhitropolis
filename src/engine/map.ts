@@ -15,10 +15,12 @@ export type Water = (typeof Water)[keyof typeof Water];
 export const LandCover = { Bare: 0, Meadow: 1, Grass: 2, Forest: 3 } as const;
 export type LandCover = (typeof LandCover)[keyof typeof LandCover];
 
-const FNV_OFFSET = 0x811c9dc5;
-const FNV_PRIME = 0x01000193;
+// FNV-1a constants and folding step, exported so other engine modules
+// (e.g. fabric.hashWorld) hash with the exact same primitive.
+export const FNV_OFFSET = 0x811c9dc5;
+export const FNV_PRIME = 0x01000193;
 
-function fnv1aBytes(h: number, bytes: Uint8Array): number {
+export function fnv1aBytes(h: number, bytes: Uint8Array): number {
   for (let i = 0; i < bytes.length; i++) {
     h ^= bytes[i]!;
     h = Math.imul(h, FNV_PRIME);

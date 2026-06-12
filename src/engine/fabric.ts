@@ -1,7 +1,11 @@
-// Built-environment taxonomy: the kinds of thing that can occupy a tile's
-// `built` layer. Like the map enums (see map.ts), these are `as const` objects
-// + literal-union types rather than `const enum` — esbuild does not erase
-// cross-module const enums, which silently breaks them in production builds.
+// Built-environment model: the BuiltKind taxonomy, the ParcelStore (parcel
+// attributes that live alongside the map's `parcel` layer), and the canonical
+// world hash. Pure engine module — no DOM, no transcendental Math.
+//
+// BuiltKind: the kinds of thing that can occupy a tile's `built` layer. Like
+// the map enums (see map.ts), these are `as const` objects + literal-union
+// types rather than `const enum` — esbuild does not erase cross-module const
+// enums, which silently breaks them in production builds.
 //
 // Code ranges are reserved deliberately so the taxonomy can grow without
 // renumbering (no save format exists yet, so this is a cheap bet):
@@ -9,6 +13,8 @@
 //   1..15   transport (roads 1..3, rail 4; 5..15 reserved for transit kinds)
 //   16..47  Moses-era buildings
 //   48+     reserved for tech-tree-era kinds (parklets, co-ops, communes...)
+
+import { GameMap, FNV_OFFSET, FNV_PRIME, fnv1aBytes } from './map';
 
 export const BuiltKind = {
   None: 0,
@@ -36,3 +42,150 @@ export const isRoadKind = (k: number): boolean => k >= 1 && k <= 3;
 export const isTransportKind = (k: number): boolean => k >= 1 && k <= 4;
 /** Any building kind, including reserved-but-unused codes in 24..47. */
 export const isBuildingKind = (k: number): boolean => k >= 16 && k <= 47;
+
+// --- Parcels -------------------------------------------------------------
+//
+// A parcel is a multi-tile building footprint plus its attributes (kind,
+// density, condition). The map's `built`/`parcel` layers record *where* each
+// parcel sits (single source of truth for tiles); the ParcelStore holds the
+// *attributes* that don't fit in a tile layer. Storage is struct-of-arrays
+// (parallel arrays grown by push) — determinism comes from content, not the
+// storage class. Defaults: density 1, condition 255 (pristine).
+
+const DENSITY_DEFAULT = 1;
+const CONDITION_DEFAULT = 255;
+
+export interface ParcelInit {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  kind: BuiltKind;
+  density?: number;
+  condition?: number;
+}
+
+/** A materialized read-only view of one parcel (for tests/tools). */
+export interface Parcel {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  kind: BuiltKind;
+  density: number;
+  condition: number;
+}
+
+const clampByte = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : Math.floor(v));
+
+export class ParcelStore {
+  private readonly anchorX: number[] = [];
+  private readonly anchorY: number[] = [];
+  private readonly w: number[] = [];
+  private readonly h: number[] = [];
+  private readonly kind: number[] = [];
+  private readonly density: number[] = [];
+  private readonly condition: number[] = [];
+
+  /** Append a parcel; returns its index. */
+  add(p: ParcelInit): number {
+    const i = this.anchorX.length;
+    this.anchorX.push(p.x);
+    this.anchorY.push(p.y);
+    this.w.push(p.width);
+    this.h.push(p.height);
+    this.kind.push(p.kind);
+    this.density.push(p.density ?? DENSITY_DEFAULT);
+    this.condition.push(p.condition ?? CONDITION_DEFAULT);
+    return i;
+  }
+
+  count(): number {
+    return this.anchorX.length;
+  }
+
+  /** Materialize parcel `i` as an object (allocates — prefer scalar accessors on hot paths). */
+  get(i: number): Readonly<Parcel> {
+    return {
+      x: this.anchorX[i]!,
+      y: this.anchorY[i]!,
+      width: this.w[i]!,
+      height: this.h[i]!,
+      kind: this.kind[i]! as BuiltKind,
+      density: this.density[i]!,
+      condition: this.condition[i]!,
+    };
+  }
+
+  /** Allocation-free scalar reads, for per-tile renderer use (yield point 5). */
+  kindAt(i: number): BuiltKind {
+    return this.kind[i]! as BuiltKind;
+  }
+  densityAt(i: number): number {
+    return this.density[i]!;
+  }
+  conditionAt(i: number): number {
+    return this.condition[i]!;
+  }
+
+  /** Set condition, clamped to 0..255 (0 = derelict, 255 = pristine). */
+  setCondition(i: number, v: number): void {
+    this.condition[i] = clampByte(v);
+  }
+
+  setDensity(i: number, v: number): void {
+    this.density[i] = v;
+  }
+
+  /**
+   * Stable byte encoding of every parcel field, in index order. Equal content
+   * yields equal bytes; any field change in any parcel changes them. Folded
+   * into {@link hashWorld} so parcel attributes (which live outside the map)
+   * participate in determinism assertions. Fixed 10-byte little-endian record
+   * per parcel: anchorX(u16) anchorY(u16) w(u8) h(u8) kind(u8) density(u16)
+   * condition(u8).
+   */
+  snapshotBytes(): Uint8Array {
+    const n = this.count();
+    const bytes = new Uint8Array(n * 10);
+    const view = new DataView(bytes.buffer);
+    for (let i = 0; i < n; i++) {
+      const o = i * 10;
+      view.setUint16(o, this.anchorX[i]! & 0xffff, true);
+      view.setUint16(o + 2, this.anchorY[i]! & 0xffff, true);
+      view.setUint8(o + 4, this.w[i]! & 0xff);
+      view.setUint8(o + 5, this.h[i]! & 0xff);
+      view.setUint8(o + 6, this.kind[i]! & 0xff);
+      view.setUint16(o + 7, Math.floor(this.density[i]!) & 0xffff, true);
+      view.setUint8(o + 9, this.condition[i]! & 0xff);
+    }
+    return bytes;
+  }
+}
+
+/**
+ * The canonical world hash for all stage determinism tests. Folds the map
+ * snapshot (every tile layer, including `parcel`) together with the parcel
+ * *attributes* (kind/density/condition/footprint) that live outside the map.
+ *
+ * Use this — not `map.snapshot()` alone — whenever a test must detect
+ * nondeterministic parcel attribute assignment: once stages mutate parcel
+ * condition/density, `map.snapshot()` is blind to those changes (see the
+ * asymmetry-pin test). Typed structurally so this engine module never imports
+ * worldgen's WorldState (architecture rule: engine is worldgen-free).
+ */
+export interface HashableWorld {
+  map: GameMap;
+  parcels: ParcelStore;
+}
+
+export function hashWorld(world: HashableWorld): string {
+  const snap = world.map.snapshot();
+  let h = FNV_OFFSET;
+  for (let i = 0; i < snap.length; i++) {
+    h ^= snap.charCodeAt(i);
+    h = Math.imul(h, FNV_PRIME);
+  }
+  h = fnv1aBytes(h, world.parcels.snapshotBytes());
+  return `${(h >>> 0).toString(16).padStart(8, '0')}`;
+}
