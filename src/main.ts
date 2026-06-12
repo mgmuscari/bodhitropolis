@@ -6,15 +6,28 @@
 import { runPipeline } from './worldgen/pipeline';
 import { terrainStage } from './worldgen/terrain';
 import { mosesCenturyStage } from './worldgen/moses';
+import { ecoSeedStage } from './worldgen/ecoseed';
 import { parseChronicle } from './worldgen/chronicle';
 import { buildReport } from './worldgen/report';
+import { ecologyTick } from './ecology/tick';
+import { ECO_CADENCE } from './ecology/influence';
+import { ecologyReport } from './ecology/report';
+import { biodiversityField } from './ecology/biodiversity';
+import { Water } from './engine/map';
 import { createRng } from './engine/rng';
 import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
 import { attachInput } from './ui/input';
-import { statLines, eraHeadline, challengeText } from './ui/openingContent';
+import { statLines, eraHeadline, challengeText, ecologyStatLine } from './ui/openingContent';
+import {
+  cycleOverlay,
+  shouldCycleOverlay,
+  overlayTint,
+  legendLine,
+  type OverlayState,
+} from './ui/ecoOverlayContent';
 import { mountOpening, type OpeningContent } from './ui/opening';
 import { TECH_TREE } from './tech/tree';
 import { createTechState } from './tech/state';
@@ -35,7 +48,7 @@ export function main(): void {
 
   const params = new URLSearchParams(window.location.search);
   const seed = params.get('seed') ?? DEFAULT_SEED;
-  const world = runPipeline({ seed }, [terrainStage(), mosesCenturyStage()]);
+  const world = runPipeline({ seed }, [terrainStage(), mosesCenturyStage(), ecoSeedStage()]);
 
   // Tech-tree state: communal effort accrues into it each sim tick (see below).
   const tech = createTechState(TECH_TREE);
@@ -71,10 +84,13 @@ export function main(): void {
     const name = cityName(createRng(seed).fork('city-name'));
     const chronicle = parseChronicle(world.log);
     const report = buildReport(world);
+    // The eco-seed wound's DISPLAY half: surface it as a real opening stat line,
+    // omitted (null) on the degenerate all-water / no-highway path.
+    const ecoLine = ecologyStatLine(ecologyReport(world));
     const content: OpeningContent = {
       name,
       eras: chronicle.entries.map(eraHeadline),
-      stats: statLines(report),
+      stats: ecoLine !== null ? [...statLines(report), ecoLine] : statLines(report),
       challenge: challengeText(name, report, chronicle),
     };
     mountOpening(document.body, content, () => {
@@ -120,6 +136,52 @@ export function main(): void {
       dirty = true;
       toolbar.refresh();
     },
+  });
+
+  // Ecology heatmap overlay, cycled by E (off → soil → flora → fauna →
+  // biodiversity → off). soil/flora/fauna sources read the LIVE layers, so they
+  // auto-reflect each ecology tick; the DERIVED biodiversity field is recomputed
+  // and re-pushed on each ecology tick while that view is active (plan review
+  // MINOR-b). Water tiles are NOT tinted (tint → null): ecology lives on land —
+  // water is habitat 0 / soil 0 by convention, not "the worst soil", so the
+  // terrain water colour shows through unobscured.
+  const overlayWater = world.map.water;
+  let overlayState: OverlayState = null;
+  const applyOverlay = (): void => {
+    if (overlayState === null) {
+      renderer.setOverlay(null);
+      return;
+    }
+    if (overlayState === 'biodiversity') {
+      const field = biodiversityField(world.map);
+      renderer.setOverlay({
+        tint: (i) => (overlayWater[i] !== Water.None ? null : overlayTint('biodiversity', field[i]!)),
+      });
+      return;
+    }
+    const view = overlayState;
+    const layer =
+      view === 'soil'
+        ? world.map.soilHealth
+        : view === 'flora'
+          ? world.map.floraVitality
+          : world.map.faunaPresence;
+    renderer.setOverlay({
+      tint: (i) => (overlayWater[i] !== Water.None ? null : overlayTint(view, layer[i]!)),
+    });
+  };
+
+  // E self-binds (the tech panel's T pattern): its own keydown routed through the
+  // pure shouldCycleOverlay gate, suppressed while the opening overlay is up. The
+  // legend shares the dock status slot with the inspect readout — latest action
+  // wins (a later inspect click overwrites it, and vice versa).
+  window.addEventListener('keydown', (event) => {
+    if (!shouldCycleOverlay(event.key, overlayActive)) return;
+    event.preventDefault();
+    overlayState = cycleOverlay(overlayState);
+    applyOverlay();
+    toolbar.setStatus(overlayState !== null ? legendLine(overlayState) : null);
+    dirty = true;
   });
 
   const previewAt = (tx: number, ty: number): void => {
@@ -184,9 +246,22 @@ export function main(): void {
   // Simulation loop: communal effort accrues each tick — the first real per-tick
   // work. When the panel is open, the tick marks panelDirty so the next frame
   // re-derives its full content (node affordability tracks the rising effort).
-  const sim = new FixedTickLoop(SIM_TICK_MS, () => {
+  const sim = new FixedTickLoop(SIM_TICK_MS, (tick) => {
     accrue(tech, world, 1);
     if (techPanel.isOpen()) panelDirty = true;
+    // Ecology cadence: the tick>0 guard lands the first ecology step at
+    // tick = ECO_CADENCE, so the freshly-seeded state is the player's t0 and
+    // dynamics begin one cadence interval later.
+    if (tick > 0 && tick % ECO_CADENCE === 0) {
+      ecologyTick(world.map);
+      if (overlayState !== null) {
+        // biodiversity is derived → recompute + re-push; soil/flora/fauna sources
+        // read the live layers and need no recompute. Only mark dirty when the
+        // overlay is active (no visual delta otherwise → avoid re-render churn).
+        if (overlayState === 'biodiversity') applyOverlay();
+        dirty = true;
+      }
+    }
   });
   let last = performance.now();
   const frame = (now: number): void => {

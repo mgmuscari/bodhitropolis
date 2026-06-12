@@ -9,6 +9,7 @@
 
 import type { BlightReport } from '../worldgen/report';
 import type { Chronicle, ChronicleEntry } from '../worldgen/chronicle';
+import type { EcologyReport } from '../ecology/report';
 
 /** Round a fraction in [0,1] to an integer percentage (exactly-rounded). */
 function pct(fraction: number): number {
@@ -48,6 +49,24 @@ export function statLines(report: BlightReport): string[] {
     lines.push(`${report.railLost.removed} rail tiles were ripped out for the expressway.`);
   }
   return lines;
+}
+
+/**
+ * The ecology stat line for the opening (PRD AC#2 display half): the wound the
+ * eco-seed stage recorded, surfaced as a real player-facing number. Cites the
+ * corridor soil deficit (how much thinner the soil runs along the old corridors)
+ * and the periphery fauna mean (the wild holding at the edges) — the same
+ * register as the recorded era5 line, but shown.
+ *
+ * Returns null on the degenerate path (a ring scalar is null — no highway /
+ * all-water), so the line is OMITTED rather than shown as a fallback, keeping the
+ * opening's line count legible (mirrors statLines' omit-when-null lines).
+ */
+export function ecologyStatLine(report: EcologyReport): string | null {
+  if (report.corridorSoilDeficit === null || report.peripheryFaunaMean === null) return null;
+  const deficit = Math.round(report.corridorSoilDeficit);
+  const wild = Math.round(report.peripheryFaunaMean);
+  return `Soil runs ${deficit} thinner along the old corridors; the wild holds at ${wild} by the edges.`;
 }
 
 /**

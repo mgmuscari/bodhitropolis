@@ -19,6 +19,13 @@ describe('GameMap dimensions', () => {
     expect(m.built.length).toBe(n);
     expect(m.parcel).toBeInstanceOf(Uint16Array);
     expect(m.parcel.length).toBe(n);
+    // Ecology layers: three Uint8 fields, zero-initialised.
+    expect(m.soilHealth).toBeInstanceOf(Uint8Array);
+    expect(m.soilHealth.length).toBe(n);
+    expect(m.floraVitality).toBeInstanceOf(Uint8Array);
+    expect(m.floraVitality.length).toBe(n);
+    expect(m.faunaPresence).toBeInstanceOf(Uint8Array);
+    expect(m.faunaPresence.length).toBe(n);
   });
 
   it('honours custom dimensions', () => {
@@ -89,6 +96,20 @@ describe('GameMap layer get/set roundtrips', () => {
     expect(m.getParcel(6, 7)).toBe(42);
     expect(m.getParcel(0, 0)).toBe(0);
   });
+
+  it('roundtrips ecology layers (uint8, 0 = none)', () => {
+    const m = new GameMap(16, 16);
+    m.setSoilHealth(3, 4, 200);
+    m.setFloraVitality(5, 6, 128);
+    m.setFaunaPresence(7, 8, 255);
+    expect(m.getSoilHealth(3, 4)).toBe(200);
+    expect(m.getFloraVitality(5, 6)).toBe(128);
+    expect(m.getFaunaPresence(7, 8)).toBe(255);
+    // untouched cells stay zero
+    expect(m.getSoilHealth(0, 0)).toBe(0);
+    expect(m.getFloraVitality(0, 0)).toBe(0);
+    expect(m.getFaunaPresence(0, 0)).toBe(0);
+  });
 });
 
 describe('GameMap snapshot', () => {
@@ -127,6 +148,18 @@ describe('GameMap snapshot', () => {
     const pa = make();
     pa.setParcel(10, 10, 1);
     expect(pa.snapshot()).not.toBe(base);
+
+    const so = make();
+    so.setSoilHealth(10, 10, 1);
+    expect(so.snapshot()).not.toBe(base);
+
+    const fl = make();
+    fl.setFloraVitality(10, 10, 1);
+    expect(fl.snapshot()).not.toBe(base);
+
+    const fa = make();
+    fa.setFaunaPresence(10, 10, 1);
+    expect(fa.snapshot()).not.toBe(base);
   });
 
   it('distinguishes maps of different dimensions', () => {

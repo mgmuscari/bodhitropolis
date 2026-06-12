@@ -21,6 +21,15 @@ export interface PreviewTile {
   valid: boolean;
 }
 
+/**
+ * An ecology heatmap source: given a tile index, the translucent RGBA tint to lay
+ * over it (or null to leave it untinted). The closure reads the LIVE ecology layer
+ * (or a precomputed biodiversity field) so it auto-reflects each ecology tick.
+ */
+export interface OverlaySource {
+  tint(i: number): readonly [number, number, number, number] | null;
+}
+
 type RGB = readonly [number, number, number];
 
 // Connection-mask bits (must match engine transportMask): N=1, E=2, S=4, W=8.
@@ -390,6 +399,7 @@ export class Renderer {
   private cssWidth = 0;
   private cssHeight = 0;
   private preview: readonly PreviewTile[] | null = null;
+  private overlay: OverlaySource | null = null;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
@@ -399,6 +409,11 @@ export class Renderer {
   /** Set (or clear) the hover/drag preview tiles drawn as translucent tints. */
   setPreview(tiles: readonly PreviewTile[] | null): void {
     this.preview = tiles;
+  }
+
+  /** Set (or clear) the ecology heatmap overlay drawn under the preview. */
+  setOverlay(source: OverlaySource | null): void {
+    this.overlay = source;
   }
 
   resize(cssWidth: number, cssHeight: number, dpr: number): void {
@@ -432,17 +447,27 @@ export class Renderer {
         ctx.drawImage(terrain, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
 
         const built = map.built[i]!;
-        if (built === 0) continue;
+        if (built !== 0) {
+          // The kind-dispatch is a single pure call (renderKey.ts); transport keys
+          // on the connection mask, buildings on footprint position + condition tier.
+          const isT = isTransportKind(built);
+          const mask = isT ? transportMask(map, tx, ty) : 0;
+          const pid = isT ? 0 : map.parcel[i]!;
+          const tier = isT ? 0 : parcels.conditionAt(pid - 1) < 128 ? 1 : 0;
+          const pos: FootprintPos = isT ? 'c' : footprintPos(map, tx, ty, pid);
+          const builtTile = this.atlas.get(builtRenderKey(built, mask, pos, tier));
+          if (builtTile) ctx.drawImage(builtTile, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
+        }
 
-        // The kind-dispatch is a single pure call (renderKey.ts); transport keys
-        // on the connection mask, buildings on footprint position + condition tier.
-        const isT = isTransportKind(built);
-        const mask = isT ? transportMask(map, tx, ty) : 0;
-        const pid = isT ? 0 : map.parcel[i]!;
-        const tier = isT ? 0 : parcels.conditionAt(pid - 1) < 128 ? 1 : 0;
-        const pos: FootprintPos = isT ? 'c' : footprintPos(map, tx, ty, pid);
-        const overlay = this.atlas.get(builtRenderKey(built, mask, pos, tier));
-        if (overlay) ctx.drawImage(overlay, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
+        // Ecology heatmap: a translucent tint over every visible tile (built or
+        // not), drawn under the preview so the preview still reads on top.
+        if (this.overlay) {
+          const t = this.overlay.tint(i);
+          if (t) {
+            ctx.fillStyle = `rgba(${t[0]}, ${t[1]}, ${t[2]}, ${t[3]})`;
+            ctx.fillRect(dx, dy, ts, ts);
+          }
+        }
       }
     }
 
