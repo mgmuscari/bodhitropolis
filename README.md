@@ -36,6 +36,12 @@ Code is split into three layers with a strict, test-enforced purity rule
   ocean/lake/river, moisture, biomes), reusable spatial-field helpers
   (`fields.ts`: distance fields, box density, land runs), and the
   `moses-century` history stage (`moses.ts`). May import `engine`.
+- **`src/tech/`** — the data-driven tech tree: a seven-branch unlock DAG
+  (`tree.ts`: 34 nodes plus `validateTree`), the deterministic `TechState`
+  machine (`state.ts`: unlock rules and a byte-stable snapshot), and
+  communal-effort accrual (`effort.ts`). Pure and headless like
+  `engine`/`worldgen` — the architecture guard scans it fail-closed. Imports
+  only `engine`.
 - **`src/ui/`** — a Canvas2D pixel-art renderer (terrain plus an autotiled
   road/rail and footprint-aware building overlay), pan/zoom camera, and input.
   Only this layer and `src/main.ts` touch the DOM.
@@ -121,6 +127,39 @@ Dismiss the overlay with **Begin**, **Enter**, or **Escape**; the map is live
 beneath it. Append **`?nointro=1`** to skip the overlay entirely. Because every
 input is the deterministic world, `?seed=<anything>` reproduces an identical
 name, chronicle, and numbers on every load.
+
+### The tech tree
+
+The unlock spine of the dharmapunk city: a tech tree the player advances by
+spending *communal effort*. Press **`T`** to open the right-docked panel
+(suppressed while the opening overlay is up).
+
+- **Seven branches** (`tech/tree.ts`) — New Urbanism, Green Development,
+  Restorative Justice, Intentional Communities, Gift Economy, Solarpunk, and
+  Anarcho-Communism: 34 nodes in an acyclic prerequisite graph. Prerequisites
+  cross branches (Restorative Justice is load-bearing — you cannot heal the
+  built environment without healing the community), and `validateTree` proves
+  the structure sound: unique ids, no dangling prereqs, no cycles, every node's
+  prereq closure terminates at a no-prereq root, and each granted build kind is
+  unique and a valid `BuiltKind`.
+- **Communal effort** (`tech/effort.ts`) — the first real per-tick simulation
+  work: each sim tick accrues `max(1, floor(aliveParcels / 8 + conditionMean /
+  32))` effort — a finite integer ≥ 1 (a zero-parcel guard keeps the empty world
+  at exactly 1). **This formula is a deliberate PLACEHOLDER** — the real civic
+  simulation will replace it; the accrual *contract* (deterministic, integer,
+  ≥ 1 per tick) is the part that stays.
+- **Unlocking** (`tech/state.ts`) — a node unlocks once its prerequisites are
+  met and enough effort has accrued, spending exactly its cost. The panel marks
+  each node locked / affordable / unlocked and names any unmet prerequisites; an
+  open panel re-derives every tick, so nodes flip to affordable as effort rises.
+  `TechState` is pure (no rng, no `Date`) with a byte-stable snapshot (sorted
+  unlocked ids + effort), so unlock history is reproducible.
+- **What it gates** — nodes grant either *capabilities* (flags later features
+  read) or *build kinds*: new transit and buildings (bike paths, streetcars,
+  parklets, community gardens, co-op housing, communes, …). The build *tools*
+  that place those kinds are the next feature; until then the new transit kinds
+  are fenced out of placement (their junction-merge rule is not capacity-safe
+  yet), so no map this feature can produce contains them.
 
 ## Methodology
 
