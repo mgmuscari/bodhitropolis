@@ -79,6 +79,13 @@ export function attachInput(canvas: HTMLCanvasElement, camera: Camera, handlers:
     if (dragging) {
       if (suppressPan) return; // line-tool paint drag: no pan
       camera.pan(e.movementX, e.movementY);
+      // Drop the stale hover tint while panning — the world is sliding under the
+      // cursor, so the last hovered tile is no longer where the pointer is. It
+      // re-previews on the next (non-drag) move. Resetting hoverX/Y forces that
+      // recompute even if the pointer lands back on the pre-pan tile.
+      handlers.clearHover();
+      hoverX = Number.NaN;
+      hoverY = Number.NaN;
       handlers.onChange();
       return;
     }
