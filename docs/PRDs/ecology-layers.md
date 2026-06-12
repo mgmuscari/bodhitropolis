@@ -69,7 +69,11 @@ become acts of repair the simulation can measure.
    equality; the wounded start is real and non-vacuous on ≥3 seeds — mean
    soil within the highway ring strictly below periphery mean; fauna
    presence concentrated outside the core (ring means ordered); a
-   chronicle line records the ecological wound.
+   chronicle line records the ecological wound, AND the wound surfaces in
+   the player's first read: the opening overlay's stat lines gain an
+   ecologyReport-sourced line (zero-degenerate-safe, tested like the
+   existing stat lines — recording alone is not enough; the land's wound
+   is part of what the player inherits).
 3. Ecology tick is deterministic (N composite ticks twice → equal
    snapshots), runs at the K-cadence (tested via tick counting), and each
    dynamic is tested directionally on fixtures: flora spreads onto
