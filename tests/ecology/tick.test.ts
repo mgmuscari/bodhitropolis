@@ -83,6 +83,19 @@ describe('ecologyTick: flora', () => {
     expect(map.getFloraVitality(5, 5)).toBe(0);
   });
 
+  it('grows under a positive (boosting) influence even on sub-threshold soil', () => {
+    // floraInf is applied SYMMETRICALLY: a boosting neighbour (garden, +flora)
+    // lifts flora even where the soil is below the growth threshold. Pinned so
+    // the superset of the PRP's "decays under net-negative influence" is itself a
+    // contract, not incidental (code-review Task 3 Minor).
+    const map = landMap(12, 12);
+    map.setBuilt(6, 6, BuiltKind.CommunityGarden); // +flora influence over RADIUS
+    map.setSoilHealth(7, 6, 50); // poor soil ⇒ no soil-gated growth
+    map.setFloraVitality(7, 6, 30); // no rich neighbours ⇒ no spread
+    ecologyTick(map);
+    expect(map.getFloraVitality(7, 6)).toBeGreaterThan(30);
+  });
+
   it('decays under a suppressor (highway) influence', () => {
     const map = landMap(12, 12);
     map.setBuilt(6, 6, BuiltKind.RoadHighway);
