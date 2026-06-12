@@ -43,6 +43,15 @@ function tsFiles(dir: string): string[] {
 const engineFiles = tsFiles(engineDir);
 const worldgenFiles = tsFiles(worldgenDir);
 
+// Pure-ui allowlist: ui modules that carry NO DOM and NO transcendental Math, so
+// they can be headless-tested like the engine/worldgen layers. The src/ui dir as
+// a whole legitimately uses the DOM, so it cannot be scanned wholesale — these
+// files are opted in explicitly. This is FAIL-OPEN: a new pure-ui module a dev
+// forgets to append here goes unguarded. NEW PURE-UI MODULES MUST BE ADDED HERE.
+// If they multiply, migrate them to a scanned src/ui/pure/ directory so the
+// guard becomes fail-closed.
+const PURE_UI_ALLOWLIST = ['src/ui/openingContent.ts'];
+
 describe('architecture guard: headless + deterministic', () => {
   it('discovers engine and worldgen source files', () => {
     expect(engineFiles.length).toBeGreaterThan(0);
@@ -66,6 +75,23 @@ describe('architecture guard: headless + deterministic', () => {
       expect(WORLDGEN_IMPORT.test(code), `${rel} imports from worldgen`).toBe(false);
     });
   }
+});
+
+describe('architecture guard: pure-ui allowlist', () => {
+  for (const rel of PURE_UI_ALLOWLIST) {
+    it(`${rel} is DOM-free and transcendental-Math-free`, () => {
+      const code = stripComments(fs.readFileSync(path.join(root, rel), 'utf8'));
+      expect(FORBIDDEN_DOM.test(code), `${rel} references a DOM global`).toBe(false);
+      expect(FORBIDDEN_MATH.test(code), `${rel} uses transcendental Math`).toBe(false);
+    });
+  }
+
+  it('self-check: flags a synthetic pure-ui module that touches the DOM or transcendental Math', () => {
+    const synthetic = 'const el = document.getElementById("x");\nconst y = Math.sin(1);';
+    const code = stripComments(synthetic);
+    expect(FORBIDDEN_DOM.test(code)).toBe(true);
+    expect(FORBIDDEN_MATH.test(code)).toBe(true);
+  });
 });
 
 describe('architecture guard self-check', () => {
