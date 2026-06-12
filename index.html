@@ -17,6 +17,78 @@
         display: block;
         image-rendering: pixelated;
       }
+
+      /* Opening challenge overlay: dark panel on the #14121f ground, meadow-gold
+         accent (matches renderer PALETTE.meadow), monospace pixel feel. */
+      .opening-overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(20, 18, 31, 0.82);
+        z-index: 10;
+        font-family: "Courier New", ui-monospace, monospace;
+        color: #e6e2d0;
+      }
+      .opening-panel {
+        box-sizing: border-box;
+        max-width: 46rem;
+        max-height: 88vh;
+        overflow-y: auto;
+        margin: 1.5rem;
+        padding: 1.75rem 2rem;
+        background: #1c1a2a;
+        border: 2px solid #969e4a;
+        box-shadow: 0 0 0 4px #14121f, 0 12px 40px rgba(0, 0, 0, 0.5);
+        line-height: 1.5;
+      }
+      .opening-name {
+        margin: 0 0 0.75rem;
+        font-size: 2rem;
+        letter-spacing: 0.04em;
+        color: #c8c264;
+        text-shadow: 2px 2px 0 #14121f;
+      }
+      .opening-eras {
+        margin: 0 0 1rem;
+        padding: 0.75rem 0;
+        border-top: 1px solid #3a3850;
+        border-bottom: 1px solid #3a3850;
+        font-size: 0.86rem;
+        color: #b6b2c6;
+      }
+      .opening-eras p {
+        margin: 0.2rem 0;
+      }
+      .opening-stats {
+        margin: 0 0 1rem;
+        color: #d6d2be;
+      }
+      .opening-stats p {
+        margin: 0.25rem 0;
+      }
+      .opening-challenge p {
+        margin: 0.6rem 0;
+        color: #e6e2d0;
+      }
+      .opening-begin {
+        margin-top: 1.25rem;
+        padding: 0.6rem 1.6rem;
+        font: inherit;
+        font-size: 1rem;
+        letter-spacing: 0.08em;
+        color: #14121f;
+        background: #c8c264;
+        border: none;
+        cursor: pointer;
+      }
+      .opening-begin:hover,
+      .opening-begin:focus {
+        background: #e0da82;
+        outline: 2px solid #e6e2d0;
+        outline-offset: 2px;
+      }
     </style>
   </head>
   <body>
