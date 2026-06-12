@@ -73,7 +73,7 @@ export const TECH_TREE: readonly TechNode[] = [
 
   // --- Green Development -----------------------------------------------------
   node('soil-and-soul', GreenDevelopment, 'Soil and Soul', [], 10, cap('soil-care'),
-    'Tend the ground beneath the grid; living soil is the city quiet infrastructure.'),
+    "Tend the ground beneath the grid; living soil is the city's quiet infrastructure."),
   node('urban-composting', GreenDevelopment, 'Urban Composting', ['soil-and-soul'], 15, kind(BuiltKind.CompostHub),
     'Scraps return as black gold; the neighborhood closes its own nutrient loop.'),
   node('community-gardens', GreenDevelopment, 'Community Gardens', ['urban-composting', 'road-diets'], 25, kind(BuiltKind.CommunityGarden),
@@ -131,7 +131,7 @@ export const TECH_TREE: readonly TechNode[] = [
 
   // --- Anarcho-Communism -----------------------------------------------------
   node('mutual-aid', AnarchoCommunism, 'Mutual Aid', [], 10, cap('mutual-aid'),
-    'Neighbors cover each other needs directly; solidarity, not charity, not markets.'),
+    "Neighbors cover each other's needs directly; solidarity, not charity, not markets."),
   node('collective-ownership', AnarchoCommunism, 'Collective Ownership', ['mutual-aid', 'community-land-trust'], 25, cap('collective-ownership'),
     'The means of making things belong to the people who use them, together.'),
   node('communes', AnarchoCommunism, 'Communes', ['collective-ownership', 'healing-commons'], 35, kind(BuiltKind.Commune),
