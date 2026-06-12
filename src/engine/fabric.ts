@@ -274,6 +274,68 @@ export function placeTransport(map: GameMap, x: number, y: number, kind: number)
   return true;
 }
 
+// --- Connectivity queries ------------------------------------------------
+
+/** 0 = not transport, 1 = road category, 2 = rail category. */
+function transportCategory(kind: number): number {
+  if (isRoadKind(kind)) return 1;
+  if (kind === BuiltKind.Rail) return 2;
+  return 0;
+}
+
+// 4-neighbour offsets paired with the mask bit each sets: N=1, E=2, S=4, W=8.
+const MASK_DIRS: ReadonlyArray<readonly [number, number, number]> = [
+  [0, -1, 1], // N
+  [1, 0, 2], // E
+  [0, 1, 4], // S
+  [-1, 0, 8], // W
+];
+
+/**
+ * Autotiling connection mask for the transport tile at (x, y): bit 0=N, 1=E,
+ * 2=S, 3=W is set when that 4-neighbour is a transport tile of the SAME
+ * category (road kinds connect to road kinds; rail only to rail). Returns 0 on
+ * a non-transport tile or when no neighbour connects. Out-of-bounds neighbours
+ * are unset.
+ */
+export function transportMask(map: GameMap, x: number, y: number): number {
+  const selfCat = transportCategory(map.getBuilt(x, y));
+  if (selfCat === 0) return 0;
+  let mask = 0;
+  for (const [dx, dy, bit] of MASK_DIRS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    if (!map.inBounds(nx, ny)) continue;
+    if (transportCategory(map.getBuilt(nx, ny)) === selfCat) mask |= bit;
+  }
+  return mask;
+}
+
+/**
+ * True iff any tile orthogonally adjacent to parcel `i`'s footprint perimeter
+ * (and outside the footprint) is a road kind. Diagonals do not count — only the
+ * 4-neighbours of footprint tiles are examined. Rail is not road frontage.
+ */
+export function parcelTouchesRoad(map: GameMap, store: ParcelStore, i: number): boolean {
+  const p = store.get(i);
+  const inside = (x: number, y: number): boolean =>
+    x >= p.x && x < p.x + p.width && y >= p.y && y < p.y + p.height;
+  for (let dy = 0; dy < p.height; dy++) {
+    for (let dx = 0; dx < p.width; dx++) {
+      const tx = p.x + dx;
+      const ty = p.y + dy;
+      for (const [ddx, ddy] of MASK_DIRS) {
+        const nx = tx + ddx;
+        const ny = ty + ddy;
+        if (inside(nx, ny)) continue;
+        if (!map.inBounds(nx, ny)) continue;
+        if (isRoadKind(map.getBuilt(nx, ny))) return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Bidirectional consistency check between the map's built/parcel layers and the
  * ParcelStore. Returns human-readable violations (empty array = consistent).
