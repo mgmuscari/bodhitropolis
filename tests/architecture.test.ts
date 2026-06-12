@@ -236,6 +236,17 @@ describe('architecture guard: civic isolation (civic writes only CivicState)', (
     });
   }
 
+  // Civic flood-fills the engine GameMap; it must never reach into worldgen
+  // fields (PRP §2: NO worldgen edge — `world` is typed structurally as
+  // {map, parcels}). The composite orchestrator is where the temptation arises.
+  for (const file of civicFiles) {
+    const rel = path.relative(root, file);
+    it(`${rel} (civic) does not import from worldgen`, () => {
+      const code = stripComments(fs.readFileSync(file, 'utf8'));
+      expect(WORLDGEN_IMPORT.test(code), `${rel} imports from worldgen`).toBe(false);
+    });
+  }
+
   it('self-check: CIVIC_IMPORT fires on a civic import and stays silent on a benign one', () => {
     expect(CIVIC_IMPORT.test("import { CivicState } from '../civic/state'")).toBe(true);
     expect(CIVIC_IMPORT.test("import { GameMap } from '../engine/map'")).toBe(false);
