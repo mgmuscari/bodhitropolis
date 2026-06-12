@@ -43,6 +43,33 @@ const CHRONICLE: Chronicle = {
   unparsed: [],
 };
 
+// The REALISTIC all-water shape the pipeline actually produces (cf. the Task-2
+// all-water chronicle test and the Task-3 all-water report): zero parcels and a
+// single era-1 "no viable site" entry. firstEvent() returns 'no viable site', so
+// the challenge takes the verbatim-fact branch (not the no-events fallback).
+const ALL_WATER_REPORT: BlightReport = {
+  parcelsTotal: 0,
+  parcelsAlive: 0,
+  preEra5Standing: null,
+  abandoned: null,
+  craters: null,
+  conditionMean: 0,
+  conditionMedian: 0,
+  shareDerelict: 0,
+  shareStruggling: 0,
+  projectsStanding: 0,
+  railLost: null,
+  coreMean: null,
+  peripheryMean: null,
+  coreAbandonedShare: null,
+  peripheryAbandonedShare: null,
+  byKind: {},
+};
+const ALL_WATER_CHRONICLE: Chronicle = {
+  entries: [{ era: 1, years: '1900-1920', events: ['no viable site'] }],
+  unparsed: [],
+};
+
 describe('statLines', () => {
   it('emits 4-6 lines embedding the exact report numbers, none over 90 chars', () => {
     const lines = statLines(FOUNDED_REPORT);
@@ -119,5 +146,27 @@ describe('challengeText', () => {
     expect(challengeText('Marrowfield', FOUNDED_REPORT, CHRONICLE)).toEqual(
       challengeText('Marrowfield', FOUNDED_REPORT, CHRONICLE),
     );
+  });
+
+  it('holds the invariants on the realistic all-water path (0 parcels, "no viable site")', () => {
+    const paras = challengeText('Tidehollow', ALL_WATER_REPORT, ALL_WATER_CHRONICLE);
+    const joined = paras.join('\n');
+    expect(joined).toContain('Tidehollow');
+    expect(joined).toContain('no viable site'); // verbatim era fact, not the fallback
+    expect(joined).not.toContain('undefined');
+    expect(paras[paras.length - 1]).toMatch(/begin/i);
+    for (const para of paras) expect(para.length).toBeLessThanOrEqual(90);
+  });
+});
+
+describe('statLines: realistic all-water path', () => {
+  it('renders exactly the four base lines (no chronicle-sourced lines), all <= 90', () => {
+    const lines = statLines(ALL_WATER_REPORT);
+    expect(lines).toHaveLength(4);
+    const joined = lines.join('\n');
+    expect(joined).not.toContain('disinvestment');
+    expect(joined).not.toContain('rail tiles');
+    expect(joined).not.toContain('undefined');
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(90);
   });
 });
