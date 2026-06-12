@@ -617,6 +617,19 @@ describe('mosesCenturyStage (full assembly)', () => {
       const world = runFullStage(seed);
       expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
     });
+
+    it(`seed "${seed}": post-stage road network stays coherent (>= 95% one component)`, () => {
+      // PRD output requirement: the player inherits a "blighted-but-coherent
+      // city" with a connected road network (docs/PRDs/moses-century.md §1,
+      // acceptance criterion 5a "a contiguous street network exists"). Every
+      // era only ever grows roads and attaches them to the network at the point
+      // of placement; demolition removes parcels and rail, never roads — so the
+      // final road network must stay effectively a single component. This is the
+      // cheapest strong end-state coherence guard (covers all five eras at once).
+      const net = roadNetwork(runFullStage(seed).map);
+      expect(net.total).toBeGreaterThanOrEqual(100); // non-vacuous: a real city
+      expect(net.largestComponent).toBeGreaterThanOrEqual(Math.ceil(0.95 * net.total));
+    });
   }
 });
 
