@@ -84,6 +84,13 @@ export class Camera {
     this.clampPosition();
   }
 
+  /** Resize the viewport (e.g. on window resize) and re-clamp the position. */
+  setViewport(width: number, height: number): void {
+    this.viewportWidth = width;
+    this.viewportHeight = height;
+    this.clampPosition();
+  }
+
   /** Inclusive range of tiles currently visible, clamped to the map. */
   visibleTileRange(): TileRange {
     const ts = this.tileSize;

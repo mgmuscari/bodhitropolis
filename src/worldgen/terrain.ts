@@ -242,8 +242,10 @@ export function carveRivers(
       pdy = dy;
     }
 
-    // Deferred erosion: carve river valleys without perturbing the routing
-    // field of this (or any later) river walk.
+    // Deferred erosion: apply valley carving only after this walk completes,
+    // so the elevation field stays static *during* the walk (its routing is
+    // unperturbed by its own carving). Later walks DO see this erosion —
+    // intended, as the lowered valleys encourage downstream confluence.
     for (const i of carved) {
       elevation[i] = Math.max(0, elevation[i]! - erosion);
     }

@@ -43,8 +43,7 @@ export function main(): void {
   window.addEventListener('resize', () => {
     cssWidth = window.innerWidth;
     cssHeight = window.innerHeight;
-    camera.viewportWidth = cssWidth;
-    camera.viewportHeight = cssHeight;
+    camera.setViewport(cssWidth, cssHeight);
     renderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
     markDirty();
   });

@@ -142,7 +142,10 @@ describe('terrainStage river connectivity', () => {
 
   for (const seed of SEEDS) {
     it(`seed "${seed}": every river component drains to edge or water`, () => {
-      assertRiversDrain(generate(seed).map);
+      const componentCount = assertRiversDrain(generate(seed).map);
+      // Guard against a vacuous pass: the drainage invariant is trivially
+      // satisfied by zero rivers, so assert rivers actually exist.
+      expect(componentCount).toBeGreaterThanOrEqual(1);
     });
   }
 });

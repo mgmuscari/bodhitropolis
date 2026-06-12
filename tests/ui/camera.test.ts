@@ -101,6 +101,32 @@ describe('Camera pan clamping', () => {
   });
 });
 
+describe('Camera setViewport', () => {
+  it('re-clamps an out-of-bounds position when the viewport grows', () => {
+    // zoom 2 -> tileSize 32. Small 320px viewport -> 10 tiles visible,
+    // maxX = maxY = 128 - 10 = 118, so x,y sit exactly on the far edge.
+    const cam = new Camera({
+      mapWidth: 128,
+      mapHeight: 128,
+      viewportWidth: 320,
+      viewportHeight: 320,
+      x: 118,
+      y: 118,
+      zoom: 2,
+    });
+    expect(cam.x).toBeCloseTo(118, 6);
+    expect(cam.y).toBeCloseTo(118, 6);
+
+    // Growing to 640px -> 20 tiles visible, maxX = maxY = 108. The prior
+    // edge position is now out of bounds and must be re-clamped.
+    cam.setViewport(640, 640);
+    expect(cam.viewportWidth).toBe(640);
+    expect(cam.viewportHeight).toBe(640);
+    expect(cam.x).toBeCloseTo(108, 6);
+    expect(cam.y).toBeCloseTo(108, 6);
+  });
+});
+
 describe('Camera visibleTileRange', () => {
   it('reports the inclusive visible tile bounds, clamped to the map', () => {
     const cam = makeCamera({ x: 10, y: 10, zoom: 2 });
