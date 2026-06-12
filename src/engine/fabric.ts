@@ -86,8 +86,13 @@ export class ParcelStore {
   private readonly kind: number[] = [];
   private readonly density: number[] = [];
   private readonly condition: number[] = [];
+  // Tombstone flag (1 = alive, 0 = demolished). Demolition tombstones rather
+  // than compacts: the map's `parcel` layer holds baked (index + 1) ids, so
+  // removing an array slot would re-index every later parcel. aliveIndices()
+  // is the deterministic iteration order for the era passes that decay/abandon.
+  private readonly alive: number[] = [];
 
-  /** Append a parcel; returns its index. */
+  /** Append a parcel; returns its index. Newly added parcels are alive. */
   add(p: ParcelInit): number {
     const i = this.anchorX.length;
     this.anchorX.push(p.x);
@@ -97,11 +102,44 @@ export class ParcelStore {
     this.kind.push(p.kind);
     this.density.push(p.density ?? DENSITY_DEFAULT);
     this.condition.push(p.condition ?? CONDITION_DEFAULT);
+    this.alive.push(1);
     return i;
   }
 
   count(): number {
     return this.anchorX.length;
+  }
+
+  /** True iff parcel `i` exists and has not been demolished. */
+  isAlive(i: number): boolean {
+    return this.alive[i] === 1;
+  }
+
+  /** Number of parcels that have not been demolished. */
+  aliveCount(): number {
+    let c = 0;
+    for (let i = 0; i < this.alive.length; i++) if (this.alive[i] === 1) c++;
+    return c;
+  }
+
+  /**
+   * Indices of every alive parcel, ascending. THE deterministic iteration
+   * order for era passes (decay, abandonment) — index-ascending and stable
+   * regardless of demolition history.
+   */
+  aliveIndices(): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < this.alive.length; i++) if (this.alive[i] === 1) out.push(i);
+    return out;
+  }
+
+  /**
+   * Tombstone parcel `i` (demolition). Only {@link demolishParcel} should call
+   * this — it keeps tile-clearing and tombstoning together as one write, the
+   * inverse of {@link placeParcel}.
+   */
+  markDead(i: number): void {
+    this.alive[i] = 0;
   }
 
   /** Materialize parcel `i` as an object (allocates — prefer scalar accessors on hot paths). */
@@ -141,16 +179,17 @@ export class ParcelStore {
    * Stable byte encoding of every parcel field, in index order. Equal content
    * yields equal bytes; any field change in any parcel changes them. Folded
    * into {@link hashWorld} so parcel attributes (which live outside the map)
-   * participate in determinism assertions. Fixed 10-byte little-endian record
+   * participate in determinism assertions. Fixed 11-byte little-endian record
    * per parcel: anchorX(u16) anchorY(u16) w(u8) h(u8) kind(u8) density(u16)
-   * condition(u8).
+   * condition(u8) alive(u8). The alive flag is folded in so a demolition (which
+   * tombstones the entry) moves the hash even though the freed tiles do too.
    */
   snapshotBytes(): Uint8Array {
     const n = this.count();
-    const bytes = new Uint8Array(n * 10);
+    const bytes = new Uint8Array(n * 11);
     const view = new DataView(bytes.buffer);
     for (let i = 0; i < n; i++) {
-      const o = i * 10;
+      const o = i * 11;
       view.setUint16(o, this.anchorX[i]! & 0xffff, true);
       view.setUint16(o + 2, this.anchorY[i]! & 0xffff, true);
       view.setUint8(o + 4, this.w[i]! & 0xff);
@@ -158,6 +197,7 @@ export class ParcelStore {
       view.setUint8(o + 6, this.kind[i]! & 0xff);
       view.setUint16(o + 7, Math.floor(this.density[i]!) & 0xffff, true);
       view.setUint8(o + 9, this.condition[i]! & 0xff);
+      view.setUint8(o + 10, this.alive[i]! & 0xff);
     }
     return bytes;
   }
@@ -274,6 +314,50 @@ export function placeTransport(map: GameMap, x: number, y: number, kind: number)
   return true;
 }
 
+// --- Demolition ----------------------------------------------------------
+//
+// The inverse of placement, kept in this same single-writer module: a parcel
+// demolition clears built + parcel across the footprint AND tombstones the
+// store entry together; a transport demolition clears built only. Tombstoning
+// (not array compaction) preserves the baked (index + 1) ids in the `parcel`
+// layer, so later parcels keep their ids. checkParcelAgreement flags any tile
+// still pointing at a tombstoned entry.
+
+/**
+ * Demolish building parcel `i`: clear `built` and `parcel` across its footprint
+ * (exactly the store entry's rectangle, guaranteed by the placement + agreement
+ * invariant) and tombstone the store entry. Returns false (writing nothing) if
+ * `i` is out of range or already demolished.
+ */
+export function demolishParcel(map: GameMap, store: ParcelStore, i: number): boolean {
+  if (i < 0 || i >= store.count()) return false;
+  if (!store.isAlive(i)) return false;
+  const p = store.get(i);
+  for (let dy = 0; dy < p.height; dy++) {
+    for (let dx = 0; dx < p.width; dx++) {
+      const t = map.idx(p.x + dx, p.y + dy);
+      map.built[t] = 0;
+      map.parcel[t] = 0;
+    }
+  }
+  store.markDead(i);
+  return true;
+}
+
+/**
+ * Demolish the transport tile at (x, y): clear `built` to 0. Returns false
+ * (writing nothing) unless the tile is in-bounds and holds a transport kind —
+ * empty tiles and building tiles are refused (a building must be demolished
+ * via {@link demolishParcel}).
+ */
+export function demolishTransportAt(map: GameMap, x: number, y: number): boolean {
+  if (!map.inBounds(x, y)) return false;
+  const i = map.idx(x, y);
+  if (!isTransportKind(map.built[i]!)) return false;
+  map.built[i] = 0;
+  return true;
+}
+
 // --- Connectivity queries ------------------------------------------------
 
 /** 0 = not transport, 1 = road category, 2 = rail category. */
@@ -370,6 +454,10 @@ export function checkParcelAgreement(map: GameMap, store: ParcelStore): string[]
         const idx = p - 1;
         if (idx < 0 || idx >= store.count()) {
           violations.push(`(${x},${y}): parcel id ${p} out of store range`);
+          continue;
+        }
+        if (!store.isAlive(idx)) {
+          violations.push(`(${x},${y}): parcel id ${p} refers to demolished parcel ${idx}`);
           continue;
         }
         const e = store.get(idx);
