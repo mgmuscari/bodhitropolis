@@ -19,13 +19,27 @@ function pct(fraction: number): number {
  * 4-6 legible stat lines for the overlay. Four base lines always render; the two
  * chronicle-sourced lines (abandonment, lost rail) are omitted when their field
  * is null (e.g. an all-water seed), so the count stays in [4,6].
+ *
+ * Each base line is zero-aware: a count of 0 must not read as a bug. The towers
+ * line in particular hits 0 on ordinary founded cities (corridor towers built in
+ * era 3 are abandoned in era 5), and the all-water seed zeroes every per-parcel
+ * stat — so each line carries a variant that stays honest and legible at 0.
  */
 export function statLines(report: BlightReport): string[] {
+  const hasParcels = report.parcelsAlive > 0;
   const lines: string[] = [
-    `${report.parcelsAlive} parcels still stand of the ${report.parcelsTotal} ever raised.`,
-    `${pct(report.shareDerelict)}% sit derelict, ${pct(report.shareStruggling)}% are struggling.`,
-    `${report.projectsStanding} towers-in-the-park still loom over the core.`,
-    `Condition holds at a weary ${Math.round(report.conditionMean)} of 255.`,
+    report.parcelsTotal === 0
+      ? `No ground was ever built here — only open water.`
+      : `${report.parcelsAlive} parcels still stand of the ${report.parcelsTotal} ever raised.`,
+    hasParcels
+      ? `${pct(report.shareDerelict)}% sit derelict, ${pct(report.shareStruggling)}% are struggling.`
+      : `Nothing stands yet to fall into disrepair.`,
+    report.projectsStanding === 0
+      ? `Not one tower-in-the-park is left standing over the core.`
+      : `${report.projectsStanding} towers-in-the-park still loom over the core.`,
+    hasParcels
+      ? `Condition holds at a weary ${Math.round(report.conditionMean)} of 255.`
+      : `There is no built condition to read — just open ground.`,
   ];
   if (report.abandoned !== null) {
     lines.push(`${report.abandoned} blocks emptied out in the disinvestment years.`);

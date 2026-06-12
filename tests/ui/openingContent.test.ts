@@ -93,6 +93,16 @@ describe('statLines', () => {
   it('is deterministic (same report -> same lines)', () => {
     expect(statLines(FOUNDED_REPORT)).toEqual(statLines(FOUNDED_REPORT));
   });
+
+  it('uses a zero-aware towers line when projectsStanding is 0 (founded city, towers abandoned)', () => {
+    const lines = statLines({ ...FOUNDED_REPORT, projectsStanding: 0 });
+    const joined = lines.join('\n');
+    expect(joined).not.toContain('0 towers'); // never "0 towers... still loom"
+    expect(joined).toContain('Not one tower-in-the-park is left standing over the core.');
+    // The rest of the founded stats still render normally.
+    expect(joined).toContain('412 parcels still stand');
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(90);
+  });
 });
 
 describe('eraHeadline', () => {
@@ -160,10 +170,20 @@ describe('challengeText', () => {
 });
 
 describe('statLines: realistic all-water path', () => {
-  it('renders exactly the four base lines (no chronicle-sourced lines), all <= 90', () => {
+  it('is zero-aware (four base lines, no absurd "0 ..." copy)', () => {
     const lines = statLines(ALL_WATER_REPORT);
     expect(lines).toHaveLength(4);
     const joined = lines.join('\n');
+    // No stat line reads as a bug at zero.
+    expect(joined).not.toContain('0 parcels still stand');
+    expect(joined).not.toContain('0 ever raised');
+    expect(joined).not.toContain('0 towers');
+    expect(joined).not.toContain('0%');
+    expect(joined).not.toContain('weary 0');
+    // Zero-aware variants present.
+    expect(joined).toContain('No ground was ever built here — only open water.');
+    expect(joined).toContain('Not one tower-in-the-park is left standing over the core.');
+    // Still free of chronicle-sourced lines and artifacts.
     expect(joined).not.toContain('disinvestment');
     expect(joined).not.toContain('rail tiles');
     expect(joined).not.toContain('undefined');
