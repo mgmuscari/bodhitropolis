@@ -6,10 +6,16 @@
 import { runPipeline } from './worldgen/pipeline';
 import { terrainStage } from './worldgen/terrain';
 import { mosesCenturyStage } from './worldgen/moses';
+import { parseChronicle } from './worldgen/chronicle';
+import { buildReport } from './worldgen/report';
+import { createRng } from './engine/rng';
+import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
 import { attachInput } from './ui/input';
+import { statLines, eraHeadline, challengeText } from './ui/openingContent';
+import { mountOpening, type OpeningContent } from './ui/opening';
 
 const DEFAULT_SEED = 'bodhitropolis';
 const SIM_TICK_MS = 100;
@@ -18,7 +24,8 @@ export function main(): void {
   const canvas = document.getElementById('game') as HTMLCanvasElement | null;
   if (!canvas) throw new Error('missing #game canvas');
 
-  const seed = new URLSearchParams(window.location.search).get('seed') ?? DEFAULT_SEED;
+  const params = new URLSearchParams(window.location.search);
+  const seed = params.get('seed') ?? DEFAULT_SEED;
   const world = runPipeline({ seed }, [terrainStage(), mosesCenturyStage()]);
 
   let cssWidth = window.innerWidth;
@@ -40,6 +47,23 @@ export function main(): void {
   };
 
   attachInput(canvas, camera, markDirty);
+
+  // Opening challenge overlay. Computed from the same world, mounted over the
+  // live map unless `?nointro=1`. The map input stays attached beneath; the
+  // overlay captures pointer events until the player dismisses it (Begin /
+  // Enter / Escape), after which the map is interactive.
+  if (params.get('nointro') !== '1') {
+    const name = cityName(createRng(seed).fork('city-name'));
+    const chronicle = parseChronicle(world.log);
+    const report = buildReport(world);
+    const content: OpeningContent = {
+      name,
+      eras: chronicle.entries.map(eraHeadline),
+      stats: statLines(report),
+      challenge: challengeText(name, report, chronicle),
+    };
+    mountOpening(document.body, content, markDirty);
+  }
 
   window.addEventListener('resize', () => {
     cssWidth = window.innerWidth;
