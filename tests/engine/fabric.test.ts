@@ -13,6 +13,8 @@ import {
   checkParcelAgreement,
   transportMask,
   parcelTouchesRoad,
+  demolishParcel,
+  demolishTransportAt,
 } from '../../src/engine/fabric';
 import { GameMap, Water } from '../../src/engine/map';
 import { runPipeline } from '../../src/worldgen/pipeline';
@@ -448,5 +450,141 @@ describe('parcelTouchesRoad', () => {
     const i = placeParcel(map, store, { x: 2, y: 2, width: 2, height: 2, kind: BuiltKind.Industrial });
     placeTransport(map, 1, 2, BuiltKind.Rail); // rail along the west edge
     expect(parcelTouchesRoad(map, store, i)).toBe(false);
+  });
+});
+
+describe('ParcelStore aliveness (tombstones)', () => {
+  it('add marks a parcel alive; aliveCount and aliveIndices track it', () => {
+    const map = new GameMap(16, 16);
+    const store = new ParcelStore();
+    const a = placeParcel(map, store, { x: 1, y: 1, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    const b = placeParcel(map, store, { x: 4, y: 1, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    const c = placeParcel(map, store, { x: 7, y: 1, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    expect(store.isAlive(a)).toBe(true);
+    expect(store.isAlive(b)).toBe(true);
+    expect(store.isAlive(c)).toBe(true);
+    expect(store.aliveCount()).toBe(3);
+    expect(store.aliveIndices()).toEqual([a, b, c]);
+  });
+
+  it('aliveIndices skips dead entries and stays ascending', () => {
+    const map = new GameMap(16, 16);
+    const store = new ParcelStore();
+    const a = placeParcel(map, store, { x: 1, y: 1, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    const b = placeParcel(map, store, { x: 4, y: 1, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    const c = placeParcel(map, store, { x: 7, y: 1, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    expect(demolishParcel(map, store, b)).toBe(true);
+    expect(store.isAlive(b)).toBe(false);
+    expect(store.aliveCount()).toBe(2);
+    expect(store.aliveIndices()).toEqual([a, c]);
+  });
+});
+
+describe('demolishParcel', () => {
+  it('clears every footprint tile and only those tiles; neighbours untouched', () => {
+    const map = new GameMap(12, 12);
+    const store = new ParcelStore();
+    const i = placeParcel(map, store, { x: 3, y: 3, width: 2, height: 2, kind: BuiltKind.Apartments });
+    const j = placeParcel(map, store, { x: 7, y: 7, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    placeTransport(map, 2, 3, BuiltKind.RoadStreet); // west frontage, must survive
+
+    expect(demolishParcel(map, store, i)).toBe(true);
+
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        expect(map.getBuilt(3 + dx, 3 + dy)).toBe(0);
+        expect(map.getParcel(3 + dx, 3 + dy)).toBe(0);
+      }
+    }
+    // Neighbouring parcel, the frontage road, and an empty tile are all untouched.
+    expect(map.getBuilt(7, 7)).toBe(BuiltKind.HouseSingle);
+    expect(store.isAlive(j)).toBe(true);
+    expect(map.getBuilt(2, 3)).toBe(BuiltKind.RoadStreet);
+    expect(map.getBuilt(5, 3)).toBe(0);
+    expect(store.isAlive(i)).toBe(false);
+  });
+
+  it('leaves the bidirectional agreement sweep clean', () => {
+    const map = new GameMap(12, 12);
+    const store = new ParcelStore();
+    const i = placeParcel(map, store, { x: 3, y: 3, width: 3, height: 3, kind: BuiltKind.Projects });
+    placeParcel(map, store, { x: 8, y: 8, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    expect(demolishParcel(map, store, i)).toBe(true);
+    expect(checkParcelAgreement(map, store)).toEqual([]);
+  });
+
+  it('changes the canonical world hash (tombstone + cleared tiles)', () => {
+    const map = new GameMap(12, 12);
+    const store = new ParcelStore();
+    const i = placeParcel(map, store, { x: 3, y: 3, width: 2, height: 2, kind: BuiltKind.Offices });
+    const world = { map, parcels: store, seed: 'x', log: [] as string[] };
+    const before = hashWorld(world);
+    expect(demolishParcel(map, store, i)).toBe(true);
+    expect(hashWorld(world)).not.toBe(before);
+  });
+
+  it('double-demolish returns false and changes nothing', () => {
+    const map = new GameMap(12, 12);
+    const store = new ParcelStore();
+    const i = placeParcel(map, store, { x: 3, y: 3, width: 2, height: 2, kind: BuiltKind.Civic });
+    expect(demolishParcel(map, store, i)).toBe(true);
+    const snap = map.snapshot();
+    const bytes = store.snapshotBytes();
+    expect(demolishParcel(map, store, i)).toBe(false);
+    expect(map.snapshot()).toBe(snap);
+    expect(store.snapshotBytes()).toEqual(bytes);
+  });
+
+  it('returns false on an out-of-range index, writing nothing', () => {
+    const map = new GameMap(12, 12);
+    const store = new ParcelStore();
+    placeParcel(map, store, { x: 3, y: 3, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    const snap = map.snapshot();
+    expect(demolishParcel(map, store, -1)).toBe(false);
+    expect(demolishParcel(map, store, 999)).toBe(false);
+    expect(map.snapshot()).toBe(snap);
+  });
+});
+
+describe('demolishTransportAt', () => {
+  it('clears a road or rail tile, refuses empty and building tiles', () => {
+    const map = new GameMap(12, 12);
+    const store = new ParcelStore();
+    placeTransport(map, 1, 1, BuiltKind.RoadStreet);
+    expect(demolishTransportAt(map, 1, 1)).toBe(true);
+    expect(map.getBuilt(1, 1)).toBe(0);
+
+    placeTransport(map, 2, 2, BuiltKind.Rail);
+    expect(demolishTransportAt(map, 2, 2)).toBe(true);
+    expect(map.getBuilt(2, 2)).toBe(0);
+
+    // Empty tile: nothing to demolish.
+    expect(demolishTransportAt(map, 4, 4)).toBe(false);
+
+    // Building tile: not transport, so refused and left intact.
+    placeParcel(map, store, { x: 6, y: 6, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    expect(demolishTransportAt(map, 6, 6)).toBe(false);
+    expect(map.getBuilt(6, 6)).toBe(BuiltKind.HouseSingle);
+  });
+
+  it('returns false out of bounds', () => {
+    const map = new GameMap(8, 8);
+    expect(demolishTransportAt(map, -1, 0)).toBe(false);
+    expect(demolishTransportAt(map, 8, 8)).toBe(false);
+  });
+});
+
+describe('checkParcelAgreement detects dead-entry references', () => {
+  it('flags a tile pointing at a demolished (tombstoned) parcel', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    const i = placeParcel(map, store, { x: 2, y: 2, width: 1, height: 1, kind: BuiltKind.Civic });
+    expect(demolishParcel(map, store, i)).toBe(true);
+    // Hand-corruption: re-stamp a tile to reference the now-dead store entry.
+    map.setBuilt(2, 2, BuiltKind.Civic);
+    map.setParcel(2, 2, i + 1);
+    const violations = checkParcelAgreement(map, store);
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations.some((v) => /demolished/.test(v))).toBe(true);
   });
 });
