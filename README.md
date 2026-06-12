@@ -33,8 +33,9 @@ Code is split into three layers with a strict, test-enforced purity rule
   nothing from `worldgen` or `ui`.
 - **`src/worldgen/`** — value noise / fBm (`noise.ts`), the staged generation
   pipeline (`pipeline.ts`), the terrain stage (`terrain.ts`: elevation,
-  ocean/lake/river, moisture, biomes), and the placeholder `fabric-demo`
-  stage (`fabricdemo.ts`). May import `engine`.
+  ocean/lake/river, moisture, biomes), reusable spatial-field helpers
+  (`fields.ts`: distance fields, box density, land runs), and the
+  `moses-century` history stage (`moses.ts`). May import `engine`.
 - **`src/ui/`** — a Canvas2D pixel-art renderer (terrain plus an autotiled
   road/rail and footprint-aware building overlay), pan/zoom camera, and input.
   Only this layer and `src/main.ts` touch the DOM.
@@ -57,18 +58,41 @@ density, and condition — live in a parallel-array `ParcelStore` on the
 snapshot + parcel bytes), not `map.snapshot()` alone, is the canonical
 determinism hash for stage tests.
 
-The placement functions in `fabric.ts` (`placeParcel`, `placeTransport`) are
-the **single writers** of those layers — everything else queries. Transport
-placement merges same-category junctions (road-on-road, rail-on-rail) to the
-higher-capacity kind so two roads can share a crossing tile; road↔rail
-crossings are rejected. `transportMask` drives renderer autotiling and
-`parcelTouchesRoad` answers frontage queries.
+The placement functions in `fabric.ts` (`placeParcel`, `placeTransport`) and
+their inverses (`demolishParcel`, `demolishTransportAt`) are the **single
+writers** of those layers — everything else queries. Transport placement merges
+same-category junctions (road-on-road, rail-on-rail) to the higher-capacity
+kind so two roads can share a crossing tile; road↔rail crossings are rejected.
+Demolition tombstones parcels (`ParcelStore` keeps an `alive` flag rather than
+compacting, because the `parcel` tile layer holds baked ids); `transportMask`
+drives renderer autotiling and `parcelTouchesRoad` answers frontage queries.
 
-`fabric-demo` is a **placeholder** worldgen stage: it lays one deterministic
-test town (a crossroads and one of each building kind) so the renderer and
-fabric model have something to draw. It is not settlement logic — the planned
-Moses-century history simulation replaces this stage with a city grown from
-real history.
+### The Moses-century history stage
+
+`moses-century` (`moses.ts`) is the settlement stage: it grows a coherent city
+on the terrain and then wrecks it, in five deterministic era sub-steps that
+each fork their own rng stream and thread one shared `MosesState`:
+
+1. **Founding & streetcar town** — picks a flat, water-near, rail-extendable
+   site; lays a street grid; runs streetcar rail as radial extensions beyond
+   the grid; grows an early fabric of houses, commerce, and a civic core.
+2. **Motor age** — upgrades the arterials to avenues, extends the grid, and
+   adds rail/water-frontage industry and downtown parking.
+3. **Highways & urban renewal** — carves a highway corridor (and often a
+   perpendicular second) through the densest fabric, demolishing what stands
+   in its path, rips out every streetcar rail, and drops tower-in-the-park
+   Projects and a civic megablock.
+4. **Suburban flight** — grows street spurs into open land away from the
+   expressways and fills a suburban ring (measured by *road-network* distance,
+   not crow-flies), while the inner-city core declines.
+5. **Disinvestment** — decays every parcel by a redlining-shaped falloff of
+   highway distance and abandons (demolishes) those that fall below threshold,
+   leaving parking craters — the blighted start state.
+
+Each era writes a line into `world.log` (the chronicle), so the generated
+history is legible. Like every stage it is **deterministic** (same seed → same
+city) and touches only the `built`/`parcel` layers and parcel attributes — the
+four terrain layers are byte-identical before and after.
 
 ## Methodology
 
