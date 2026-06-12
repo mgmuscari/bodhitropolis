@@ -235,8 +235,13 @@ export function previewTool(
   return { valid: true };
 }
 
-/** Minimal inspect readout for the dock line (no mutation, no cost). */
-function inspectInfo(world: ToolWorld, x: number, y: number): string {
+/**
+ * Minimal inspect readout for the dock status line (PRD: a console-free line
+ * showing kind / condition / parcel info; the full inspector is a later feature).
+ * Pure — reads the map + parcel store, mutates nothing, costs nothing — and
+ * exported so the formatting is unit-tested directly rather than only via applyTool.
+ */
+export function inspectReadout(world: ToolWorld, x: number, y: number): string {
   const { map, parcels } = world;
   if (!map.inBounds(x, y)) return `(${x}, ${y}) out of bounds`;
   const i = map.idx(x, y);
@@ -245,7 +250,7 @@ function inspectInfo(world: ToolWorld, x: number, y: number): string {
   if (isTransportKind(built)) return `(${x}, ${y}) transport kind ${built}`;
   const pid = map.parcel[i]!;
   const cond = pid !== 0 ? parcels.conditionAt(pid - 1) : 255;
-  return `(${x}, ${y}) building kind ${built}, condition ${cond}`;
+  return `(${x}, ${y}) building kind ${built} · parcel ${pid} · condition ${cond}`;
 }
 
 /**
@@ -262,7 +267,7 @@ export function applyTool(
   x: number,
   y: number,
 ): ApplyResult {
-  if (tool.id === 'inspect') return { ok: true, info: inspectInfo(world, x, y) };
+  if (tool.id === 'inspect') return { ok: true, info: inspectReadout(world, x, y) };
 
   const p = previewTool(world, tech, tool, x, y);
   if (!p.valid) return { ok: false, reason: p.reason };

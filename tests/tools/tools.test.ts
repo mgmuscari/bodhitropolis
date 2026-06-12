@@ -4,6 +4,7 @@ import {
   previewTool,
   applyTool,
   toolDef,
+  inspectReadout,
   type ToolId,
 } from '../../src/tools/tools';
 import {
@@ -263,6 +264,43 @@ describe('applyTool spends + routes to single-writers', () => {
     applyTool(world, tech, toolDef('convert-7')!, 1, 1); // street -> quiet street
     applyTool(world, tech, toolDef('bulldoze')!, 3, 3); // remove the parklet
     expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
+  });
+});
+
+describe('inspectReadout (pure tile readout)', () => {
+  it('reports an empty tile', () => {
+    expect(inspectReadout(freshWorld(), 3, 3)).toBe('(3, 3) empty');
+  });
+
+  it('reports a transport tile by kind', () => {
+    const world = freshWorld();
+    placeTransport(world.map, 2, 2, BuiltKind.RoadStreet);
+    expect(inspectReadout(world, 2, 2)).toBe('(2, 2) transport kind 1');
+  });
+
+  it('reports a building tile with its parcel id and condition', () => {
+    const world = freshWorld();
+    const pid = placeParcel(world.map, world.parcels, {
+      x: 4,
+      y: 4,
+      width: 1,
+      height: 1,
+      kind: BuiltKind.HouseSingle,
+    });
+    world.parcels.setCondition(pid, 100);
+    expect(inspectReadout(world, 4, 4)).toBe(`(4, 4) building kind 16 · parcel ${pid + 1} · condition 100`);
+  });
+
+  it('reports an out-of-bounds tile', () => {
+    expect(inspectReadout(freshWorld(), -1, 0)).toBe('(-1, 0) out of bounds');
+  });
+
+  it('is pure: equal inputs, equal output, no mutation', () => {
+    const world = freshWorld();
+    placeTransport(world.map, 1, 1, BuiltKind.Rail);
+    const h = hashWorld(world);
+    expect(inspectReadout(world, 1, 1)).toBe(inspectReadout(world, 1, 1));
+    expect(hashWorld(world)).toBe(h);
   });
 });
 
