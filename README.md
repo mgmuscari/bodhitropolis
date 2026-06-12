@@ -184,7 +184,8 @@ tree has unlocked so far; click one to select it (its cost shows as `Name ·
 cost`, and it greys out when you cannot afford it), then click the map to apply.
 
 - **Hotkeys** — **`i`** selects Inspect (a free, non-mutating readout of the
-  tile under the cursor), **`x`** selects Bulldoze, and **`Escape`** deselects.
+  clicked tile — kind, condition, parcel — shown as a status line in the dock),
+  **`x`** selects Bulldoze, and **`Escape`** deselects.
   A hovered tool tints its target tile translucent **green** (valid) or **red**
   (invalid) before you commit.
 - **Building & transit** — a building tool places its parcel footprint on empty

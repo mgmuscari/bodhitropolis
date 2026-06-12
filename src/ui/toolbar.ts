@@ -17,20 +17,33 @@ export interface ToolbarDeps {
 export interface ToolbarHandle {
   /** Re-derive and re-render the dock from getRows(). */
   refresh(): void;
+  /** Show (or clear with null) the minimal status line — e.g. the inspect readout. */
+  setStatus(text: string | null): void;
 }
 
 /**
  * Build and mount the bottom tool dock into `container`. Returns a handle so the
- * host can refresh it (selection changes, effort accrual flipping affordability).
- * Clicking a row calls deps.onSelect(id); the host re-derives and calls refresh().
+ * host can refresh it (selection changes, effort accrual flipping affordability)
+ * and set a status line (the inspect readout). Clicking a row calls
+ * deps.onSelect(id); the host re-derives and calls refresh(). The status line is a
+ * sibling of the tool row, so refresh() (which only rebuilds the row) never wipes it.
  */
 export function mountToolbar(container: HTMLElement, deps: ToolbarDeps): ToolbarHandle {
   const dock = document.createElement('div');
   dock.className = 'toolbar';
+
+  const tools = document.createElement('div');
+  tools.className = 'toolbar-tools';
+
+  const status = document.createElement('div');
+  status.className = 'toolbar-status';
+  status.hidden = true;
+
+  dock.append(tools, status);
   container.appendChild(dock);
 
   function render(): void {
-    dock.replaceChildren();
+    tools.replaceChildren();
     for (const row of deps.getRows()) {
       const btn = document.createElement('button');
       btn.className = 'toolbar-tool';
@@ -38,7 +51,17 @@ export function mountToolbar(container: HTMLElement, deps: ToolbarDeps): Toolbar
       if (!row.affordable) btn.classList.add('toolbar-tool-unaffordable');
       btn.textContent = row.label;
       btn.addEventListener('click', () => deps.onSelect(row.id));
-      dock.appendChild(btn);
+      tools.appendChild(btn);
+    }
+  }
+
+  function setStatus(text: string | null): void {
+    if (text === null) {
+      status.hidden = true;
+      status.textContent = '';
+    } else {
+      status.textContent = text;
+      status.hidden = false;
     }
   }
 
@@ -46,5 +69,6 @@ export function mountToolbar(container: HTMLElement, deps: ToolbarDeps): Toolbar
 
   return {
     refresh: render,
+    setStatus,
   };
 }

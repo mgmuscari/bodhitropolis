@@ -116,6 +116,7 @@ export function main(): void {
     onSelect: (id) => {
       selectedToolId = id as ToolId;
       renderer.setPreview(null);
+      toolbar.setStatus(null); // a prior inspect readout is stale on tool change
       dirty = true;
       toolbar.refresh();
     },
@@ -135,6 +136,12 @@ export function main(): void {
     const def = toolDef(selectedToolId);
     if (!def) return;
     const r = applyTool(world, tech, def, tx, ty);
+    // Inspect is free + non-mutating: surface its readout to the dock status line
+    // (PRD: a minimal console-free line in the dock) without the mutate-path churn.
+    if (def.id === 'inspect') {
+      if (r.info !== undefined) toolbar.setStatus(r.info);
+      return;
+    }
     if (r.ok) {
       dirty = true;
       panelDirty = true; // effort changed → tech-panel affordability
@@ -156,6 +163,7 @@ export function main(): void {
     onHotkey: (action) => {
       selectedToolId = action === 'inspect' ? 'inspect' : action === 'bulldoze' ? 'bulldoze' : null;
       renderer.setPreview(null);
+      toolbar.setStatus(null);
       dirty = true;
       toolbar.refresh();
     },

@@ -84,6 +84,18 @@ describe('lineTiles (axis-major straight line)', () => {
     expect(tiles).toHaveLength(4);
   });
 
+  it('floors non-integer coords (terminates instead of looping forever)', () => {
+    // A non-integer endpoint would never satisfy `x === x1`; flooring guarantees
+    // termination and matches what a floored screen→world caller intends.
+    expect(lineTiles(2.7, 2.2, 6.9, 2.1)).toEqual([
+      { x: 2, y: 2 },
+      { x: 3, y: 2 },
+      { x: 4, y: 2 },
+      { x: 5, y: 2 },
+      { x: 6, y: 2 },
+    ]);
+  });
+
   it('is deterministic and contiguous on the major axis', () => {
     const a = lineTiles(1, 1, 5, 3);
     const b = lineTiles(1, 1, 5, 3);

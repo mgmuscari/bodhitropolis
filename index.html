@@ -179,9 +179,9 @@
         transform: translateX(-50%);
         z-index: 8;
         display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 0.4rem;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.35rem;
         max-width: 96vw;
         padding: 0.5rem 0.75rem;
         background: rgba(28, 26, 42, 0.94);
@@ -189,6 +189,22 @@
         border-bottom: none;
         box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.45);
         font-family: "Courier New", ui-monospace, monospace;
+      }
+      .toolbar-tools {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 0.4rem;
+      }
+      .toolbar-status {
+        max-width: 100%;
+        font-size: 0.74rem;
+        letter-spacing: 0.02em;
+        color: #b6b2c6;
+        text-align: center;
+      }
+      .toolbar-status[hidden] {
+        display: none;
       }
       .toolbar-tool {
         padding: 0.35rem 0.7rem;

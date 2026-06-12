@@ -41,20 +41,27 @@ export function classifyPointer(
  * (x0==x1 && y0==y1) yields the single start tile.
  */
 export function lineTiles(x0: number, y0: number, x1: number, y1: number): Tile[] {
-  const dx = x1 - x0;
-  const dy = y1 - y0;
+  // Tile coords MUST be integers or the `=== x1`/`=== y1` termination never fires
+  // and the loop spins forever. Callers pass floored screen→world tiles, but floor
+  // defensively here so a non-integer caller can't hang the browser.
+  const ax0 = Math.floor(x0);
+  const ay0 = Math.floor(y0);
+  const ax1 = Math.floor(x1);
+  const ay1 = Math.floor(y1);
+  const dx = ax1 - ax0;
+  const dy = ay1 - ay0;
   const out: Tile[] = [];
   if (Math.abs(dx) >= Math.abs(dy)) {
     const step = dx >= 0 ? 1 : -1;
-    for (let x = x0; ; x += step) {
-      out.push({ x, y: y0 });
-      if (x === x1) break;
+    for (let x = ax0; ; x += step) {
+      out.push({ x, y: ay0 });
+      if (x === ax1) break;
     }
   } else {
     const step = dy >= 0 ? 1 : -1;
-    for (let y = y0; ; y += step) {
-      out.push({ x: x0, y });
-      if (y === y1) break;
+    for (let y = ay0; ; y += step) {
+      out.push({ x: ax0, y });
+      if (y === ay1) break;
     }
   }
   return out;
