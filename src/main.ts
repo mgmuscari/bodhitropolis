@@ -1,7 +1,8 @@
 // Browser entry point. Generates a world from the URL seed, then drives a
-// requestAnimationFrame render loop and a fixed-tick simulation loop (the sim
-// has no stages yet — it just exists and ticks). All DOM access is guarded so
-// this module stays safe to import headless under Vitest.
+// requestAnimationFrame render loop and a fixed-tick simulation loop. The sim
+// step is the composite orchestrator simTick (effort → ecology → civic); this
+// shell only reads its deps for rendering. All DOM access is guarded so this
+// module stays safe to import headless under Vitest.
 
 import { runPipeline } from './worldgen/pipeline';
 import { terrainStage } from './worldgen/terrain';
@@ -9,8 +10,6 @@ import { mosesCenturyStage } from './worldgen/moses';
 import { ecoSeedStage } from './worldgen/ecoseed';
 import { parseChronicle } from './worldgen/chronicle';
 import { buildReport } from './worldgen/report';
-import { ecologyTick } from './ecology/tick';
-import { ECO_CADENCE } from './ecology/influence';
 import { ecologyReport } from './ecology/report';
 import { biodiversityField } from './ecology/biodiversity';
 import { Water } from './engine/map';
@@ -21,23 +20,31 @@ import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
 import { attachInput } from './ui/input';
 import { statLines, eraHeadline, challengeText, ecologyStatLine } from './ui/openingContent';
+import { overlayTint, legendLine, type OverlayView } from './ui/ecoOverlayContent';
 import {
-  cycleOverlay,
-  shouldCycleOverlay,
-  overlayTint,
-  legendLine,
-  type OverlayState,
-} from './ui/ecoOverlayContent';
+  civicOverlayTint,
+  civicLegendLine,
+  cycleComposite,
+  compositeKeyFor,
+  type CompositeState,
+  type CivicOverlayView,
+} from './ui/civicOverlayContent';
+import { pulseLine } from './ui/pulseContent';
+import { mountPulseDock } from './ui/pulseDock';
+import { isRepairTool } from './ui/repairTools';
 import { mountOpening, type OpeningContent } from './ui/opening';
 import { TECH_TREE } from './tech/tree';
 import { createTechState } from './tech/state';
-import { accrue } from './tech/effort';
+import { wellbeing } from './tech/effort';
 import { branchColumns, effortLine } from './ui/techContent';
 import { mountTechPanel } from './ui/techPanel';
 import { isTransportKind } from './engine/fabric';
 import { availableTools, previewTool, applyTool, toolDef, type ToolId } from './tools/tools';
 import { toolbarRows } from './ui/toolbarContent';
 import { mountToolbar } from './ui/toolbar';
+import { computeNeighborhoods } from './civic/neighborhoods';
+import { createCivicState } from './civic/state';
+import { simTick, type SimDeps } from './civic/compose';
 
 const DEFAULT_SEED = 'bodhitropolis';
 const SIM_TICK_MS = 100;
@@ -52,6 +59,17 @@ export function main(): void {
 
   // Tech-tree state: communal effort accrues into it each sim tick (see below).
   const tech = createTechState(TECH_TREE);
+
+  // Civic state: the neighborhood partition + per-neighborhood belonging/voice/
+  // trust. simTick refreshes the partition and remaps the state on the civic
+  // cadence; this shell reads `deps.partition` to resolve a repair's tile.
+  const partition = computeNeighborhoods(world.map);
+  const civic = createCivicState(partition);
+  const deps: SimDeps = { world, tech, civic, partition };
+
+  // The latest sim tick, captured for the repair-forwarding hook (which fires
+  // from pointer events, outside the sim loop).
+  let currentTick = 0;
 
   // The opening overlay owns its own keydown and exposes no active-state; the
   // single composition root tracks whether it is up so the tech panel can
@@ -138,28 +156,54 @@ export function main(): void {
     },
   });
 
-  // Ecology heatmap overlay, cycled by E (off → soil → flora → fauna →
-  // biodiversity → off). soil/flora/fauna sources read the LIVE layers, so they
-  // auto-reflect each ecology tick; the DERIVED biodiversity field is recomputed
-  // and re-pushed on each ecology tick while that view is active (plan review
-  // MINOR-b). Water tiles are NOT tinted (tint → null): ecology lives on land —
-  // water is habitat 0 / soil 0 by convention, not "the worst soil", so the
-  // terrain water colour shows through unobscured.
+  // Always-on wellbeing pulse dock: its OWN dedicated element (not the shared
+  // toolbar status, which inspect/legend clobber), refreshed on the civic cadence
+  // only to avoid per-tick flicker. The trend compares to the previous cadence.
+  const pulseDock = mountPulseDock(document.body);
+  let prevWellbeing: number | null = null;
+  const wellbeingNow = (): number =>
+    wellbeing({ parcels: world.parcels, ecoMeans: deps.ecoMeans, civicMeans: deps.civicMeans });
+  pulseDock.set(pulseLine(wellbeingNow(), null)); // initial: flat, no prior cadence
+
+  // Composite heatmap overlay: a SINGLE active overlay (eco or civic, never both),
+  // cycled by E (off → soil → flora → fauna → biodiversity → off) and C (off →
+  // belonging → voice → trust → off). Pressing the other key replaces the active
+  // overlay (exclusivity). Eco soil/flora/fauna read the LIVE layers; biodiversity
+  // and every civic view are recomputed/re-pushed when their source ticks. Water
+  // tiles are not tinted (eco lives on land); civic tiles with no neighborhood
+  // (id 0) are not tinted.
   const overlayWater = world.map.water;
-  let overlayState: OverlayState = null;
+  let activeOverlay: CompositeState = null;
   const applyOverlay = (): void => {
-    if (overlayState === null) {
+    if (activeOverlay === null) {
       renderer.setOverlay(null);
       return;
     }
-    if (overlayState === 'biodiversity') {
+    if (activeOverlay.kind === 'civic') {
+      const view = activeOverlay.view as CivicOverlayView;
+      const count = deps.civic.count();
+      const values = new Uint8Array(count); // per-neighborhood value, rebuilt per refresh
+      for (let id = 1; id <= count; id++) {
+        const v = deps.civic.getValues(id);
+        values[id - 1] = view === 'belonging' ? v.belonging : view === 'voice' ? v.voice : v.trust;
+      }
+      const t2n = deps.partition.tileToNeighborhood;
+      renderer.setOverlay({
+        tint: (i) => {
+          const id = t2n[i]!;
+          return id === 0 ? null : civicOverlayTint(view, values[id - 1]!);
+        },
+      });
+      return;
+    }
+    const view = activeOverlay.view as OverlayView;
+    if (view === 'biodiversity') {
       const field = biodiversityField(world.map);
       renderer.setOverlay({
         tint: (i) => (overlayWater[i] !== Water.None ? null : overlayTint('biodiversity', field[i]!)),
       });
       return;
     }
-    const view = overlayState;
     const layer =
       view === 'soil'
         ? world.map.soilHealth
@@ -171,16 +215,22 @@ export function main(): void {
     });
   };
 
-  // E self-binds (the tech panel's T pattern): its own keydown routed through the
-  // pure shouldCycleOverlay gate, suppressed while the opening overlay is up. The
-  // legend shares the dock status slot with the inspect readout — latest action
-  // wins (a later inspect click overwrites it, and vice versa).
+  // E and C self-bind through the shared compositeKeyFor gate (suppressed while
+  // the opening overlay is up). The active overlay's legend shares the dock status
+  // slot with the inspect readout — latest action wins.
   window.addEventListener('keydown', (event) => {
-    if (!shouldCycleOverlay(event.key, overlayActive)) return;
+    const kind = compositeKeyFor(event.key, overlayActive);
+    if (kind === null) return;
     event.preventDefault();
-    overlayState = cycleOverlay(overlayState);
+    activeOverlay = cycleComposite(activeOverlay, kind);
     applyOverlay();
-    toolbar.setStatus(overlayState !== null ? legendLine(overlayState) : null);
+    const legend =
+      activeOverlay === null
+        ? null
+        : activeOverlay.kind === 'eco'
+          ? legendLine(activeOverlay.view as OverlayView)
+          : civicLegendLine(activeOverlay.view as CivicOverlayView);
+    toolbar.setStatus(legend);
     dirty = true;
   });
 
@@ -209,6 +259,14 @@ export function main(): void {
       panelDirty = true; // effort changed → tech-panel affordability
       toolbar.refresh(); // effort changed → dock affordability
       previewAt(tx, ty); // re-tint the just-touched tile
+      // Repair forwarding (the sanctioned tools→civic crossing): a successful
+      // repair-classified placement credits the anchor tile's neighborhood from
+      // the LIVE partition. id 0 (no neighborhood) is a safe no-op; bulldoze is
+      // excluded by isRepairTool. Multi-tile builds credit the anchor (tx, ty).
+      if (isRepairTool(def)) {
+        const nid = deps.partition.tileToNeighborhood[world.map.idx(tx, ty)] ?? 0;
+        deps.civic.recordRepair(nid, currentTick);
+      }
     }
   };
 
@@ -243,24 +301,30 @@ export function main(): void {
     markDirty();
   });
 
-  // Simulation loop: communal effort accrues each tick — the first real per-tick
-  // work. When the panel is open, the tick marks panelDirty so the next frame
-  // re-derives its full content (node affordability tracks the rising effort).
+  // Simulation loop: the composite orchestrator advances effort every tick and
+  // ecology/civic on their cadences. When the panel is open, the tick marks
+  // panelDirty so the next frame re-derives its full content. Overlays re-push on
+  // their source's tick; the pulse refreshes on the civic cadence only.
   const sim = new FixedTickLoop(SIM_TICK_MS, (tick) => {
-    accrue(tech, world, 1);
+    currentTick = tick;
+    const r = simTick(deps, tick);
     if (techPanel.isOpen()) panelDirty = true;
-    // Ecology cadence: the tick>0 guard lands the first ecology step at
-    // tick = ECO_CADENCE, so the freshly-seeded state is the player's t0 and
-    // dynamics begin one cadence interval later.
-    if (tick > 0 && tick % ECO_CADENCE === 0) {
-      ecologyTick(world.map);
-      if (overlayState !== null) {
-        // biodiversity is derived → recompute + re-push; soil/flora/fauna sources
-        // read the live layers and need no recompute. Only mark dirty when the
-        // overlay is active (no visual delta otherwise → avoid re-render churn).
-        if (overlayState === 'biodiversity') applyOverlay();
+    if (r.ecoTicked && activeOverlay?.kind === 'eco') {
+      // biodiversity is derived → recompute + re-push; soil/flora/fauna read the
+      // live layers and need no recompute.
+      if (activeOverlay.view === 'biodiversity') applyOverlay();
+      dirty = true;
+    }
+    if (r.civicTicked) {
+      // the partition was refreshed/remapped and values changed → rebuild the
+      // civic overlay against the new partition + values.
+      if (activeOverlay?.kind === 'civic') {
+        applyOverlay();
         dirty = true;
       }
+      const wb = wellbeingNow();
+      pulseDock.set(pulseLine(wb, prevWellbeing));
+      prevWellbeing = wb;
     }
   });
   let last = performance.now();
