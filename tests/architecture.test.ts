@@ -29,6 +29,14 @@ const toolsDir = path.join(root, 'src/tools');
 // (Simpson's index is exact-rational, not Shannon). Auto-covers every future
 // ecology file — see the behavioral probe test below.
 const ecologyDir = path.join(root, 'src/ecology');
+// src/civic is scanned fail-closed too: the neighborhood partition, the civic
+// state/dynamics, the civic report, and the composite orchestrator are
+// deterministic functions of (map, civic state, tech booleans) and must stay
+// headless (no DOM) and transcendental-free. Civic writes only CivicState; the
+// one sanctioned outward edge is civic → ecology (influenceOf for the fragmenting
+// flag) — ecology never imports civic, so there is no cycle (asserted below).
+// Auto-covers every future civic file — see the behavioral probe test below.
+const civicDir = path.join(root, 'src/civic');
 
 // DOM globals that must never appear in headless layers.
 const FORBIDDEN_DOM = /\b(window|document|HTMLCanvasElement|requestAnimationFrame|navigator|localStorage)\b/;
@@ -39,6 +47,12 @@ const FORBIDDEN_MATH = /\bMath\.(exp|pow|log|sin|cos|tan|random)\b/;
 const UI_IMPORT = /\bfrom\s+['"][^'"]*\/ui(?:\/[^'"]*)?['"]/;
 // Imports from the worldgen layer (forbidden in engine).
 const WORLDGEN_IMPORT = /\bfrom\s+['"][^'"]*\/worldgen(?:\/[^'"]*)?['"]/;
+// Imports from the civic layer (forbidden in ecology/tools/tech — civic is a
+// downstream consumer; nothing it depends on may depend back on it).
+const CIVIC_IMPORT = /\bfrom\s+['"][^'"]*\/civic(?:\/[^'"]*)?['"]/;
+// Imports from the ecology layer (forbidden in tech — the wellbeing means reach
+// effort.ts structurally, as plain numbers, never as an ecology import).
+const ECOLOGY_IMPORT = /\bfrom\s+['"][^'"]*\/ecology(?:\/[^'"]*)?['"]/;
 
 /** Remove block and line comments so prose mentioning banned tokens is ignored. */
 function stripComments(source: string): string {
@@ -60,6 +74,7 @@ const worldgenFiles = tsFiles(worldgenDir);
 const techFiles = tsFiles(techDir);
 const toolsFiles = tsFiles(toolsDir);
 const ecologyFiles = tsFiles(ecologyDir);
+const civicFiles = tsFiles(civicDir);
 
 // Pure-ui allowlist: ui modules that carry NO DOM and NO transcendental Math, so
 // they can be headless-tested like the engine/worldgen layers. The src/ui dir as
@@ -74,6 +89,9 @@ const PURE_UI_ALLOWLIST = [
   'src/ui/renderKey.ts',
   'src/ui/toolbarContent.ts',
   'src/ui/ecoOverlayContent.ts',
+  'src/ui/civicOverlayContent.ts',
+  'src/ui/pulseContent.ts',
+  'src/ui/repairTools.ts',
 ];
 
 describe('architecture guard: headless + deterministic', () => {
@@ -82,7 +100,14 @@ describe('architecture guard: headless + deterministic', () => {
     expect(worldgenFiles.length).toBeGreaterThan(0);
   });
 
-  for (const file of [...engineFiles, ...worldgenFiles, ...techFiles, ...toolsFiles, ...ecologyFiles]) {
+  for (const file of [
+    ...engineFiles,
+    ...worldgenFiles,
+    ...techFiles,
+    ...toolsFiles,
+    ...ecologyFiles,
+    ...civicFiles,
+  ]) {
     const rel = path.relative(root, file);
     it(`${rel} is DOM-free, ui-free, and transcendental-Math-free`, () => {
       const code = stripComments(fs.readFileSync(file, 'utf8'));
@@ -166,6 +191,73 @@ describe('architecture guard: src/ecology scanned fail-closed', () => {
     } finally {
       fs.unlinkSync(probe);
     }
+  });
+});
+
+describe('architecture guard: src/civic scanned fail-closed', () => {
+  it('scans src/civic and finds at least one file (neighborhoods.ts)', () => {
+    expect(civicFiles.length).toBeGreaterThan(0);
+  });
+
+  // Behavioral proof the scan covers src/civic: drop a throwaway file holding a
+  // DOM token, re-run the scan primitives, assert it is discovered AND flagged,
+  // then unlink. Fail-closed: any future civic file is auto-covered.
+  it('discovers and flags a synthetic DOM violation dropped into src/civic', () => {
+    const probe = path.join(civicDir, '__guard_probe__.ts');
+    fs.writeFileSync(probe, 'export const el = document.getElementById("probe");\n');
+    try {
+      const discovered = tsFiles(civicDir);
+      expect(discovered, 'scan did not discover the probe file').toContain(probe);
+      const code = stripComments(fs.readFileSync(probe, 'utf8'));
+      expect(FORBIDDEN_DOM.test(code), 'scan did not flag the DOM token').toBe(true);
+    } finally {
+      fs.unlinkSync(probe);
+    }
+  });
+});
+
+describe('architecture guard: civic isolation (civic writes only CivicState)', () => {
+  // The dependency direction: civic is a downstream consumer of ecology/engine/
+  // tech. Nothing it depends on may import it back. AC #6 isolation depends on
+  // these matchers being REAL (firing on a true violation) — so each ships a
+  // self-check pair (positive fire + benign negative), mirroring the
+  // WORLDGEN_IMPORT self-checks above. A vacuous matcher that never fires would
+  // pass GREEN even while ecology/tools/tech actually imported civic.
+  for (const file of [...ecologyFiles, ...toolsFiles, ...techFiles]) {
+    const rel = path.relative(root, file);
+    it(`${rel} does not import from civic`, () => {
+      const code = stripComments(fs.readFileSync(file, 'utf8'));
+      expect(CIVIC_IMPORT.test(code), `${rel} imports from civic`).toBe(false);
+    });
+  }
+
+  for (const file of techFiles) {
+    const rel = path.relative(root, file);
+    it(`${rel} (tech) does not import from ecology (wellbeing means arrive structurally)`, () => {
+      const code = stripComments(fs.readFileSync(file, 'utf8'));
+      expect(ECOLOGY_IMPORT.test(code), `${rel} imports from ecology`).toBe(false);
+    });
+  }
+
+  // Civic flood-fills the engine GameMap; it must never reach into worldgen
+  // fields (PRP §2: NO worldgen edge — `world` is typed structurally as
+  // {map, parcels}). The composite orchestrator is where the temptation arises.
+  for (const file of civicFiles) {
+    const rel = path.relative(root, file);
+    it(`${rel} (civic) does not import from worldgen`, () => {
+      const code = stripComments(fs.readFileSync(file, 'utf8'));
+      expect(WORLDGEN_IMPORT.test(code), `${rel} imports from worldgen`).toBe(false);
+    });
+  }
+
+  it('self-check: CIVIC_IMPORT fires on a civic import and stays silent on a benign one', () => {
+    expect(CIVIC_IMPORT.test("import { CivicState } from '../civic/state'")).toBe(true);
+    expect(CIVIC_IMPORT.test("import { GameMap } from '../engine/map'")).toBe(false);
+  });
+
+  it('self-check: ECOLOGY_IMPORT fires on an ecology import and stays silent on a benign one', () => {
+    expect(ECOLOGY_IMPORT.test("import { ecologyReport } from '../ecology/report'")).toBe(true);
+    expect(ECOLOGY_IMPORT.test("import { GameMap } from '../engine/map'")).toBe(false);
   });
 });
 
