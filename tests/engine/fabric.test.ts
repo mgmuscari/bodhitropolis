@@ -6,8 +6,13 @@ import {
   isBuildingKind,
   ParcelStore,
   hashWorld,
+  canPlaceParcel,
+  placeParcel,
+  canPlaceTransport,
+  placeTransport,
+  checkParcelAgreement,
 } from '../../src/engine/fabric';
-import { GameMap } from '../../src/engine/map';
+import { GameMap, Water } from '../../src/engine/map';
 import { runPipeline } from '../../src/worldgen/pipeline';
 
 describe('BuiltKind taxonomy', () => {
@@ -194,5 +199,156 @@ describe('hashWorld asymmetry pin', () => {
     const populated = empty();
     populated.parcels.add({ x: 0, y: 0, width: 1, height: 1, kind: BuiltKind.HouseSingle });
     expect(hashWorld(populated)).not.toBe(hashWorld(empty()));
+  });
+});
+
+describe('canPlaceParcel', () => {
+  it('accepts an in-bounds, empty, all-land footprint', () => {
+    const map = new GameMap(8, 8);
+    expect(canPlaceParcel(map, 1, 1, 3, 3)).toBe(true);
+  });
+
+  it('rejects an out-of-bounds footprint', () => {
+    const map = new GameMap(8, 8);
+    expect(canPlaceParcel(map, 7, 7, 2, 2)).toBe(false); // spills off east/south edge
+    expect(canPlaceParcel(map, -1, 0, 1, 1)).toBe(false);
+  });
+
+  it('rejects a footprint containing any water tile', () => {
+    const map = new GameMap(8, 8);
+    map.setWater(2, 2, Water.River); // one tile inside the 2x2 at (1,1)
+    expect(canPlaceParcel(map, 1, 1, 2, 2)).toBe(false);
+  });
+
+  it('rejects overlap with an existing built tile (road)', () => {
+    const map = new GameMap(8, 8);
+    placeTransport(map, 2, 2, BuiltKind.RoadStreet);
+    expect(canPlaceParcel(map, 1, 1, 2, 2)).toBe(false);
+  });
+
+  it('rejects overlap with an existing parcel', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    placeParcel(map, store, { x: 1, y: 1, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    expect(canPlaceParcel(map, 1, 1, 2, 2)).toBe(false);
+  });
+
+  it('rejects footprint sizes outside 1..3', () => {
+    const map = new GameMap(8, 8);
+    expect(canPlaceParcel(map, 0, 0, 4, 1)).toBe(false);
+    expect(canPlaceParcel(map, 0, 0, 1, 4)).toBe(false);
+    expect(canPlaceParcel(map, 0, 0, 0, 1)).toBe(false);
+  });
+});
+
+describe('placeParcel', () => {
+  it('writes kind + parcel id to every footprint tile, store agrees', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    const idx = placeParcel(map, store, { x: 2, y: 3, width: 2, height: 2, kind: BuiltKind.Offices, density: 4, condition: 200 });
+    expect(idx).toBe(0);
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        expect(map.getBuilt(2 + dx, 3 + dy)).toBe(BuiltKind.Offices);
+        expect(map.getParcel(2 + dx, 3 + dy)).toBe(idx + 1);
+      }
+    }
+    // tile outside footprint untouched
+    expect(map.getBuilt(2, 5)).toBe(0);
+    expect(checkParcelAgreement(map, store)).toEqual([]);
+  });
+
+  it('returns -1 and writes nothing on an invalid placement', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    map.setWater(0, 0, Water.Ocean);
+    const idx = placeParcel(map, store, { x: 0, y: 0, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    expect(idx).toBe(-1);
+    expect(store.count()).toBe(0);
+    expect(map.getBuilt(0, 0)).toBe(0);
+    expect(map.getParcel(0, 0)).toBe(0);
+  });
+});
+
+describe('canPlaceTransport / placeTransport', () => {
+  it('places a road on empty land and rejects water/building tiles', () => {
+    const map = new GameMap(8, 8);
+    expect(placeTransport(map, 1, 1, BuiltKind.RoadStreet)).toBe(true);
+    expect(map.getBuilt(1, 1)).toBe(BuiltKind.RoadStreet);
+
+    map.setWater(3, 3, Water.Lake);
+    expect(canPlaceTransport(map, 3, 3, BuiltKind.RoadStreet)).toBe(false);
+    expect(placeTransport(map, 3, 3, BuiltKind.RoadStreet)).toBe(false);
+
+    const store = new ParcelStore();
+    placeParcel(map, store, { x: 5, y: 5, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    expect(canPlaceTransport(map, 5, 5, BuiltKind.RoadStreet)).toBe(false);
+  });
+
+  it('merges a road junction to the higher-capacity kind, order-independent', () => {
+    const a = new GameMap(8, 8);
+    placeTransport(a, 4, 4, BuiltKind.RoadStreet);
+    expect(placeTransport(a, 4, 4, BuiltKind.RoadAvenue)).toBe(true);
+    expect(a.getBuilt(4, 4)).toBe(BuiltKind.RoadAvenue); // max(street, avenue)
+
+    const b = new GameMap(8, 8);
+    placeTransport(b, 4, 4, BuiltKind.RoadAvenue);
+    expect(placeTransport(b, 4, 4, BuiltKind.RoadStreet)).toBe(true);
+    expect(b.getBuilt(4, 4)).toBe(BuiltKind.RoadAvenue); // same result, order-independent
+  });
+
+  it('allows rail-on-rail but rejects road<->rail crossings', () => {
+    const map = new GameMap(8, 8);
+    placeTransport(map, 2, 2, BuiltKind.Rail);
+    expect(placeTransport(map, 2, 2, BuiltKind.Rail)).toBe(true);
+    expect(map.getBuilt(2, 2)).toBe(BuiltKind.Rail);
+
+    // road onto rail rejected
+    expect(canPlaceTransport(map, 2, 2, BuiltKind.RoadStreet)).toBe(false);
+    expect(placeTransport(map, 2, 2, BuiltKind.RoadStreet)).toBe(false);
+    expect(map.getBuilt(2, 2)).toBe(BuiltKind.Rail); // unchanged
+
+    // rail onto road rejected
+    placeTransport(map, 5, 5, BuiltKind.RoadAvenue);
+    expect(canPlaceTransport(map, 5, 5, BuiltKind.Rail)).toBe(false);
+    expect(placeTransport(map, 5, 5, BuiltKind.Rail)).toBe(false);
+    expect(map.getBuilt(5, 5)).toBe(BuiltKind.RoadAvenue);
+  });
+
+  it('rejects non-transport kinds', () => {
+    const map = new GameMap(8, 8);
+    expect(canPlaceTransport(map, 1, 1, BuiltKind.HouseSingle)).toBe(false);
+  });
+});
+
+describe('checkParcelAgreement (bidirectional sweep)', () => {
+  it('passes a clean placement and is non-vacuous (catches corruption)', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    placeParcel(map, store, { x: 1, y: 1, width: 2, height: 2, kind: BuiltKind.Apartments });
+    placeTransport(map, 4, 1, BuiltKind.RoadStreet);
+    expect(checkParcelAgreement(map, store)).toEqual([]);
+
+    // Reverse direction: a stray parcel id over a road tile is a violation.
+    const stray = new GameMap(8, 8);
+    const s2 = new ParcelStore();
+    placeTransport(stray, 3, 3, BuiltKind.RoadStreet);
+    stray.setParcel(3, 3, 1); // corruption: parcel id on a non-building tile
+    expect(checkParcelAgreement(stray, s2).length).toBeGreaterThan(0);
+  });
+
+  it('flags a building tile with no parcel id (forward direction)', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    map.setBuilt(2, 2, BuiltKind.HouseSingle); // building kind, but no parcel id
+    expect(checkParcelAgreement(map, store).length).toBeGreaterThan(0);
+  });
+
+  it('flags a parcel id whose store kind disagrees with the tile', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    placeParcel(map, store, { x: 1, y: 1, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    map.setBuilt(1, 1, BuiltKind.Offices); // tile kind no longer matches store kind
+    expect(checkParcelAgreement(map, store).length).toBeGreaterThan(0);
   });
 });

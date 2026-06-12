@@ -14,7 +14,7 @@
 //   16..47  Moses-era buildings
 //   48+     reserved for tech-tree-era kinds (parklets, co-ops, communes...)
 
-import { GameMap, FNV_OFFSET, FNV_PRIME, fnv1aBytes } from './map';
+import { GameMap, Water, FNV_OFFSET, FNV_PRIME, fnv1aBytes } from './map';
 
 export const BuiltKind = {
   None: 0,
@@ -188,4 +188,138 @@ export function hashWorld(world: HashableWorld): string {
   }
   h = fnv1aBytes(h, world.parcels.snapshotBytes());
   return `${(h >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+// --- Placement -----------------------------------------------------------
+//
+// These functions are the SINGLE source of truth for the built/parcel tile
+// layers: nothing else writes them (PRD risk #1, dual-source-of-truth). A
+// parcel write touches built + parcel together; a transport write touches
+// built only. Keeping all writes here is what lets checkParcelAgreement stay a
+// meaningful invariant.
+
+const MIN_FOOTPRINT = 1;
+const MAX_FOOTPRINT = 3;
+
+/**
+ * True iff a `w`×`h` building footprint anchored at (x, y) can be placed:
+ * footprint size in 1..3, fully in-bounds, and every covered tile is land,
+ * unbuilt, and unowned by a parcel.
+ */
+export function canPlaceParcel(map: GameMap, x: number, y: number, w: number, h: number): boolean {
+  if (w < MIN_FOOTPRINT || w > MAX_FOOTPRINT || h < MIN_FOOTPRINT || h > MAX_FOOTPRINT) return false;
+  for (let dy = 0; dy < h; dy++) {
+    for (let dx = 0; dx < w; dx++) {
+      const tx = x + dx;
+      const ty = y + dy;
+      if (!map.inBounds(tx, ty)) return false;
+      const i = map.idx(tx, ty);
+      if (map.water[i] !== Water.None) return false;
+      if (map.built[i] !== 0) return false;
+      if (map.parcel[i] !== 0) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Place a building parcel: validate, append the store entry, then stamp its
+ * kind into `built` and its (index + 1) into `parcel` across the footprint.
+ * Returns the parcel index, or -1 (writing nothing) if invalid.
+ */
+export function placeParcel(map: GameMap, store: ParcelStore, init: ParcelInit): number {
+  if (!canPlaceParcel(map, init.x, init.y, init.width, init.height)) return -1;
+  const idx = store.add(init);
+  const id = idx + 1;
+  for (let dy = 0; dy < init.height; dy++) {
+    for (let dx = 0; dx < init.width; dx++) {
+      const i = map.idx(init.x + dx, init.y + dy);
+      map.built[i] = init.kind;
+      map.parcel[i] = id;
+    }
+  }
+  return idx;
+}
+
+/**
+ * True iff `kind` (a transport kind) can occupy (x, y): in-bounds land that is
+ * either empty OR already holds a transport kind of the SAME connectable
+ * category — road onto road, rail onto rail (a junction merge). Road-onto-rail
+ * and rail-onto-road fail (no crossings in v1); building tiles fail.
+ */
+export function canPlaceTransport(map: GameMap, x: number, y: number, kind: number): boolean {
+  if (!isTransportKind(kind)) return false;
+  if (!map.inBounds(x, y)) return false;
+  const i = map.idx(x, y);
+  if (map.water[i] !== Water.None) return false;
+  const existing = map.built[i]!;
+  if (existing === 0) return true;
+  if (isRoadKind(kind) && isRoadKind(existing)) return true; // road/road junction
+  if (kind === BuiltKind.Rail && existing === BuiltKind.Rail) return true; // rail/rail
+  return false; // building tile, or road<->rail crossing
+}
+
+/**
+ * Place a transport tile. On empty land, writes `kind`. On a same-category
+ * junction, the tile resolves deterministically to the higher-capacity kind —
+ * `max(existing, kind)` (street < avenue < highway by code order, so the bigger
+ * road wins the shared junction tile). Returns false (writing nothing) if
+ * invalid.
+ */
+export function placeTransport(map: GameMap, x: number, y: number, kind: number): boolean {
+  if (!canPlaceTransport(map, x, y, kind)) return false;
+  const i = map.idx(x, y);
+  const existing = map.built[i]!;
+  map.built[i] = existing === 0 ? kind : Math.max(existing, kind);
+  return true;
+}
+
+/**
+ * Bidirectional consistency check between the map's built/parcel layers and the
+ * ParcelStore. Returns human-readable violations (empty array = consistent).
+ *
+ * Forward:  a building-kind tile must carry a parcel id whose store entry has
+ *           the matching kind and a footprint that covers this tile.
+ * Reverse:  a non-zero parcel id must sit on a building-kind tile whose store
+ *           entry matches kind and covers this tile.
+ *
+ * So a stray parcel id over a road/empty tile, a building tile with no parcel,
+ * a kind mismatch, or a tile outside its parcel's footprint are all caught
+ * (plan-review yield point 3). Exported for reuse by stage tests.
+ */
+export function checkParcelAgreement(map: GameMap, store: ParcelStore): string[] {
+  const violations: string[] = [];
+  const { width, height } = map;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = map.idx(x, y);
+      const b = map.built[i]!;
+      const p = map.parcel[i]!;
+      const isBld = isBuildingKind(b);
+      if (isBld && p === 0) {
+        violations.push(`(${x},${y}): building kind ${b} has no parcel id`);
+        continue;
+      }
+      if (!isBld && p !== 0) {
+        violations.push(`(${x},${y}): parcel id ${p} over non-building kind ${b}`);
+        continue;
+      }
+      if (p !== 0) {
+        const idx = p - 1;
+        if (idx < 0 || idx >= store.count()) {
+          violations.push(`(${x},${y}): parcel id ${p} out of store range`);
+          continue;
+        }
+        const e = store.get(idx);
+        if (e.kind !== b) {
+          violations.push(`(${x},${y}): tile kind ${b} != store kind ${e.kind} for parcel ${idx}`);
+        }
+        const inside = x >= e.x && x < e.x + e.width && y >= e.y && y < e.y + e.height;
+        if (!inside) {
+          violations.push(`(${x},${y}): outside footprint of parcel ${idx}`);
+        }
+      }
+    }
+  }
+  return violations;
 }
