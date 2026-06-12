@@ -48,6 +48,12 @@ export class GameMap {
   readonly built: Uint16Array;
   /** Owning parcel per cell: 0 = none, else parcelIndex + 1 (see ParcelStore). */
   readonly parcel: Uint16Array;
+  /** Soil health per cell, 0..255 (ecology layer; see src/ecology). */
+  readonly soilHealth: Uint8Array;
+  /** Flora vitality per cell, 0..255 (ecology layer; see src/ecology). */
+  readonly floraVitality: Uint8Array;
+  /** Fauna presence per cell, 0..255 (ecology layer; see src/ecology). */
+  readonly faunaPresence: Uint8Array;
 
   constructor(width = 128, height = 128) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
@@ -62,6 +68,9 @@ export class GameMap {
     this.landCover = new Uint8Array(n);
     this.built = new Uint16Array(n);
     this.parcel = new Uint16Array(n);
+    this.soilHealth = new Uint8Array(n);
+    this.floraVitality = new Uint8Array(n);
+    this.faunaPresence = new Uint8Array(n);
   }
 
   idx(x: number, y: number): number {
@@ -114,6 +123,27 @@ export class GameMap {
     this.parcel[this.idx(x, y)] = v;
   }
 
+  getSoilHealth(x: number, y: number): number {
+    return this.soilHealth[this.idx(x, y)]!;
+  }
+  setSoilHealth(x: number, y: number, v: number): void {
+    this.soilHealth[this.idx(x, y)] = v;
+  }
+
+  getFloraVitality(x: number, y: number): number {
+    return this.floraVitality[this.idx(x, y)]!;
+  }
+  setFloraVitality(x: number, y: number, v: number): void {
+    this.floraVitality[this.idx(x, y)] = v;
+  }
+
+  getFaunaPresence(x: number, y: number): number {
+    return this.faunaPresence[this.idx(x, y)]!;
+  }
+  setFaunaPresence(x: number, y: number, v: number): void {
+    this.faunaPresence[this.idx(x, y)] = v;
+  }
+
   /**
    * Stable serialization of every layer: dimensions plus an FNV-1a hash over
    * the concatenated layer bytes. Equal content yields an equal snapshot;
@@ -128,6 +158,9 @@ export class GameMap {
     h = fnv1aBytes(h, bytesOf(this.landCover));
     h = fnv1aBytes(h, bytesOf(this.built));
     h = fnv1aBytes(h, bytesOf(this.parcel));
+    h = fnv1aBytes(h, bytesOf(this.soilHealth));
+    h = fnv1aBytes(h, bytesOf(this.floraVitality));
+    h = fnv1aBytes(h, bytesOf(this.faunaPresence));
     return `${this.width}x${this.height}:${(h >>> 0).toString(16).padStart(8, '0')}`;
   }
 }
