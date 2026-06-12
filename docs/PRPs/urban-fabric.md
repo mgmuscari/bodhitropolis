@@ -2,6 +2,7 @@
 
 ## Source PRD: docs/PRDs/urban-fabric.md
 ## Date: 2026-06-12
+## Revised: 2026-06-12 per docs/reviews/plans/urban-fabric-review.md (yield points 1-5)
 
 ## 1. Context Summary
 
@@ -105,13 +106,18 @@ export class ParcelStore {
   snapshotBytes(): Uint8Array;           // stable byte encoding of all fields
 }
 ```
-`GameMap.snapshot()` cannot see the store, so worldgen-level determinism
-tests hash `map.snapshot() + store.snapshotBytes()` — provide
-`hashWorld(map, store): string` in fabric.ts wrapping both (FNV, reuse map's
-helper by exporting it from map.ts).
+**WorldState integration (decided here, not deferred — yield point 2):**
+this task adds `parcels: ParcelStore` to `WorldState` (pipeline.ts), created
+by `runPipeline` alongside the map. `hashWorld(world: WorldState): string`
+lives in fabric.ts (FNV over `map.snapshot()` + `parcels.snapshotBytes()`;
+export map.ts's FNV helper for reuse) and is documented in pipeline.ts as
+**the canonical world hash for all stage determinism tests from now on** —
+`map.snapshot()` alone is insufficient once parcel attributes exist.
 **Tests (RED):** add/get roundtrip incl. defaults (density 1, condition 255);
-count; setCondition clamps and changes `hashWorld`; snapshotBytes stable
-across two identical stores, differs on any field change.
+count; setCondition clamps; snapshotBytes stable across two identical
+stores, differs on any field change; `runPipeline` provides an empty store;
+**asymmetry pin**: `setCondition` changes `hashWorld(world)` while leaving
+`map.snapshot()` unchanged — documenting the intended split.
 **Validation:** `npx vitest run`
 
 ### Task 3: Placement validity + placeParcel/placeRoad
@@ -123,19 +129,33 @@ export function canPlaceParcel(map, x, y, w, h): boolean
 export function placeParcel(map, store, init): number | -1
   // validates, writes kind into built + (index+1) into parcel for the
   // footprint, adds store entry; returns index or -1
-export function canPlaceTransport(map, x, y): boolean
-  // in-bounds, land, built==0 (v1: no road/rail overlap, no crossings)
+export function canPlaceTransport(map, x, y, kind): boolean
+  // in-bounds, land, and target tile is empty OR holds a transport kind of
+  // the SAME connectable category (road onto road; rail onto rail) — that
+  // is a junction merge. Road-onto-rail / rail-onto-road fail (no
+  // crossings in v1). Building tiles fail.
 export function placeTransport(map, x, y, kind): boolean
+  // empty tile: writes kind. Junction merge: tile resolves deterministically
+  // to the higher-capacity kind — max(existing, kind); street < avenue <
+  // highway code order makes the bigger road win the junction tile.
 ```
+Junction merge semantics exist because the demo's crossroads (and every
+future intersection the Moses-century sim grows) requires two roads to
+share the junction tile (plan-review yield point 1).
 Placement functions are the ONLY writers of built/parcel tiles (single
 source of truth; PRD risk #1). Buildings: footprints 1×1..3×3 validated
 (`w,h ∈ [1,3]`).
 **Tests (RED):** success path writes every footprint tile (kind + parcel id)
 and store agrees; rejections each tested: OOB, water tile anywhere in
 footprint, overlap with road, overlap with existing parcel, bad footprint
-size; placeTransport on water/occupied rejected; placement keeps
-tile-kind/store-kind agreement (sweep all tiles, assert
-`built[i]` building-kind ⇒ `parcel[i] != 0` and store kind matches).
+size; placeTransport on water/building-tile rejected; **junction merge**:
+street-then-avenue at one tile → tile holds Avenue (max wins, order-
+independent: avenue-then-street → Avenue too); road-onto-rail and
+rail-onto-road rejected; placement keeps tile↔store agreement via a shared
+**bidirectional** sweep helper (exported for reuse by Task 5 tests):
+`built[i]` building-kind ⇔ `parcel[i] != 0`, store kind matches, AND tile
+(x,y) lies inside that store entry's footprint (a stray parcel id over a
+road/empty tile fails the sweep — yield point 3).
 **Validation:** `npx vitest run`
 
 ### Task 4: Road connection mask + parcel road-adjacency
@@ -149,10 +169,11 @@ export function parcelTouchesRoad(map, store, i): boolean
   // any tile 4-adjacent to the footprint perimeter is a road kind
 ```
 **Tests (RED):** all 16 mask configurations exhaustively on a 5×5 fixture;
-road-rail non-connection; mask at map corners (OOB neighbors = unset);
-parcelTouchesRoad true (road along one edge) / false (isolated); 3×3 parcel
-adjacency via a single road tile diagonal-only → false (diagonals don't
-count).
+road-rail non-connection; mask on a 4-way junction tile (merged
+street/avenue crossing → all four bits set); mask at map corners (OOB
+neighbors = unset); parcelTouchesRoad true (road along one edge) / false
+(isolated); 3×3 parcel adjacency via a single road tile diagonal-only →
+false (diagonals don't count).
 **Validation:** `npx vitest run`
 
 ### Task 5: fabric-demo worldgen stage
@@ -161,11 +182,12 @@ count).
 **Approach:** `fabricDemoStage(): WorldgenStage` named `fabric-demo`.
 PLACEHOLDER banner comment: the Moses-century feature replaces this stage.
 Sub-steps (rng forks: `site`, `layout`):
-1. *Site*: scan a centered spiral for the first `SITE×SITE` (e.g. 24×24)
-   all-land window (reuse `canPlaceParcel`-style sweep); rng tie-break among
-   the first few candidates so different seeds vary. If none (pathological
-   all-water map), log `fabric-demo: no site` into `world.log` and return
-   without placing — stage must not throw.
+1. *Site*: scan a centered spiral for `SITE×SITE` (24×24) all-land windows;
+   collect the first K=8 valid windows in spiral order and choose
+   `rng.nextInt(K)` (fewer than 8 found → `rng.nextInt(found)`) so different
+   seeds vary (yield point 4). If none (pathological all-water map), log
+   `fabric-demo: no site` into `world.log` and return without placing —
+   stage must not throw.
 2. *Roads*: a crossroads through the site center — `RoadAvenue` E-W,
    `RoadStreet` N-S, slight rng jitter of the crossing point; clip at water.
 3. *Parcels*: walk road frontage; place one of each building kind (footprints:
@@ -173,11 +195,12 @@ Sub-steps (rng forks: `site`, `layout`):
    civic 2×2 or 3×3) with varied density/condition from rng; skip frontage
    tiles where `canPlaceParcel` fails.
 **Tests (RED):** determinism — two runs same seed → equal
-`hashWorld(map, store)`; different seeds differ; for 3 seeds: every building
-kind placed ≥1 (assert existence — non-vacuous), all parcels
-`parcelTouchesRoad`, no built tile on water, all placements internally
-consistent (Task 3's agreement sweep as a shared helper); all-water map
-fixture → no placement, no throw, log entry present.
+`hashWorld(world)` (the canonical hash); different seeds differ; for 3
+seeds: every building kind placed ≥1 (assert existence — non-vacuous), all
+parcels `parcelTouchesRoad`, no built tile on water, **the crossroads
+junction tile exists** (≥1 tile with mask ≥ 3 set bits — exercises junction
+merge end-to-end), all placements pass Task 3's bidirectional agreement
+sweep; all-water map fixture → no placement, no throw, log entry present.
 **Validation:** `npx vitest run`
 
 ### Task 6: Renderer v1 — roads, rail, buildings
@@ -196,14 +219,12 @@ fixture → no placement, no throw, log entry present.
 - Draw pass: after terrain tile, if `built[i]` → draw overlay
   `built-{kind}-{maskOrPos}-{condTier}`. Mask via `transportMask` (engine
   import — allowed direction); parcel position/condition via `parcel[i]` →
-  store lookup. `Renderer.render` gains a `store: ParcelStore` parameter
-  (main.ts passes the demo store; thread it via `WorldState` — see Task 5:
-  put the store on `WorldState` as `world.parcels`).
+  scalar store accessors (e.g. `kindOfParcel(i)`, `conditionOf(i)`), NOT
+  materialized `get()` views — avoids per-tile object churn on pan/zoom
+  frames (yield point 5; `get()` remains for tests/tools).
+  `Renderer.render(world, camera)` takes the WorldState (map + parcels are
+  both on it since Task 2).
 - `main.ts`: add `fabricDemoStage()` after `terrainStage()`.
-**Note:** adding `parcels: ParcelStore` to `WorldState` (pipeline.ts) is the
-clean carrier — created in `runPipeline`, used by any stage. Do this in
-Task 2 or 5, whichever lands the dependency first (executor's choice, note
-it in the commit).
 **Tests:** none new in ui beyond keeping camera tests green (renderer remains
 an untested thin shell; ALL new pure logic — masks, predicates — already
 lives in engine from Tasks 3-4). Manual: `npm run dev` — crossroads renders
@@ -244,9 +265,6 @@ exactly.
 - **Kind code ranges** (1-15 transport, 16-47 Moses, 48+ future) are a
   taxonomy bet; cheap to renumber before anything persists (no save format
   exists yet).
-- **`WorldState.parcels` placement** (pipeline-owned vs stage-created) —
-  PRP picks pipeline-owned for uniformity; if it proves awkward the executor
-  may attach it in the demo stage instead, documenting why in the commit.
 - **Renderer atlas size** grows to ~(7 terrain + 4×16 transport + 8×3×2
   building) tiles ≈ 120 16×16 canvases — trivial memory, but if atlas-key
   string churn shows up in profiling later, switch to integer keys (not now).

@@ -120,3 +120,25 @@ split (yield point 2) needs a decision now, not at execution time. Minors
 
 **Path forward:** revise the PRP per yield points 1-5 (targeted edits),
 then proceed to headless-proposer execution per the established pattern.
+
+## Resolution Addendum (same day)
+
+All five yield points folded into the PRP (see its `Revised:` header):
+
+1. Junction merge semantics specified in Task 3 (`canPlaceTransport` takes
+   `kind`; same-category merge resolves to `max(existing, kind)`,
+   order-independence tested; road↔rail still rejected); junction cases
+   added to Task 4 mask tests and Task 5 stage tests (≥1 tile with ≥3 mask
+   bits) — **resolved**
+2. `WorldState.parcels` decided: pipeline-owned, lands in Task 2;
+   `hashWorld(world)` documented as the canonical world hash; asymmetry pin
+   test added (`setCondition` changes `hashWorld`, not `map.snapshot()`);
+   executor-choice language removed — **resolved**
+3. Agreement sweep made bidirectional incl. footprint-membership check —
+   **resolved**
+4. Site tie-break quantified (first K=8 spiral windows, `rng.nextInt(K)`) —
+   **resolved**
+5. Renderer reads scalar store accessors, no per-tile `get()` views —
+   **resolved**
+
+**Post-revision verdict: APPROVED** — proceed to execution.
