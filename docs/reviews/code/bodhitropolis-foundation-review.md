@@ -108,3 +108,13 @@ the connectivity invariant cannot pass vacuously. Two smaller items (resize
 re-clamp, comment wording) should ride along in the same fix.
 
 **Required before approval:** Issue 1. **Should also fix:** Issues 2-3.
+
+## Resolution Addendum (same day)
+
+All three issues fixed in `71ce971` (`fix(review): assert river existence,
+re-clamp camera on resize`), implemented by the headless proposer with TDD
+(RED observed for issues 1-2; issue 1's new assertion confirmed non-vacuous —
+rivers exist on all five seeds). Independently re-verified by the team lead:
+`tsc` clean, **95/95** tests, `npm run build` green, working tree clean.
+
+**Post-fix verdict: APPROVED** — proceed to PR.
