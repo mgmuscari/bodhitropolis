@@ -2,6 +2,7 @@
 
 ## Source PRD: docs/PRDs/moses-century.md
 ## Date: 2026-06-12
+## Revised: 2026-06-12 per docs/reviews/plans/moses-century-review.md (yield points 1-6)
 
 ## 1. Context Summary
 
@@ -55,11 +56,29 @@ ParcelStore entries — and deletes `fabricdemo.ts` per its fence.
 **Test Command:** `npx vitest run`
 
 Era functions are exported individually so tests can run prefixes of
-history and measure between eras:
-`era1Founding(world, rng, p)` … `era5Disinvestment(world, rng, p)`, all
-taking a shared `MosesParams` (with `DEFAULT_MOSES_PARAMS`).
-`mosesCenturyStage(params?)` runs all five with forked streams
-(`era1`..`era5`) and is what `main.ts` uses.
+history and measure between eras. Uniform signatures (yield point 4):
+
+```ts
+export interface MosesState {
+  founded: boolean;
+  siteX: number; siteY: number;        // founding crossroads
+  arterialRow: number; arterialCol: number;
+  gridX0: number; gridY0: number; gridX1: number; gridY1: number; // grid bbox
+  railPeak: number;                     // era-1 rail tile count (chronicle)
+  preEra5Alive: number;                 // set by era 5 before abandonment
+}
+export function createMosesState(): MosesState  // founded=false zeros
+export function era1Founding(world, rng, p, state): void   // fills state
+export function era2MotorAge(world, rng, p, state): void
+export function era3Highways(world, rng, p, state): void
+export function era4Suburbs(world, rng, p, state): void
+export function era5Disinvestment(world, rng, p, state): void
+```
+
+All take a shared `MosesParams` (with `DEFAULT_MOSES_PARAMS`). When
+`state.founded` is false (all-water seed), eras 2-5 no-op.
+`mosesCenturyStage(params?)` creates the state and runs all five with
+forked streams (`era1`..`era5`); it is what `main.ts` uses.
 
 ### Task 1: Demolition primitives + ParcelStore tombstones
 **Files:** `src/engine/fabric.ts`, `tests/engine/fabric.test.ts`
@@ -87,15 +106,20 @@ pointing at a dead entry; `aliveIndices` skips dead entries.
 ### Task 2: Spatial field helpers (worldgen)
 **Files:** `src/worldgen/fields.ts` (new), `tests/worldgen/fields.test.ts`
 **Approach:** pure, integer/exactly-rounded only:
-- `distanceField(map, isSource: (i) => boolean): Int32Array` — multi-source
-  4-connected BFS (generalizes terrain.ts:258 pattern; -1 = unreachable).
+- `distanceField(map, isSource: (i) => boolean, isPassable?: (i) => boolean): Int32Array`
+  — multi-source 4-connected BFS (generalizes terrain.ts:258 pattern; -1 =
+  unreachable). `isPassable` (default: always true) constrains expansion so
+  network distances are expressible — era 4 uses `isPassable = isRoadKind∘built`
+  for road-network ring distance (yield point 2).
 - `boxDensity(map, isCounted: (i) => boolean, radius): Int32Array` — counts
   in a (2r+1)² box per tile via summed-area table (integer SAT — exact).
 - `landRun(map, axis, index): [start, end]` — the longest contiguous
   non-water run along row/col `index` (corridor support).
 **Tests (RED):** distanceField on hand fixtures (single source, two
-sources, unreachable pocket); boxDensity vs. brute-force on a small random
-fixture (seeded rng); landRun with water gaps, all-land, all-water.
+sources, unreachable pocket, and a passability fixture: a passable corridor
+vs. an unreachable far side under `isPassable`); boxDensity vs. brute-force
+on a small random fixture (seeded rng); landRun with water gaps, all-land,
+all-water.
 **Validation:** `npx vitest run`
 
 ### Task 3: Era 1 — founding & streetcar town
@@ -110,21 +134,28 @@ fixture (seeded rng); landRun with water gaps, all-land, all-water.
    spanning that row/col's `landRun`, budgeted length p.foundingGridSpan);
    parallel streets every 4 tiles up to p.foundingBlocks in each direction
    (clipped to land), forming a small rectilinear grid.
-3. *Rails*: p.railLines (default 2) streetcar lines: along the two founding
-   arterials, `Rail` laid in the lane adjacent to the road (rail cannot
-   share road tiles — no crossings), running the grid's extent. Chronicle
-   rail tile count.
+3. *Rails*: in-grid streetcar track ran *in the street* — represented
+   implicitly (chronicled, no rail tiles inside the grid; rail-on-road is
+   impossible under the no-crossings rule, and a parallel lane would be
+   severed by every cross street — yield point 1). `Rail` tiles are laid
+   only as **radial extensions** beyond the grid into undeveloped land:
+   p.railLines (default 2) lines, each continuing one arterial outward from
+   the grid edge along its land run, length up to p.railExtension (default
+   10). Chronicle: lines + total rail tile count (sets `state.railPeak`).
 4. *Fabric*: walk grid-street frontage (row-major over road tiles, fixed
    lane order as in the demo's `placeOnFrontage`): houses (most), commercial
    strips near the crossroads, one Civic 3×3 at the core. Densities 1-2,
    condition 200-255 (rng). Budget p.era1Parcels (default 40, clipped by
    space).
 **Tests (RED):** run terrain+era1 on 3 seeds: street network exists and is
-single-component (BFS over road tiles ≥ p-derived minimum size); rail tiles
-≥ 20; ≥1 Civic, ≥3 CommercialStrip, ≥15 HouseSingle alive; all parcels
-road-adjacent; agreement clean; chronicle has `era1:` entries; determinism
-(double-run hashWorld). All-water map: era1 no-ops with `era1: no viable
-site` log, no throw.
+single-component (BFS over road tiles ≥ p-derived minimum size); **rail
+geometry** — ≥2 rail extensions, each a connected run of ≥6 tiles, each
+starting 4-adjacent to an arterial end, zero rail tiles inside the grid
+bbox (state.gridX0..X1/Y0..Y1); ≥1 Civic, ≥3 CommercialStrip, ≥15
+HouseSingle alive; all parcels road-adjacent; agreement clean; chronicle
+has `era1:` entries; determinism (double-run hashWorld). All-water map:
+era1 no-ops with `era1: no viable site` log, `state.founded` false, no
+throw.
 **Validation:** `npx vitest run`
 
 ### Task 4: Era 2 — motor age
@@ -154,21 +185,23 @@ still single-component; agreement clean; determinism holds.
    `landRun` (rng pick among top K=3). Demolish every parcel whose footprint
    intersects the corridor line (count them), `demolishTransportAt` any rail
    in it, then `placeTransport(RoadHighway)` along it (merges over
-   street/avenue). A second perpendicular corridor if the map's land
-   supports ≥ p.minSecondCorridor density. Chronicle: corridor axis,
-   endpoints, `N parcels demolished`.
+   street/avenue). A second perpendicular corridor iff the best
+   perpendicular run's density-sum ≥ 50% of the first corridor's (yield
+   point 5c). Chronicle: corridor axis, endpoints, `N parcels demolished`.
 2. *Rail rip-out*: demolish ALL remaining rail tiles (the streetcar
    massacre). Chronicle: `rails removed: N (peak was M)`.
 3. *Projects*: on cleared/empty land within 3 tiles of the corridor, place
    p.era3Projects (default 3) Projects 3×3 (condition 140-180 — built cheap).
 4. *Civic megablock*: one more Civic 3×3 adjacent to the corridor downtown.
 **Tests (RED):** (3 seeds) ≥1 highway corridor: highway tiles ≥ 20, single
-connected run, AND it overlaps the pre-era-3 top-density quartile (compute
-boxDensity before running era 3 in the test — exported era functions make
-this possible); chronicle demolition count ≥ 5 and equals the actual alive-
-count drop from corridor demolitions; rail tiles after ≤ 10% of the
-chronicled peak; Projects ≥ 2 within 3 tiles of a highway tile; agreement
-clean; determinism.
+connected run, AND ≥5 corridor tiles lie inside the pre-era-3 top-quartile
+boxDensity mask (computed in-test before running era 3 — exported era
+functions make this possible; yield point 5a); chronicle demolition count
+≥ 5 AND the balance equation holds: `aliveAfter = aliveBefore −
+chronicledDemolitions + placedProjects + placedCivic` (placement counts
+observable as kind-count deltas; yield point 5b); rail tiles after ≤ 10%
+of `state.railPeak`; Projects ≥ 2 within 3 tiles of a highway tile;
+agreement clean; determinism.
 **Validation:** `npx vitest run`
 
 ### Task 6: Era 4 — suburban flight
@@ -185,9 +218,11 @@ clean; determinism.
    Projects) within p.coreRadius of the crossroads, condition -= rng 20-60
    (clamped; deterministic order via `aliveIndices`).
 **Tests (RED):** (3 seeds) ≥15 era-4 houses, every one road-adjacent and at
-ring distance > p.suburbRadius; Offices ≥ 2 near center; mean condition of
-core residential < its pre-era-4 mean (export per-era so the test measures
-before/after); agreement clean; determinism.
+**road-network distance** > p.suburbRadius from the crossroads (the
+passable-BFS `distanceField` with `isPassable = road` — yield point 2);
+Offices ≥ 2 near center; mean condition of core residential < its pre-era-4
+mean (export per-era so the test measures before/after); agreement clean;
+determinism.
 **Validation:** `npx vitest run`
 
 ### Task 7: Era 5 — disinvestment + stage assembly + demo deletion
@@ -195,12 +230,15 @@ before/after); agreement clean; determinism.
 `tests/worldgen/moses.test.ts`; **delete** `src/worldgen/fabricdemo.ts`,
 `tests/worldgen/fabricdemo.test.ts`
 **Approach:**
-1. `era5Disinvestment(world, rng, p)`: highway `distanceField`; per alive
-   parcel, condition -= decay `p.maxDecay * 1/(1 + p.decayK * d)` + rng
-   noise (rational falloff — redlining-shaped); parcels ending below
-   p.abandonThreshold (default 40): demolished, p.craterChance (default
-   0.5) of those become ParkingLot 2×2/1×1 craters (placed on the cleared
-   footprint). Chronicle: decayed/abandoned/crater counts.
+1. `era5Disinvestment(world, rng, p, state)`: record
+   `state.preEra5Alive`; highway `distanceField`; **pass 1 (decay all)**:
+   iterate a pre-collected `aliveIndices()` snapshot, condition -= decay
+   `p.maxDecay * 1/(1 + p.decayK * d)` + rng noise (rational falloff —
+   redlining-shaped), collecting indices ending below p.abandonThreshold
+   (default 40); **pass 2 (abandon)**: demolish the collected list (no
+   mutation while iterating aliveness — yield point 6), p.craterChance
+   (default 0.5) of those become ParkingLot 2×2/1×1 craters (placed on the
+   cleared footprint). Chronicle: decayed/abandoned/crater counts.
 2. `mosesCenturyStage(params?)`: name `moses-century`; runs eras 1-5 with
    `rng.fork('era1')`…`fork('era5')`, threading MosesState; logs era
    banners. All-water maps: era 1 logs and every later era no-ops on the
@@ -208,15 +246,18 @@ before/after); agreement clean; determinism.
 3. `main.ts`: pipeline becomes `[terrainStage(), mosesCenturyStage()]`;
    delete fabricdemo module + tests (its generic helpers, if any survive,
    move into moses.ts or fields.ts — no dead exports).
-**Tests (RED):** full-stage (3 seeds): blight gradient — mean condition of
-alive parcels with highway-distance ≤ 8 is < mean at distance ≥ 16 (require
-both cohorts ≥ 5 parcels — non-vacuous); ≥10% of pre-era-5 alive parcels
-demolished by era 5 (chronicle numbers match store deltas); ParkingLot
-count increased; terrain integrity — elevation/water/moisture/landCover
-buffers byte-identical before vs. after the whole stage (the stage never
-edits terrain); chronicle has ≥1 entry per era; agreement clean after the
-full stage; hashWorld determinism (double-run) and seed divergence;
-pipeline log order `['terrain', 'moses-century']`.
+**Tests (RED):** full-stage (3 seeds): **blight gradient without
+survivorship bias** (yield point 3) — partition the parcels alive at the
+*start* of era 5 by highway distance (near ≤ 8, far ≥ 16, both cohorts ≥ 5
+— non-vacuous); compare means of era-5 *outcomes*, counting abandoned
+parcels at condition 0 (their absence is the blight): mean(near) <
+mean(far); ≥10% of `state.preEra5Alive` demolished by era 5 (chronicle
+numbers match store deltas); ParkingLot count increased; terrain integrity
+— elevation/water/moisture/landCover buffers byte-identical before vs.
+after the whole stage (the stage never edits terrain); chronicle has ≥1
+entry per era; agreement clean after the full stage; hashWorld determinism
+(double-run) and seed divergence; pipeline log order
+`['terrain', 'moses-century']`.
 **Validation:** `npx vitest run`; `npm run build`
 
 ### Task 8: Visual verification + docs
@@ -251,9 +292,6 @@ persisted formats exist.
   constants, suburb radius) are design targets; if a seed misses an
   invariant, tune *params* — never weaken the invariant thresholds without
   flagging it in the final report as a deviation needing review.
-- **MosesState shape** (founding site, arterial rows/cols, era-1 rail peak,
-  pre-era-5 parcel count) is left to the executor; keep it a plain object
-  threaded through era calls, not global state.
 - **Corridor through water**: corridors span the chosen row/col's land run
   only — a river may bound a corridor (no bridges in v1); the invariant
   tests use ≥20 tiles, which a bounded run must still meet (tune corridor

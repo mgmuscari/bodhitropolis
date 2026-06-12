@@ -135,3 +135,24 @@ less ambitious.
 
 **Path forward:** revise the PRP per yield points 1-6 (targeted edits),
 then headless-proposer execution per the established pattern.
+
+## Resolution Addendum (same day)
+
+All six yield points folded into the PRP (see its `Revised:` header):
+
+1. Streetcar rails respecified as radial extensions beyond the grid
+   (in-grid track implicit/chronicled); era-1 tests assert connected ≥6-tile
+   extensions, arterial-end adjacency, zero in-grid rail — **resolved**
+2. `distanceField` gains `isPassable`; passability fixture test added;
+   era-4 "ring distance" defined as road-network distance — **resolved**
+3. Blight gradient measured over era-5 outcomes with abandoned parcels at
+   condition 0, cohorts fixed at era-5 start — **resolved**
+4. `MosesState` interface + `createMosesState` specified; uniform
+   `eraN(world, rng, p, state)` signatures; founded=false no-op rule —
+   **resolved**
+5. Era-3 arithmetic: ≥5 corridor tiles in top-quartile mask; alive-count
+   balance equation; second-corridor 50% rule — **resolved**
+6. Era-5 split into decay-then-abandon passes over a pre-collected
+   snapshot — **resolved**
+
+**Post-revision verdict: APPROVED** — proceed to execution.
