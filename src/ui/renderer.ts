@@ -143,6 +143,17 @@ const BUILDING_STYLES: Record<number, BuildingStyle> = {
   [BuiltKind.HealingCommons]: { base: [196, 176, 150], accent: [212, 194, 168], roof: [158, 138, 116] },
 };
 
+// Coverage guards (headless-testable). The atlas iterates renderKeyspace() and
+// paintForKey derefs ROAD_STYLES[k]! / BUILDING_STYLES[kind]! — so a future
+// renderKey kind with no matching style would throw inside buildAtlas at Renderer
+// construction (a crash on load that tsc / npm run build / unit tests all miss,
+// since none execute the atlas). Exporting the painted key/kind sets lets a
+// headless test assert renderKeyspace ⊆ {paintable}, closing that gap.
+export const ROAD_STYLE_KINDS: readonly number[] = Object.keys(ROAD_STYLES).map(Number);
+export const BUILDING_STYLE_KINDS: readonly number[] = Object.keys(BUILDING_STYLES).map(Number);
+/** The key prefixes paintForKey's switch handles (anything else throws). */
+export const PAINTABLE_PREFIXES: readonly string[] = ['road', 'rail', 'streetcar', 'elev', 'bike', 'ped', 'b'];
+
 function clampByte(v: number): number {
   return Math.min(255, Math.max(0, Math.round(v)));
 }
