@@ -96,3 +96,18 @@ product bug.
 nits dispositioned with rationale; 488 tests, gates green, two live
 browser passes covering the full acceptance walk. The player can now
 build, convert, bulldoze, and inspect — the healing is a verb.
+
+## Post-Synthesis Addendum (same session)
+
+Two further gated commits closed the remaining items, both CLEAR:
+- `10f17a8` — `inspectReadout` promoted to a tested pure export in the
+  guard-scanned tools layer, parcel id added (making the README's
+  kind/condition/parcel line accurate by addition); +5 tests.
+- `f82adb9` — hover preview tint cleared on pan start (the lead's live
+  nit #1, ruled fold-in); pure shell glue, correctly scoped after the
+  paint-drag suppression branch.
+
+**Final ledger: 10 commits, ALL CLEAR; zero open findings; 493 tests,
+tsc/build green, FROZEN suites byte-unmodified across all 10. APPROVED
+for merge.** Remaining follow-up (deliberate): `__guard_probe__` Vite
+watch-ignore (dev ergonomics).
