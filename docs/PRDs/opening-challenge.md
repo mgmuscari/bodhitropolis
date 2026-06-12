@@ -62,9 +62,12 @@ dharmapunk voice that is hopeful, not doom.
    transcendental-free).
 2. `BlightReport` is deterministic (same seed → identical report, tested)
    and internally consistent on real pipelines across ≥3 seeds: shares sum
-   to 1 ±ε, abandonment equals `count() − aliveCount()`, core mean ≤
-   overall mean on blighted seeds (consistent with the merged blight
-   gradient).
+   to 1 ±ε; the store↔chronicle identity holds (`parcelsAlive ===
+   preEra5Standing − abandoned + craters`, per the era-5 chronicle line);
+   and the blight gradient is asserted survivorship-free — core
+   abandonment share ≥ periphery abandonment share, with the core share
+   > 0 (descriptive survivor means carry no ordering assertion; per plan
+   review YP1).
 3. Chronicle parser yields ≥1 entry per era (1-5) with correct year ranges
    on real pipeline output across ≥3 seeds; interleaved non-era lines are
    ignored; unknown/malformed era lines surface in a `unparsed` bucket, not
@@ -73,10 +76,11 @@ dharmapunk voice that is hopeful, not doom.
    ≥8 of 10 test seeds, length-bounded, title-cased, pronounceable-ish
    (regex: alternating consonant/vowel clusters — asserted bounds, not
    vibes).
-5. Overlay renders on load with name, all five era entries, ≥4 blight
-   stats, and challenge text; Begin (click, Enter, or Escape) dismisses it
-   and the map remains interactive (manual + the pure-content functions
-   unit-tested; DOM shell stays thin).
+5. Overlay renders on load with name, the eras the chronicle records (all
+   five on viable seeds; a no-viable-site seed records only era 1), ≥4
+   blight stats, and challenge text; Begin (click, Enter, or Escape)
+   dismisses it and the map remains interactive (manual + the pure-content
+   functions unit-tested; DOM shell stays thin).
 6. Headless import safety preserved: importing `src/main.ts` in tests
    still no-ops without a DOM.
 7. `?seed=` still selects the world; same seed reproduces identical name,
