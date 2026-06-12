@@ -1,0 +1,19 @@
+{
+  "name": "bodhitropolis",
+  "version": "0.0.0",
+  "description": "Dharmapunk browser city-builder forked from Micropolis (GPL-3 lineage)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "GPL-3.0-or-later",
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.8"
+  }
+}
