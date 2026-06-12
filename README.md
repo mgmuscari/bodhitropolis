@@ -42,9 +42,17 @@ Code is split into three layers with a strict, test-enforced purity rule
   communal-effort accrual (`effort.ts`). Pure and headless like
   `engine`/`worldgen` — the architecture guard scans it fail-closed. Imports
   only `engine`.
+- **`src/tools/`** — the build-tools verb: `tools.ts` (the pure tool system —
+  `availableTools`, `previewTool`, `applyTool` over the fabric single-writers,
+  spending communal effort) and `inputGeometry.ts` (pure click-vs-drag and
+  axis-major line geometry). Pure and headless like `engine`; the architecture
+  guard scans it fail-closed. Imports only `engine` and `tech`.
 - **`src/ui/`** — a Canvas2D pixel-art renderer (terrain plus an autotiled
-  road/rail and footprint-aware building overlay), pan/zoom camera, and input.
-  Only this layer and `src/main.ts` touch the DOM.
+  road/rail/transit and footprint-aware building overlay, with a translucent
+  build-preview tint), pan/zoom camera, input, the tech panel, and the tool
+  dock. Pure presentation/keying (`renderKey.ts`, `toolbarContent.ts`,
+  `techContent.ts`, `openingContent.ts`) is allowlisted and headless-tested;
+  only the DOM shells and `src/main.ts` touch the DOM.
 
 **Determinism is load-bearing.** `engine` and `worldgen` use only integer math
 and exactly-rounded float ops (`+ - * / sqrt`, `Math.imul/floor`) — no
@@ -64,14 +72,22 @@ density, and condition — live in a parallel-array `ParcelStore` on the
 snapshot + parcel bytes), not `map.snapshot()` alone, is the canonical
 determinism hash for stage tests.
 
-The placement functions in `fabric.ts` (`placeParcel`, `placeTransport`) and
-their inverses (`demolishParcel`, `demolishTransportAt`) are the **single
-writers** of those layers — everything else queries. Transport placement merges
-same-category junctions (road-on-road, rail-on-rail) to the higher-capacity
-kind so two roads can share a crossing tile; road↔rail crossings are rejected.
+The placement functions in `fabric.ts` (`placeParcel`, `placeTransport`,
+`convertTransport`) and their inverses (`demolishParcel`,
+`demolishTransportAt`) are the **single writers** of those layers — everything
+else queries. Classic transport placement merges same-category junctions
+(road-on-road, rail-on-rail) to the higher-capacity kind so two roads can share
+a crossing tile; road↔rail crossings are rejected. The tech-tree transit kinds
+(bike paths, streetcars, quiet streets, elevated rail, promenades) are
+placeable on **empty land only** — they never merge and never cross, so the
+capacity-ordered classic merge stays untouched. `convertTransport` is the
+**road diet** path: an explicit table transforms an existing tile in place
+(street → quiet street / promenade / bike path, avenue → street, highway →
+avenue, rail → streetcar) without demolishing or touching the parcel layer.
 Demolition tombstones parcels (`ParcelStore` keeps an `alive` flag rather than
 compacting, because the `parcel` tile layer holds baked ids); `transportMask`
-drives renderer autotiling and `parcelTouchesRoad` answers frontage queries.
+drives renderer autotiling and `parcelTouchesRoad` answers frontage queries
+(connection-category road, so quiet streets count as frontage).
 
 ### The Moses-century history stage
 
@@ -156,10 +172,46 @@ spending *communal effort*. Press **`T`** to open the right-docked panel
   unlocked ids + effort), so unlock history is reproducible.
 - **What it gates** — nodes grant either *capabilities* (flags later features
   read) or *build kinds*: new transit and buildings (bike paths, streetcars,
-  parklets, community gardens, co-op housing, communes, …). The build *tools*
-  that place those kinds are the next feature; until then the new transit kinds
-  are fenced out of placement (their junction-merge rule is not capacity-safe
-  yet), so no map this feature can produce contains them.
+  parklets, community gardens, co-op housing, communes, …). The build tools
+  (below) place those kinds as the tree grants them; the `road-diets`
+  capability unlocks the classic road-diet conversions.
+
+### Build tools
+
+The game's core verb — **build, convert, bulldoze** — paid for in communal
+effort. An always-on dock at the bottom of the screen lists every tool the tech
+tree has unlocked so far; click one to select it (its cost shows as `Name ·
+cost`, and it greys out when you cannot afford it), then click the map to apply.
+
+- **Hotkeys** — **`i`** selects Inspect (a free, non-mutating readout of the
+  tile under the cursor), **`x`** selects Bulldoze, and **`Escape`** deselects.
+  A hovered tool tints its target tile translucent **green** (valid) or **red**
+  (invalid) before you commit.
+- **Building & transit** — a building tool places its parcel footprint on empty
+  land; a transit tool (bike path, streetcar, quiet street, elevated rail,
+  promenade) places a tile on empty land. With a transit tool held, **dragging
+  paints a straight line** of tiles; with any other tool (or none) a drag still
+  **pans** the map — to pan with a transit tool held, deselect or hold the
+  middle mouse button. A short press (under ~5px of motion) is always a click,
+  never a drag.
+- **Conversions are road diets, not demolition** — the conversion tools
+  transform a road in place rather than clearing it: an avenue narrows to a
+  street, a highway comes down to a boulevard-grade avenue, a street becomes a
+  quiet street / promenade / bike path, old rail hums back as a streetcar. The
+  conversion tools for the transit targets appear as the tree grants those
+  kinds; the classic road-diet conversions (avenue→street, highway→avenue)
+  appear once **Road Diets** is unlocked.
+- **Bulldoze** — removes whatever occupies a tile: a building (the whole parcel,
+  tombstoned) or a transport tile. It is the cheapest tool, and demolition is
+  loss — nothing is refunded.
+- **Effort costs** — every action except Inspect spends communal effort through
+  the same guarded debit the tech tree uses (so the effort total can never
+  drift): bulldoze 1, conversions 2–4/tile, transit 3–6/tile, buildings 8–30 by
+  size. These are placeholder economy values — balancing is a later pass.
+
+Tool application is a deterministic function of `(world, tech, action)` and
+routes only through the fabric single-writers, so a scripted build sequence
+replays to an identical world hash and effort snapshot.
 
 ## Methodology
 
