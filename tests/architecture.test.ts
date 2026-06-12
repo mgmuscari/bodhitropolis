@@ -73,6 +73,7 @@ const PURE_UI_ALLOWLIST = [
   'src/ui/techContent.ts',
   'src/ui/renderKey.ts',
   'src/ui/toolbarContent.ts',
+  'src/ui/ecoOverlayContent.ts',
 ];
 
 describe('architecture guard: headless + deterministic', () => {

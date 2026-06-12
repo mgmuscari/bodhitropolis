@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { BlightReport } from '../../src/worldgen/report';
 import type { Chronicle, ChronicleEntry } from '../../src/worldgen/chronicle';
-import { statLines, eraHeadline, challengeText } from '../../src/ui/openingContent';
+import type { EcologyReport } from '../../src/ecology/report';
+import { statLines, eraHeadline, challengeText, ecologyStatLine } from '../../src/ui/openingContent';
 
 // openingContent is pure presentation: data in, strings out. It must embed the
 // exact report numbers, omit lines whose chronicle-sourced field is null,
@@ -166,6 +167,50 @@ describe('challengeText', () => {
     expect(joined).not.toContain('undefined');
     expect(paras[paras.length - 1]).toMatch(/begin/i);
     for (const para of paras) expect(para.length).toBeLessThanOrEqual(90);
+  });
+});
+
+const FOUNDED_ECOLOGY: EcologyReport = {
+  soilMean: 142.3,
+  floraMean: 88.1,
+  faunaMean: 96.4,
+  biodiversityMean: 120.7,
+  coreSoilMean: 96.2,
+  peripherySoilMean: 159.8,
+  corridorSoilDeficit: 63.6,
+  peripheryFaunaMean: 138.4,
+};
+
+describe('ecologyStatLine', () => {
+  it('embeds the corridor deficit + periphery fauna numbers and the corridor/edge fact, <=90 chars', () => {
+    const line = ecologyStatLine(FOUNDED_ECOLOGY);
+    expect(line).not.toBeNull();
+    expect(line!.length).toBeLessThanOrEqual(90);
+    // The two real numbers it cites (rounded).
+    expect(line).toContain(String(Math.round(FOUNDED_ECOLOGY.corridorSoilDeficit!)));
+    expect(line).toContain(String(Math.round(FOUNDED_ECOLOGY.peripheryFaunaMean!)));
+    // The corridor/periphery register: soil thin along corridors, wild at the edges.
+    expect(line!.toLowerCase()).toContain('corridor');
+    expect(line!.toLowerCase()).toContain('edge');
+  });
+
+  it('returns null (line omitted) on the degenerate path when a ring scalar is null', () => {
+    expect(ecologyStatLine({ ...FOUNDED_ECOLOGY, corridorSoilDeficit: null })).toBeNull();
+    expect(ecologyStatLine({ ...FOUNDED_ECOLOGY, peripheryFaunaMean: null })).toBeNull();
+    // All-water style: both null.
+    expect(
+      ecologyStatLine({
+        ...FOUNDED_ECOLOGY,
+        coreSoilMean: null,
+        peripherySoilMean: null,
+        corridorSoilDeficit: null,
+        peripheryFaunaMean: null,
+      }),
+    ).toBeNull();
+  });
+
+  it('is deterministic (same report -> same line)', () => {
+    expect(ecologyStatLine(FOUNDED_ECOLOGY)).toBe(ecologyStatLine(FOUNDED_ECOLOGY));
   });
 });
 
