@@ -214,6 +214,53 @@ Tool application is a deterministic function of `(world, tech, action)` and
 routes only through the fabric single-writers, so a scripted build sequence
 replays to an identical world hash and effort snapshot.
 
+### Ecology
+
+The land is a participant, not a backdrop. Three new tile layers —
+**soil health**, **flora vitality**, and **fauna presence** (each 0–255) — are
+seeded the moment the world is born: the Moses century broke the soil along its
+corridors and pushed the wild out to the edges, and you start with that wound
+already in the ground. A pure ecology tick runs every `ECO_CADENCE` sim steps,
+advancing the three layers together:
+
+- **Soil** recovers slowly on open land and is healed faster near gardens,
+  parklets, and compost; fresh pavement caps it low.
+- **Flora** grows where the soil is healthy, spreads onto bare ground from rich
+  neighbours, and thins under the influence of busy roads and industry.
+- **Fauna** colonises toward a tile's **carrying capacity** — a habitat ceiling
+  set by its flora, riparian (water-adjacent) edges, and wildlife corridors — so
+  it never floods past what the land can hold.
+
+The three couple with a one-tick lag (a healed garden raises soil this tick,
+flora answers the next, fauna the one after), because the tick is strictly
+double-buffered: every step reads the previous state and writes a scratch copy,
+so the result never depends on tile-scan order.
+
+- **The road-diet ecological payoff** — a busy road (street, avenue, highway)
+  *fragments* habitat: fauna cannot cross it and none accumulates on it. A
+  **quiet street, promenade, or bike path does not** — it carries a wildlife
+  verge that lets fauna relay across it over time. So converting a road to a
+  calm corridor literally reconnects the wild, tile by tile. The payoff is
+  encoded as data (the influence table keys on the built *kind*, not its traffic
+  category) precisely so this distinction is real.
+- **Biodiversity** is **Simpson's index** over a 7×7 window of habitat classes —
+  the deliberate no-transcendentals choice (Simpson, not Shannon, so there is no
+  `log`). It is computed as an **exact rational** and only then floored into a
+  byte for display, so the determinism guarantee holds across browsers.
+- **The overlay** — press **`E`** to cycle a translucent heatmap over the map:
+  off → soil → flora → fauna → biodiversity → off. The soil/flora/fauna views
+  read the live layers, so they update as the ecology ticks; the biodiversity
+  view recomputes each tick. A legend line names the active view in the dock.
+
+Ecology reads the built environment (which kinds sit where) but writes **only**
+its own three layers — an automated test asserts every other map layer, the
+parcel store, and tech state stay byte-identical across a tick. The seeding and
+the tick are deterministic functions of state (no RNG in the tick), so the same
+seed always grows the same land. As with effort costs, every **rate, threshold,
+and cap here is placeholder ecology** — the tested contract is the directional
+invariants and determinism, never the balance, which a tuning pass will set once
+the civic simulation consumes these layers.
+
 ## Methodology
 
 This project is built with the Dialectic development methodology. See
