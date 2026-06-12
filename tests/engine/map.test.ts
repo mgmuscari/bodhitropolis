@@ -17,6 +17,8 @@ describe('GameMap dimensions', () => {
     expect(m.landCover.length).toBe(n);
     expect(m.built).toBeInstanceOf(Uint16Array);
     expect(m.built.length).toBe(n);
+    expect(m.parcel).toBeInstanceOf(Uint16Array);
+    expect(m.parcel.length).toBe(n);
   });
 
   it('honours custom dimensions', () => {
@@ -80,6 +82,13 @@ describe('GameMap layer get/set roundtrips', () => {
     expect(m.getBuilt(5, 5)).toBe(4095);
     expect(m.getBuilt(0, 0)).toBe(0);
   });
+
+  it('roundtrips parcel (uint16, 0 = none)', () => {
+    const m = new GameMap(16, 16);
+    m.setParcel(6, 7, 42);
+    expect(m.getParcel(6, 7)).toBe(42);
+    expect(m.getParcel(0, 0)).toBe(0);
+  });
 });
 
 describe('GameMap snapshot', () => {
@@ -114,6 +123,10 @@ describe('GameMap snapshot', () => {
     const bu = make();
     bu.setBuilt(10, 10, 1);
     expect(bu.snapshot()).not.toBe(base);
+
+    const pa = make();
+    pa.setParcel(10, 10, 1);
+    expect(pa.snapshot()).not.toBe(base);
   });
 
   it('distinguishes maps of different dimensions', () => {
