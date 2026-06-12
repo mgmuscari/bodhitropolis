@@ -14,18 +14,20 @@ import {
   createMosesState,
   era1Founding,
   era2MotorAge,
+  era3Highways,
   DEFAULT_MOSES_PARAMS,
   type MosesParams,
   type MosesState,
 } from '../../src/worldgen/moses';
+import { boxDensity } from '../../src/worldgen/fields';
 
 const SEEDS = ['moses-1', 'moses-2', 'moses-3'];
 const P = DEFAULT_MOSES_PARAMS;
 
 // The era functions in order; the test runner forks each era's rng exactly the
 // way the stage does, so a prefix of history is reproducible and measurable.
-const ERAS = [era1Founding, era2MotorAge] as const;
-const ERA_NAMES = ['era1', 'era2'] as const;
+const ERAS = [era1Founding, era2MotorAge, era3Highways] as const;
+const ERA_NAMES = ['era1', 'era2', 'era3'] as const;
 
 // Runs terrain, then the first `n` eras, forking each era rng like the stage.
 function runEras(
@@ -266,6 +268,146 @@ describe('era2MotorAge', () => {
 
     it(`seed "${seed}": tiles still agree with the store`, () => {
       const { world } = runEras(seed, 2);
+      expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
+    });
+  }
+});
+
+// Connected-component sizes of a given built kind (4-connected).
+function componentSizes(map: GameMap, kind: number): number[] {
+  const { width, height } = map;
+  const is = (i: number) => map.built[i] === kind;
+  const seen = new Uint8Array(width * height);
+  const sizes: number[] = [];
+  for (let s = 0; s < width * height; s++) {
+    if (!is(s) || seen[s]) continue;
+    let size = 0;
+    const queue = [s];
+    seen[s] = 1;
+    let head = 0;
+    while (head < queue.length) {
+      const i = queue[head++]!;
+      size++;
+      const x = i % width;
+      const y = (i - x) / width;
+      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]] as const) {
+        if (!map.inBounds(nx, ny)) continue;
+        const ni = map.idx(nx, ny);
+        if (!seen[ni] && is(ni)) {
+          seen[ni] = 1;
+          queue.push(ni);
+        }
+      }
+    }
+    sizes.push(size);
+  }
+  return sizes;
+}
+
+function countBuilt(map: GameMap, kind: number): number {
+  let n = 0;
+  for (let i = 0; i < map.built.length; i++) if (map.built[i] === kind) n++;
+  return n;
+}
+
+// Min Manhattan distance from any footprint tile of parcel `i` to the nearest
+// tile of `kind`, capped at `cap`.
+function parcelNearKind(map: GameMap, parcels: WorldState['parcels'], i: number, kind: number, cap: number): boolean {
+  const e = parcels.get(i);
+  for (let yy = e.y; yy < e.y + e.height; yy++) {
+    for (let xx = e.x; xx < e.x + e.width; xx++) {
+      for (let dy = -cap; dy <= cap; dy++) {
+        for (let dx = -cap; dx <= cap; dx++) {
+          if (Math.abs(dx) + Math.abs(dy) > cap) continue;
+          const nx = xx + dx;
+          const ny = yy + dy;
+          if (!map.inBounds(nx, ny)) continue;
+          if (map.built[map.idx(nx, ny)] === kind) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Runs eras 1-2, snapshots the pre-era-3 world (alive count, kind counts, and
+// the pre-era-3 density field + its positive-value top-quartile threshold), then
+// runs era 3. The snapshot is what makes the balance equation and the
+// density-overlap invariant measurable without survivorship bias.
+function runEra3(seed: string) {
+  const { world, state } = runEras(seed, 2);
+  const { map, parcels } = world;
+  const aliveBefore = parcels.aliveCount();
+  const projBefore = aliveKindCount(world, BuiltKind.Projects);
+  const civicBefore = aliveKindCount(world, BuiltKind.Civic);
+  const density = boxDensity(map, (i) => map.parcel[i] !== 0, P.era3DensityRadius);
+  const positive = [...density].filter((v) => v > 0).sort((a, b) => a - b);
+  const q75 = positive[Math.floor(0.75 * (positive.length - 1))]!;
+  era3Highways(world, createRng(seed).fork('era3'), P, state);
+  return { world, state, aliveBefore, projBefore, civicBefore, density, q75 };
+}
+
+describe('era3Highways determinism', () => {
+  it('produces an identical canonical hash for the same seed', () => {
+    expect(hashWorld(runEras('moses-1', 3).world)).toBe(hashWorld(runEras('moses-1', 3).world));
+  });
+});
+
+describe('era3Highways', () => {
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": carves a highway through the dense core`, () => {
+      const { world, density, q75 } = runEra3(seed);
+      const { map } = world;
+      expect(countBuilt(map, BuiltKind.RoadHighway)).toBeGreaterThanOrEqual(20);
+
+      const sizes = componentSizes(map, BuiltKind.RoadHighway).sort((a, b) => b - a);
+      expect(sizes[0]).toBe(countBuilt(map, BuiltKind.RoadHighway)); // single connected run/cross
+
+      // >= 5 highway tiles fall inside the pre-era-3 top-quartile density mask.
+      let inMask = 0;
+      for (let i = 0; i < map.built.length; i++) {
+        if (map.built[i] === BuiltKind.RoadHighway && density[i]! >= q75) inMask++;
+      }
+      expect(inMask).toBeGreaterThanOrEqual(5);
+    });
+
+    it(`seed "${seed}": demolition balance equation holds (yield point 5b)`, () => {
+      const { world, aliveBefore, projBefore } = runEra3(seed);
+      const aliveAfter = world.parcels.aliveCount();
+
+      const line = world.log.find((l) => /urban renewal/.test(l))!;
+      const demolished = Number(/(\d+) parcels demolished/.exec(line)![1]);
+      const projPlaced = Number(/(\d+) projects/.exec(line)![1]);
+      const civicPlaced = Number(/(\d+) civic/.exec(line)![1]);
+
+      expect(demolished).toBeGreaterThanOrEqual(5);
+      // Chronicle honesty: projects are placed only after carving and none
+      // pre-exist, so their kind-delta independently confirms the chronicled
+      // placement count (a corridor cannot demolish a project).
+      expect(aliveKindCount(world, BuiltKind.Projects) - projBefore).toBe(projPlaced);
+      // Every alive-count change in era 3 is accounted for: demolitions out,
+      // projects + civic in. (Net kind-deltas would conflate a demolished
+      // era-1 civic with a placed one — the chronicled placement counts do not.)
+      expect(aliveAfter).toBe(aliveBefore - demolished + projPlaced + civicPlaced);
+    });
+
+    it(`seed "${seed}": the streetcar is ripped out (rail <= 10% of peak)`, () => {
+      const { world, state } = runEra3(seed);
+      expect(countBuilt(world.map, BuiltKind.Rail)).toBeLessThanOrEqual(Math.floor(0.1 * state.railPeak));
+    });
+
+    it(`seed "${seed}": projects sit within 3 tiles of the highway`, () => {
+      const { world } = runEra3(seed);
+      const { map, parcels } = world;
+      const projects = parcels.aliveIndices().filter((i) => parcels.kindAt(i) === BuiltKind.Projects);
+      expect(projects.length).toBeGreaterThanOrEqual(2);
+      for (const i of projects) {
+        expect(parcelNearKind(map, parcels, i, BuiltKind.RoadHighway, 3)).toBe(true);
+      }
+    });
+
+    it(`seed "${seed}": tiles still agree with the store`, () => {
+      const { world } = runEra3(seed);
       expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
     });
   }

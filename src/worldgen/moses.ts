@@ -19,10 +19,12 @@ import {
   canPlaceParcel,
   placeParcel,
   placeTransport,
+  demolishParcel,
+  demolishTransportAt,
   type ParcelStore,
 } from '../engine/fabric';
 import type { Rng } from '../engine/rng';
-import { distanceField, boxDensity } from './fields';
+import { distanceField, boxDensity, landRun, type Axis } from './fields';
 import type { WorldState } from './pipeline';
 
 // --- Parameters ----------------------------------------------------------
@@ -53,6 +55,11 @@ export interface MosesParams {
   industryFrontage: number; // an industrial footprint must be within this of rail/water
   era2Parking: number; // parking lots near the crossroads
   era2Parcels: number; // extra houses/strips filling new frontage
+  // Era 3 highways & urban renewal
+  era3DensityRadius: number; // boxDensity radius for corridor scoring
+  era3MinDemolish: number; // a corridor must cut through at least this many parcels
+  corridorTopK: number; // rng jitter among the top-K scored corridors
+  era3Projects: number; // tower-in-the-park Projects placed along the corridor
 }
 
 export const DEFAULT_MOSES_PARAMS: MosesParams = {
@@ -76,6 +83,10 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   industryFrontage: 2,
   era2Parking: 2,
   era2Parcels: 24,
+  era3DensityRadius: 3,
+  era3MinDemolish: 5,
+  corridorTopK: 3,
+  era3Projects: 3,
 };
 
 // --- Shared state --------------------------------------------------------
@@ -179,6 +190,13 @@ function growArm(
  * 4-adjacent to the road. Draws density (1..2) and condition (200..255) only on
  * a successful placement. Returns the parcel index, or -1 if no lane fits.
  */
+/** Attribute generator (density + condition) for a placed parcel. */
+type AttrGen = (rng: Rng) => { density: number; condition: number };
+/** Healthy new construction: low density, pristine-ish condition. */
+const HEALTHY_ATTRS: AttrGen = (rng) => ({ density: 1 + rng.nextInt(2), condition: 200 + rng.nextInt(56) });
+/** Urban-renewal projects: built dense and cheap (condition 140..180). */
+const PROJECT_ATTRS: AttrGen = (rng) => ({ density: 3 + rng.nextInt(2), condition: 140 + rng.nextInt(41) });
+
 function placeAdjacent(
   map: GameMap,
   store: ParcelStore,
@@ -189,6 +207,7 @@ function placeAdjacent(
   kind: BuiltKind,
   rng: Rng,
   accept?: (ax: number, ay: number) => boolean,
+  attrs: AttrGen = HEALTHY_ATTRS,
 ): number {
   const anchors: ReadonlyArray<readonly [number, number]> = [
     [rx, ry - h], // N: parcel's south edge abuts the road
@@ -199,8 +218,7 @@ function placeAdjacent(
   for (const [ax, ay] of anchors) {
     if (!canPlaceParcel(map, ax, ay, w, h)) continue;
     if (accept && !accept(ax, ay)) continue;
-    const density = 1 + rng.nextInt(2);
-    const condition = 200 + rng.nextInt(56);
+    const { density, condition } = attrs(rng);
     return placeParcel(map, store, { x: ax, y: ay, width: w, height: h, kind, density, condition });
   }
   return -1;
@@ -565,4 +583,195 @@ export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state:
   world.log.push(
     `era2: motor age — ${avenues} avenue tiles, ${industry} industry, ${parking} parking, ${filled} infill`,
   );
+}
+
+// --- Era 3: urban renewal & highways (the Moses signature) ---------------
+
+interface Corridor {
+  axis: Axis;
+  index: number; // the fixed row (axis 'row') or column (axis 'col')
+  lo: number; // land-run start along the axis
+  hi: number; // land-run end along the axis
+  sum: number; // boxDensity sum over the bbox-intersected run (corridor score)
+  parcels: number; // distinct parcels whose footprint touches the line
+}
+
+/** (x, y) of position `s` along corridor `c`'s line. */
+function corridorTile(c: Corridor, s: number): [number, number] {
+  return c.axis === 'row' ? [s, c.index] : [c.index, s];
+}
+
+/** Distinct parcel ids touching corridor `c`'s line over its full run. */
+function corridorParcels(map: GameMap, c: Corridor): number {
+  const seen = new Set<number>();
+  for (let s = c.lo; s <= c.hi; s++) {
+    const [x, y] = corridorTile(c, s);
+    const pid = map.parcel[map.idx(x, y)]!;
+    if (pid !== 0) seen.add(pid);
+  }
+  return seen.size;
+}
+
+/**
+ * Carve corridor `c`: demolish every parcel on the line, rip out any rail in the
+ * path, then lay RoadHighway along the full run (merging over street/avenue).
+ * Returns [parcels demolished, rail tiles removed].
+ */
+function carveCorridor(map: GameMap, store: ParcelStore, c: Corridor): [number, number] {
+  let demolished = 0;
+  let rail = 0;
+  for (let s = c.lo; s <= c.hi; s++) {
+    const [x, y] = corridorTile(c, s);
+    const i = map.idx(x, y);
+    const pid = map.parcel[i]!;
+    if (pid !== 0 && demolishParcel(map, store, pid - 1)) demolished++;
+    if (map.built[i] === BuiltKind.Rail && demolishTransportAt(map, x, y)) rail++;
+  }
+  for (let s = c.lo; s <= c.hi; s++) {
+    const [x, y] = corridorTile(c, s);
+    placeTransport(map, x, y, BuiltKind.RoadHighway);
+  }
+  return [demolished, rail];
+}
+
+/**
+ * Era 3 — urban renewal & highways. Scores every row/column corridor by the
+ * boxDensity of alive parcels along its run, restricted to corridors that
+ * actually cut through >= era3MinDemolish parcels (urban renewal demolishes
+ * fabric — a corridor running along an empty edge is not a candidate). Carves
+ * the best (rng among the top-K), optionally a perpendicular second corridor
+ * (iff its density-sum >= 50% of the first), rips out ALL remaining rail (the
+ * streetcar massacre), then drops tower-in-the-park Projects and a civic
+ * megablock along the corridor. No-ops if never founded or if the city is empty.
+ */
+export function era3Highways(world: WorldState, rng: Rng, p: MosesParams, state: MosesState): void {
+  if (!state.founded) return;
+  const { map, parcels } = world;
+
+  // Alive-parcel bounding box.
+  let pbx0 = map.width;
+  let pby0 = map.height;
+  let pbx1 = -1;
+  let pby1 = -1;
+  for (let y = 0; y < map.height; y++) {
+    for (let x = 0; x < map.width; x++) {
+      if (map.parcel[map.idx(x, y)] !== 0) {
+        if (x < pbx0) pbx0 = x;
+        if (x > pbx1) pbx1 = x;
+        if (y < pby0) pby0 = y;
+        if (y > pby1) pby1 = y;
+      }
+    }
+  }
+  if (pbx1 < 0) {
+    // No fabric to renew; still rip out the streetcar.
+    const removed = demolishAllRail(map);
+    world.log.push(`era3: rails removed ${removed} (peak ${state.railPeak})`);
+    return;
+  }
+
+  const density = boxDensity(map, (i) => map.parcel[i] !== 0, p.era3DensityRadius);
+
+  const cands: Corridor[] = [];
+  for (let y = pby0; y <= pby1; y++) {
+    const [lo, hi] = landRun(map, 'row', y);
+    if (lo < 0) continue;
+    const ix0 = Math.max(lo, pbx0);
+    const ix1 = Math.min(hi, pbx1);
+    if (ix0 > ix1) continue;
+    let sum = 0;
+    for (let x = ix0; x <= ix1; x++) sum += density[map.idx(x, y)]!;
+    const c: Corridor = { axis: 'row', index: y, lo, hi, sum, parcels: 0 };
+    c.parcels = corridorParcels(map, c);
+    cands.push(c);
+  }
+  for (let x = pbx0; x <= pbx1; x++) {
+    const [lo, hi] = landRun(map, 'col', x);
+    if (lo < 0) continue;
+    const iy0 = Math.max(lo, pby0);
+    const iy1 = Math.min(hi, pby1);
+    if (iy0 > iy1) continue;
+    let sum = 0;
+    for (let y = iy0; y <= iy1; y++) sum += density[map.idx(x, y)]!;
+    const c: Corridor = { axis: 'col', index: x, lo, hi, sum, parcels: 0 };
+    c.parcels = corridorParcels(map, c);
+    cands.push(c);
+  }
+
+  // Only corridors that cut through real fabric; densest-first.
+  const viable = cands.filter((c) => c.parcels >= p.era3MinDemolish);
+  const ranked = (viable.length > 0 ? viable : cands).sort(
+    (a, b) => b.sum - a.sum || (a.axis === b.axis ? a.index - b.index : a.axis === 'row' ? -1 : 1),
+  );
+  const top = ranked.slice(0, Math.min(p.corridorTopK, ranked.length));
+  const first = top[rng.fork('corridor').nextInt(top.length)]!;
+
+  let demolished = 0;
+  let railRemoved = 0;
+  const [d1, r1] = carveCorridor(map, parcels, first);
+  demolished += d1;
+  railRemoved += r1;
+  world.log.push(
+    `era3: highway ${first.axis} ${first.index} from ${first.lo} to ${first.hi}`,
+  );
+
+  // Second perpendicular corridor iff its density-sum >= 50% of the first's.
+  const perpAxis: Axis = first.axis === 'row' ? 'col' : 'row';
+  const bestPerp = ranked.filter((c) => c.axis === perpAxis)[0];
+  if (bestPerp && bestPerp.sum * 2 >= first.sum) {
+    const [d2, r2] = carveCorridor(map, parcels, bestPerp);
+    demolished += d2;
+    railRemoved += r2;
+    world.log.push(`era3: highway ${bestPerp.axis} ${bestPerp.index} from ${bestPerp.lo} to ${bestPerp.hi}`);
+  }
+
+  // The streetcar massacre: rip out all remaining rail.
+  railRemoved += demolishAllRail(map);
+  world.log.push(`era3: rails removed ${railRemoved} (peak ${state.railPeak})`);
+
+  // Projects (towers-in-the-park) and a civic megablock along the corridor.
+  const fabRng = rng.fork('fabric');
+  const highwayTiles: number[] = [];
+  for (let i = 0; i < map.built.length; i++) if (map.built[i] === BuiltKind.RoadHighway) highwayTiles.push(i);
+  const toCore = (i: number): number => {
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    return Math.abs(x - state.siteX) + Math.abs(y - state.siteY);
+  };
+  const byCore = [...highwayTiles].sort((a, b) => toCore(a) - toCore(b) || a - b);
+
+  let projects = 0;
+  for (const i of byCore) {
+    if (projects >= p.era3Projects) break;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    if (placeAdjacent(map, parcels, x, y, 3, 3, BuiltKind.Projects, fabRng, undefined, PROJECT_ATTRS) !== -1) {
+      projects++;
+    }
+  }
+
+  let civic = 0;
+  for (const i of byCore) {
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    if (placeAdjacent(map, parcels, x, y, 3, 3, BuiltKind.Civic, fabRng) !== -1) {
+      civic++;
+      break;
+    }
+  }
+
+  world.log.push(`era3: urban renewal — ${demolished} parcels demolished, ${projects} projects, ${civic} civic`);
+}
+
+/** Demolish every Rail tile; returns how many were removed. */
+function demolishAllRail(map: GameMap): number {
+  let n = 0;
+  for (let i = 0; i < map.built.length; i++) {
+    if (map.built[i] === BuiltKind.Rail) {
+      const x = i % map.width;
+      const y = (i - x) / map.width;
+      if (demolishTransportAt(map, x, y)) n++;
+    }
+  }
+  return n;
 }
