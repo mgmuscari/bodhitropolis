@@ -27,12 +27,16 @@ Code is split into three layers with a strict, test-enforced purity rule
 
 - **`src/engine/`** — the deterministic simulation core: a seeded PRNG
   (`rng.ts`, sfc32 with `fork`-by-label streams), a fixed-tick loop
-  (`loop.ts`), and the layered typed-array tile map (`map.ts`). Imports
+  (`loop.ts`), the layered typed-array tile map (`map.ts`), and the
+  built-environment model (`fabric.ts`: the `BuiltKind` taxonomy, the
+  `ParcelStore`, placement functions, and connectivity queries). Imports
   nothing from `worldgen` or `ui`.
 - **`src/worldgen/`** — value noise / fBm (`noise.ts`), the staged generation
-  pipeline (`pipeline.ts`), and the terrain stage (`terrain.ts`: elevation,
-  ocean/lake/river, moisture, biomes). May import `engine`.
-- **`src/ui/`** — a Canvas2D pixel-art renderer, pan/zoom camera, and input.
+  pipeline (`pipeline.ts`), the terrain stage (`terrain.ts`: elevation,
+  ocean/lake/river, moisture, biomes), and the placeholder `fabric-demo`
+  stage (`fabricdemo.ts`). May import `engine`.
+- **`src/ui/`** — a Canvas2D pixel-art renderer (terrain plus an autotiled
+  road/rail and footprint-aware building overlay), pan/zoom camera, and input.
   Only this layer and `src/main.ts` touch the DOM.
 
 **Determinism is load-bearing.** `engine` and `worldgen` use only integer math
@@ -42,6 +46,29 @@ transcendental `Math` (`exp`/`pow`/`log`/`sin`/`cos`/`tan`) and no
 "same seed → same world" between browsers. The seeded `rng` is the only
 randomness source. This is what makes shared-seed worlds (and the planned
 historical simulation) reproducible.
+
+### Built environment (fabric)
+
+The map carries two tile layers for the built world — `built` (a `BuiltKind`:
+roads, rail, or a Moses-era building) and `parcel` (the id of the owning
+building footprint). Building *attributes* that don't fit in a tile — kind,
+density, and condition — live in a parallel-array `ParcelStore` on the
+`WorldState`. Because attributes sit outside the map, `hashWorld(world)` (map
+snapshot + parcel bytes), not `map.snapshot()` alone, is the canonical
+determinism hash for stage tests.
+
+The placement functions in `fabric.ts` (`placeParcel`, `placeTransport`) are
+the **single writers** of those layers — everything else queries. Transport
+placement merges same-category junctions (road-on-road, rail-on-rail) to the
+higher-capacity kind so two roads can share a crossing tile; road↔rail
+crossings are rejected. `transportMask` drives renderer autotiling and
+`parcelTouchesRoad` answers frontage queries.
+
+`fabric-demo` is a **placeholder** worldgen stage: it lays one deterministic
+test town (a crossroads and one of each building kind) so the renderer and
+fabric model have something to draw. It is not settlement logic — the planned
+Moses-century history simulation replaces this stage with a city grown from
+real history.
 
 ## Methodology
 

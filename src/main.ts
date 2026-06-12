@@ -5,6 +5,7 @@
 
 import { runPipeline } from './worldgen/pipeline';
 import { terrainStage } from './worldgen/terrain';
+import { fabricDemoStage } from './worldgen/fabricdemo';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
@@ -18,7 +19,7 @@ export function main(): void {
   if (!canvas) throw new Error('missing #game canvas');
 
   const seed = new URLSearchParams(window.location.search).get('seed') ?? DEFAULT_SEED;
-  const world = runPipeline({ seed }, [terrainStage()]);
+  const world = runPipeline({ seed }, [terrainStage(), fabricDemoStage()]);
 
   let cssWidth = window.innerWidth;
   let cssHeight = window.innerHeight;
@@ -55,7 +56,7 @@ export function main(): void {
     sim.advance(now - last);
     last = now;
     if (dirty) {
-      renderer.render(world.map, camera);
+      renderer.render(world, camera);
       dirty = false;
     }
     window.requestAnimationFrame(frame);

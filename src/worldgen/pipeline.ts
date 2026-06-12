@@ -8,10 +8,18 @@
 // perturbing the rest of the world (DF-style reproducibility).
 
 import { GameMap } from '../engine/map';
+import { ParcelStore } from '../engine/fabric';
 import { createRng, type Rng } from '../engine/rng';
 
 export interface WorldState {
   map: GameMap;
+  /**
+   * Building-parcel attributes (kind/density/condition). Combined with `map`
+   * via {@link hashWorld} (engine/fabric) — THE canonical world hash for every
+   * stage determinism test from now on. `map.snapshot()` alone is insufficient
+   * once a stage mutates parcel attributes, which live here, not on the map.
+   */
+  parcels: ParcelStore;
   seed: string;
   log: string[];
 }
@@ -30,7 +38,7 @@ export interface RunPipelineOptions {
 
 export function runPipeline(opts: RunPipelineOptions, stages: WorldgenStage[]): WorldState {
   const map = new GameMap(opts.width, opts.height);
-  const world: WorldState = { map, seed: opts.seed, log: [] };
+  const world: WorldState = { map, parcels: new ParcelStore(), seed: opts.seed, log: [] };
   const rootRng = createRng(opts.seed);
 
   for (const stage of stages) {
