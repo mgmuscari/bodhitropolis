@@ -16,6 +16,8 @@ import {
   era2MotorAge,
   era3Highways,
   era4Suburbs,
+  era5Disinvestment,
+  mosesCenturyStage,
   DEFAULT_MOSES_PARAMS,
   type MosesParams,
   type MosesState,
@@ -27,8 +29,12 @@ const P = DEFAULT_MOSES_PARAMS;
 
 // The era functions in order; the test runner forks each era's rng exactly the
 // way the stage does, so a prefix of history is reproducible and measurable.
-const ERAS = [era1Founding, era2MotorAge, era3Highways, era4Suburbs] as const;
-const ERA_NAMES = ['era1', 'era2', 'era3', 'era4'] as const;
+const ERAS = [era1Founding, era2MotorAge, era3Highways, era4Suburbs, era5Disinvestment] as const;
+const ERA_NAMES = ['era1', 'era2', 'era3', 'era4', 'era5'] as const;
+
+function runFullStage(seed: string, width = 128, height = 128): WorldState {
+  return runPipeline({ seed, width, height }, [terrainStage(), mosesCenturyStage()]);
+}
 
 // Runs terrain, then the first `n` eras, forking each era rng like the stage.
 function runEras(
@@ -514,6 +520,122 @@ describe('era4Suburbs', () => {
       expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
     });
   }
+});
+
+// Min highway distance over parcel `i`'s footprint, using a precomputed field.
+function parcelHighwayDist(map: GameMap, parcels: WorldState['parcels'], i: number, field: Int32Array): number {
+  const e = parcels.get(i);
+  let lo = Infinity;
+  for (let yy = e.y; yy < e.y + e.height; yy++) {
+    for (let xx = e.x; xx < e.x + e.width; xx++) {
+      const v = field[map.idx(xx, yy)]!;
+      if (v >= 0 && v < lo) lo = v;
+    }
+  }
+  return lo;
+}
+
+// Runs eras 1-4, partitions the parcels alive at the START of era 5 by highway
+// distance (near <= 8 / far >= 16), snapshots parking count, then runs era 5.
+// Cohorts are fixed pre-era-5 and outcomes count abandoned parcels at condition
+// 0 — the survivorship-bias-free blight measure (yield point 3).
+function runEra5(seed: string) {
+  const { world, state } = runEras(seed, 4);
+  const { map, parcels } = world;
+  const highwayDist = distanceField(map, (i) => map.built[i] === BuiltKind.RoadHighway);
+  const preAlive = parcels.aliveIndices();
+  const near = preAlive.filter((i) => parcelHighwayDist(map, parcels, i, highwayDist) <= 8);
+  const far = preAlive.filter((i) => parcelHighwayDist(map, parcels, i, highwayDist) >= 16);
+  const parkingBefore = aliveKindCount(world, BuiltKind.ParkingLot);
+  era5Disinvestment(world, createRng(seed).fork('era5'), P, state);
+  return { world, state, near, far, parkingBefore };
+}
+
+describe('era5Disinvestment blight & abandonment', () => {
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": blight gradient holds without survivorship bias (yield point 3)`, () => {
+      const { world, near, far } = runEra5(seed);
+      const { parcels } = world;
+      expect(near.length).toBeGreaterThanOrEqual(5); // non-vacuous cohorts
+      expect(far.length).toBeGreaterThanOrEqual(5);
+      // Outcome: surviving condition, or 0 for an abandoned (demolished) parcel.
+      const outcome = (i: number) => (parcels.isAlive(i) ? parcels.conditionAt(i) : 0);
+      const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+      expect(mean(near.map(outcome))).toBeLessThan(mean(far.map(outcome)));
+    });
+
+    it(`seed "${seed}": >= 10% of the standing city is abandoned (chronicle matches store)`, () => {
+      const { world, state } = runEra5(seed);
+      const line = world.log.find((l) => /disinvestment/.test(l))!;
+      const abandoned = Number(/(\d+) abandoned/.exec(line)![1]);
+      const craters = Number(/(\d+) craters/.exec(line)![1]);
+      expect(abandoned).toBeGreaterThanOrEqual(Math.ceil(0.1 * state.preEra5Alive));
+      // Chronicle numbers match store deltas: alive = standing - abandoned + craters.
+      expect(world.parcels.aliveCount()).toBe(state.preEra5Alive - abandoned + craters);
+    });
+
+    it(`seed "${seed}": parking-lot count increases (abandonment craters)`, () => {
+      const { world, parkingBefore } = runEra5(seed);
+      expect(aliveKindCount(world, BuiltKind.ParkingLot)).toBeGreaterThan(parkingBefore);
+    });
+  }
+});
+
+describe('mosesCenturyStage (full assembly)', () => {
+  it('produces an identical canonical hash for the same seed', () => {
+    expect(hashWorld(runFullStage('moses-1'))).toBe(hashWorld(runFullStage('moses-1')));
+  });
+
+  it('produces different canonical hashes for different seeds', () => {
+    expect(hashWorld(runFullStage('moses-1'))).not.toBe(hashWorld(runFullStage('moses-2')));
+  });
+
+  it('logs the pipeline stage order terrain → moses-century', () => {
+    const world = runFullStage('moses-1');
+    const stages = world.log.filter((l) => l === 'terrain' || l === 'moses-century');
+    expect(stages).toEqual(['terrain', 'moses-century']);
+  });
+
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": chronicles at least one entry per era`, () => {
+      const world = runFullStage(seed);
+      for (const n of [1, 2, 3, 4, 5]) {
+        expect(world.log.some((l) => l.startsWith(`era${n}:`))).toBe(true);
+      }
+    });
+
+    it(`seed "${seed}": never edits terrain (all four terrain layers byte-identical)`, () => {
+      const full = runFullStage(seed);
+      const terr = runPipeline({ seed, width: 128, height: 128 }, [terrainStage()]);
+      expect(full.map.elevation).toEqual(terr.map.elevation);
+      expect(full.map.water).toEqual(terr.map.water);
+      expect(full.map.moisture).toEqual(terr.map.moisture);
+      expect(full.map.landCover).toEqual(terr.map.landCover);
+    });
+
+    it(`seed "${seed}": tiles agree with the store after the whole stage`, () => {
+      const world = runFullStage(seed);
+      expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
+    });
+  }
+});
+
+describe('mosesCenturyStage on a degenerate map', () => {
+  it('era 1 logs no-site and later eras no-op on an all-water map', () => {
+    const allWater: WorldgenStage = {
+      name: 'all-water',
+      apply(world) {
+        world.map.water.fill(Water.Ocean);
+      },
+    };
+    const world = runPipeline({ seed: 'drowned', width: 48, height: 48 }, [allWater, mosesCenturyStage()]);
+    expect(world.log).toContain('era1: no viable site');
+    expect(world.log).toContain('moses-century');
+    let built = 0;
+    for (let i = 0; i < world.map.built.length; i++) if (world.map.built[i] !== 0) built++;
+    expect(built).toBe(0);
+    expect(world.parcels.count()).toBe(0);
+  });
 });
 
 describe('era1Founding on a degenerate map', () => {

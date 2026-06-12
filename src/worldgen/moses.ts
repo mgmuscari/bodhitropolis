@@ -25,7 +25,7 @@ import {
 } from '../engine/fabric';
 import type { Rng } from '../engine/rng';
 import { distanceField, boxDensity, landRun, type Axis } from './fields';
-import type { WorldState } from './pipeline';
+import type { WorldgenStage, WorldState } from './pipeline';
 
 // --- Parameters ----------------------------------------------------------
 
@@ -70,6 +70,12 @@ export interface MosesParams {
   era4DeclineRadius: number; // inner-city residential decline radius (the ring beyond downtown)
   era4DeclineMin: number; // min condition lost by a declining inner-city parcel
   era4DeclineMax: number; // max condition lost by a declining inner-city parcel
+  // Era 5 disinvestment
+  maxDecay: number; // condition lost at a highway tile (d = 0)
+  decayK: number; // k in the rational decay falloff 1/(1 + k*d) (redlining-shaped)
+  decayNoise: number; // extra random condition loss (0..decayNoise)
+  abandonThreshold: number; // a parcel below this after decay is abandoned
+  craterChance: number; // fraction of abandoned parcels that become parking craters
 }
 
 export const DEFAULT_MOSES_PARAMS: MosesParams = {
@@ -98,14 +104,19 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   corridorTopK: 3,
   era3Projects: 3,
   suburbRadius: 20,
-  era4Spurs: 8,
+  era4Spurs: 10,
   era4SpurMin: 4,
-  era4SpurMax: 8,
+  era4SpurMax: 12,
   era4Houses: 25,
   era4Offices: 3,
   era4DeclineRadius: 18,
   era4DeclineMin: 20,
   era4DeclineMax: 60,
+  maxDecay: 200,
+  decayK: 0.15,
+  decayNoise: 20,
+  abandonThreshold: 40,
+  craterChance: 0.5,
 };
 
 // --- Shared state --------------------------------------------------------
@@ -819,11 +830,14 @@ function nearestRoadIndex(map: GameMap, cx: number, cy: number): number {
 
 /**
  * Era 4 — suburban flight. Using road-network distance from the crossroads
- * (BFS through road tiles only — yield point 2), grows street spurs into open
- * land beyond suburbRadius, fills suburban houses on far-road frontage (every
- * placed house is road-adjacent and beyond suburbRadius by construction), adds
- * downtown offices near the crossroads, and declines the condition of core
- * residential parcels as the middle class leaves. No-ops if never founded.
+ * (BFS through road tiles only — yield point 2), grows street spurs *away from
+ * the highways* into open land beyond suburbRadius, then fills suburban houses
+ * on far-road frontage farthest-from-highway first (so the suburbs spread off
+ * the expressway, not along it — which is also what gives era 5 a far cohort to
+ * contrast against the blighted core). Every placed house is road-adjacent and
+ * beyond suburbRadius in road-network distance. Adds downtown offices near the
+ * crossroads and declines inner-city residential condition. No-ops if never
+ * founded.
  */
 export function era4Suburbs(world: WorldState, rng: Rng, p: MosesParams, state: MosesState): void {
   if (!state.founded) return;
@@ -833,36 +847,55 @@ export function era4Suburbs(world: WorldState, rng: Rng, p: MosesParams, state: 
   const src = nearestRoadIndex(map, siteX, siteY);
   if (src < 0) return;
   const isRoad = (i: number): boolean => isRoadKind(map.built[i]!);
+  const highwayDist = distanceField(map, (i) => map.built[i] === BuiltKind.RoadHighway);
 
-  // 1. Spurs: grow straight streets outward from far road tiles into open land.
+  // 1. Spurs: from far-network road tiles, grow a straight street in the
+  //    cardinal direction that heads *away from the nearest highway* into open
+  //    land. Grow from the farthest-from-highway bases first so the suburbs
+  //    reach deep into the open quadrants.
   const net0 = distanceField(map, (i) => i === src, isRoad);
   const spurRng = rng.fork('spurs');
-  const spurBases: number[] = [];
+  const dirs: ReadonlyArray<readonly [number, number]> = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+  interface SpurBase {
+    x: number;
+    y: number;
+    dx: number;
+    dy: number;
+    hd: number;
+  }
+  const bases: SpurBase[] = [];
   for (let i = 0; i < map.built.length; i++) {
     if (!isRoad(i) || net0[i]! <= p.suburbRadius) continue;
     const x = i % map.width;
     const y = (i - x) / map.width;
-    const dx = x === siteX ? 0 : x > siteX ? 1 : -1;
-    const dy = y === siteY ? 0 : y > siteY ? 1 : -1;
-    // Outward step on the dominant axis; require open land to grow into.
-    const ax = Math.abs(x - siteX) >= Math.abs(y - siteY) ? dx : 0;
-    const ay = ax === 0 ? dy : 0;
-    if (ax === 0 && ay === 0) continue;
-    if (map.inBounds(x + ax, y + ay) && map.built[map.idx(x + ax, y + ay)] === 0 && map.water[map.idx(x + ax, y + ay)] === Water.None) {
-      spurBases.push(i);
+    let best: readonly [number, number] | null = null;
+    let bestHd = highwayDist[i]!;
+    for (const [dx, dy] of dirs) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!map.inBounds(nx, ny)) continue;
+      const ni = map.idx(nx, ny);
+      if (map.built[ni] !== 0 || map.water[ni] !== Water.None) continue; // open land only
+      if (highwayDist[ni]! > bestHd) {
+        bestHd = highwayDist[ni]!;
+        best = [dx, dy];
+      }
     }
+    if (best) bases.push({ x, y, dx: best[0], dy: best[1], hd: highwayDist[i]! });
   }
+  bases.sort((a, b) => b.hd - a.hd || a.y * map.width + a.x - (b.y * map.width + b.x));
   let spurs = 0;
-  for (const i of spurBases) {
+  for (const b of bases) {
     if (spurs >= p.era4Spurs) break;
-    const x = i % map.width;
-    const y = (i - x) / map.width;
-    const ax = Math.abs(x - siteX) >= Math.abs(y - siteY) ? (x > siteX ? 1 : -1) : 0;
-    const ay = ax === 0 ? (y > siteY ? 1 : -1) : 0;
     const len = p.era4SpurMin + spurRng.nextInt(p.era4SpurMax - p.era4SpurMin + 1);
     let grew = 0;
     for (let s = 1; s <= len; s++) {
-      if (!placeTransport(map, x + ax * s, y + ay * s, BuiltKind.RoadStreet)) break;
+      if (!placeTransport(map, b.x + b.dx * s, b.y + b.dy * s, BuiltKind.RoadStreet)) break;
       grew++;
     }
     if (grew > 0) spurs++;
@@ -886,11 +919,13 @@ export function era4Suburbs(world: WorldState, rng: Rng, p: MosesParams, state: 
     if (placeAdjacent(map, parcels, x, y, 2, 2, BuiltKind.Offices, buildRng) !== -1) offices++;
   }
 
-  // 2b. Sprawl: houses (and the occasional strip) on far-road frontage. The
-  //     net1 field includes the new spurs; the accept predicate guarantees each
-  //     placed house sits beyond suburbRadius in road-network distance.
+  // 2b. Sprawl: houses (and the occasional strip) on far-network frontage,
+  //     farthest-from-highway first. net1 includes the new spurs; the accept
+  //     predicate guarantees each placed house is beyond suburbRadius.
   const net1 = distanceField(map, (i) => i === src, isRoad);
-  const far = allRoads.filter((i) => net1[i]! > p.suburbRadius);
+  const far = collectRoadTiles(map, 0, 0, map.width - 1, map.height - 1)
+    .filter((i) => net1[i]! > p.suburbRadius)
+    .sort((a, b) => highwayDist[b]! - highwayDist[a]! || a - b);
   let houses = 0;
   for (const i of far) {
     if (houses >= p.era4Houses) break;
@@ -919,4 +954,95 @@ export function era4Suburbs(world: WorldState, rng: Rng, p: MosesParams, state: 
   world.log.push(
     `era4: suburban flight — ${spurs} spurs, ${houses} suburban parcels, ${offices} offices, ${declined} core parcels declined`,
   );
+}
+
+// --- Era 5: disinvestment ------------------------------------------------
+
+/** Minimum value of `field` over parcel `i`'s footprint (>= 0 entries only). */
+function parcelFieldMin(map: GameMap, parcels: ParcelStore, i: number, field: Int32Array): number {
+  const e = parcels.get(i);
+  let lo = Infinity;
+  for (let dy = 0; dy < e.height; dy++) {
+    for (let dx = 0; dx < e.width; dx++) {
+      const v = field[map.idx(e.x + dx, e.y + dy)]!;
+      if (v >= 0 && v < lo) lo = v;
+    }
+  }
+  return lo === Infinity ? -1 : lo;
+}
+
+/**
+ * Era 5 — disinvestment. Two passes (yield point 6): pass 1 decays every parcel
+ * by a redlining-shaped rational falloff of highway distance (steepest beside
+ * the expressway) plus rng noise, collecting those that fall below the
+ * abandonment threshold; pass 2 demolishes that pre-collected list (so aliveness
+ * is never mutated mid-iteration), turning craterChance of them into vacant
+ * parking lots on the cleared footprint. No-ops if never founded.
+ */
+export function era5Disinvestment(world: WorldState, rng: Rng, p: MosesParams, state: MosesState): void {
+  if (!state.founded) return;
+  const { map, parcels } = world;
+
+  state.preEra5Alive = parcels.aliveCount();
+  const highwayDist = distanceField(map, (i) => map.built[i] === BuiltKind.RoadHighway);
+  const farDist = map.width + map.height; // for parcels with no highway anywhere
+
+  // Pass 1: decay all (pre-collected snapshot; no demolition here).
+  const snapshot = parcels.aliveIndices();
+  const decayRng = rng.fork('decay');
+  const doomed: number[] = [];
+  let decayed = 0;
+  for (const idx of snapshot) {
+    const dRaw = parcelFieldMin(map, parcels, idx, highwayDist);
+    const d = dRaw >= 0 ? dRaw : farDist;
+    const falloff = 1 / (1 + p.decayK * d); // rational, redlining-shaped
+    const loss = Math.floor(p.maxDecay * falloff) + decayRng.nextInt(p.decayNoise + 1);
+    parcels.setCondition(idx, parcels.conditionAt(idx) - loss);
+    decayed++;
+    if (parcels.conditionAt(idx) < p.abandonThreshold) doomed.push(idx);
+  }
+
+  // Pass 2: abandon the collected list; some become parking craters.
+  const craterRng = rng.fork('crater');
+  let abandoned = 0;
+  let craters = 0;
+  for (const idx of doomed) {
+    const e = parcels.get(idx);
+    if (!demolishParcel(map, parcels, idx)) continue;
+    abandoned++;
+    if (!craterRng.chance(p.craterChance)) continue;
+    const w = e.width >= 2 ? 2 : 1;
+    const h = e.height >= 2 ? 2 : 1;
+    const condition = 40 + craterRng.nextInt(50);
+    if (placeParcel(map, parcels, { x: e.x, y: e.y, width: w, height: h, kind: BuiltKind.ParkingLot, density: 1, condition }) !== -1) {
+      craters++;
+    }
+  }
+
+  world.log.push(
+    `era5: disinvestment — ${decayed} decayed, ${abandoned} abandoned, ${craters} craters (of ${state.preEra5Alive} standing)`,
+  );
+}
+
+// --- Stage assembly ------------------------------------------------------
+
+/**
+ * The Moses-century worldgen stage: founding & streetcar town → motor age →
+ * highways & urban renewal → suburban flight → disinvestment, threading one
+ * MosesState and forking each era's rng stream by name. On an all-water map era
+ * 1 logs "no viable site" and every later era no-ops on the empty state.
+ */
+export function mosesCenturyStage(params: Partial<MosesParams> = {}): WorldgenStage {
+  const p: MosesParams = { ...DEFAULT_MOSES_PARAMS, ...params };
+  return {
+    name: 'moses-century',
+    apply(world, rng) {
+      const state = createMosesState();
+      era1Founding(world, rng.fork('era1'), p, state);
+      era2MotorAge(world, rng.fork('era2'), p, state);
+      era3Highways(world, rng.fork('era3'), p, state);
+      era4Suburbs(world, rng.fork('era4'), p, state);
+      era5Disinvestment(world, rng.fork('era5'), p, state);
+    },
+  };
 }

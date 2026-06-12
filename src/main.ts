@@ -5,7 +5,7 @@
 
 import { runPipeline } from './worldgen/pipeline';
 import { terrainStage } from './worldgen/terrain';
-import { fabricDemoStage } from './worldgen/fabricdemo';
+import { mosesCenturyStage } from './worldgen/moses';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
@@ -19,7 +19,7 @@ export function main(): void {
   if (!canvas) throw new Error('missing #game canvas');
 
   const seed = new URLSearchParams(window.location.search).get('seed') ?? DEFAULT_SEED;
-  const world = runPipeline({ seed }, [terrainStage(), fabricDemoStage()]);
+  const world = runPipeline({ seed }, [terrainStage(), mosesCenturyStage()]);
 
   let cssWidth = window.innerWidth;
   let cssHeight = window.innerHeight;
