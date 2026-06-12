@@ -261,6 +261,64 @@ and cap here is placeholder ecology** — the tested contract is the directional
 invariants and determinism, never the balance, which a tuning pass will set once
 the civic simulation consumes these layers.
 
+### Civic life
+
+The final pillar: the city is its neighborhoods, and the neighborhoods are made
+by the same Moses geometry that broke the land. A pure, deterministic partition
+splits the map into **neighborhoods** — the 4-connected clusters of parcels and
+their immediate frontage. A **busy road is a wall**: streets, avenues, and
+highways *fragment*, so they belong to no neighborhood and cut the clusters on
+either side into separate communities. A **quiet street, promenade, bike path,
+or rail line does not** — a calm corridor shared between two clusters stitches
+them into one. So a highway between two blocks makes two neighborhoods; convert
+it to a quiet street and they become one. Neighborhood ids are numbered by their
+lowest member tile, so the same map always partitions the same way, and a fabric
+change re-anchors deterministically (the carried-over state is re-mapped by a
+tile-count-weighted mean).
+
+Each neighborhood carries three values, 0–255:
+
+- **Belonging** rises with well-kept buildings, a gathering place inside it
+  (bazaar, maker space, healing commons, community garden, civic hall), and
+  healthy surrounding ecology; it falls when the neighborhood is **isolated** —
+  ringed by fragmenting roads on its perimeter. The Moses isolation, made
+  mechanical.
+- **Voice** is where the tech tree's participatory branch finally does something:
+  it only grows once you unlock **Circles**, **Participatory Budgeting**, or
+  **Gift Circles**, and it grows faster where belonging is high — a community
+  speaks when it feels held. Locked, it stays exactly flat.
+- **Trust** rises when a neighborhood is **repaired** — a road diet (any
+  conversion) or an ecology-restoring build (garden, compost, parklet, calm
+  corridor) credits the neighborhood it lands in — and slowly decays otherwise,
+  but **never falls below a floor**: a community that has been cared for keeps a
+  baseline of trust.
+
+These run on a slow civic cadence (every `CIVIC_CADENCE` sim steps), one fixed
+order behind effort and ecology. Civic writes **only** its own state — an
+automated test asserts the map layers, parcel store, and tech state stay
+byte-identical across a civic tick.
+
+**Wellbeing and the economy.** The placeholder effort formula is retired:
+communal effort now derives from a real **wellbeing** composition — a weighted
+sum of population, building condition, the citywide ecology means, and the
+citywide civic means, floored to an integer. A healthy, green, well-held city
+generates more communal effort to spend on the tech tree. The weights are tuning
+data; the tested contract is that effort is non-decreasing in each signal. (With
+no ecology or civic data yet, the composition degrades exactly to the old
+formula, so older saves and tests stay valid.)
+
+- **The overlay** — press **`C`** to cycle a translucent neighborhood heatmap:
+  off → belonging → voice → trust → off, each tile tinted by its neighborhood's
+  value. `C` and the ecology **`E`** overlay are **mutually exclusive** — pressing
+  one clears the other.
+- **The pulse** — an always-on line at the top of the screen reads
+  `Wellbeing N →/↗/↘`, the same wellbeing scalar the economy uses, with a trend
+  arrow comparing the current civic cadence to the last.
+
+As with effort and ecology, every **rate, threshold, seed, and weight here is
+placeholder civic** — the tested contract is the directional invariants (and the
+trust floor), never the balance, which a tuning pass will set.
+
 ## Methodology
 
 This project is built with the Dialectic development methodology. See
