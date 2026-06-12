@@ -9,21 +9,31 @@
 //
 // Code ranges are reserved deliberately so the taxonomy can grow without
 // renumbering (no save format exists yet, so this is a cheap bet):
-//   0       None (empty tile)
-//   1..15   transport (roads 1..3, rail 4; 5..15 reserved for transit kinds)
-//   16..47  Moses-era buildings
-//   48+     reserved for tech-tree-era kinds (parklets, co-ops, communes...)
+//   0        None (empty tile)
+//   1..15    transport (classic roads 1..3, rail 4; transit 5..9, 10..15 spare)
+//   16..127  buildings (Moses-era 16..23, reserved 24..47, tech-tree 48..60)
+//
+// The transit codes 5..9 and the tech-tree building codes 48..60 are granted by
+// the tech tree but NOT yet placeable: canPlaceTransport fences 5..9 off (the
+// max(kind) junction merge is not capacity-ordered for them) and no build tool
+// requests 48..60 yet. See the tech-tree PRP.
 
 import { GameMap, Water, FNV_OFFSET, FNV_PRIME, fnv1aBytes } from './map';
 
 export const BuiltKind = {
   None: 0,
-  // transport 1..15
+  // classic transport 1..4
   RoadStreet: 1,
   RoadAvenue: 2,
   RoadHighway: 3,
   Rail: 4,
-  // Moses-era buildings 16..47
+  // tech-tree transit 5..9 (granted by the tree; placement fenced this feature)
+  BikePath: 5,
+  Streetcar: 6,
+  QuietStreet: 7,
+  ElevatedRail: 8,
+  Promenade: 9,
+  // Moses-era buildings 16..23 (24..47 reserved)
   HouseSingle: 16,
   Apartments: 17,
   Projects: 18,
@@ -32,16 +42,29 @@ export const BuiltKind = {
   Industrial: 21,
   ParkingLot: 22,
   Civic: 23,
-  // 48+ reserved for tech-tree-era kinds (parklets, co-ops, communes...)
+  // tech-tree-era buildings 48..60
+  Parklet: 48,
+  CommunityGarden: 49,
+  CompostHub: 50,
+  VerticalFarm: 51,
+  WastewaterWorks: 52,
+  EnergyNode: 53,
+  AINode: 54,
+  ADU: 55,
+  CoopHousing: 56,
+  Commune: 57,
+  Bazaar: 58,
+  MakerSpace: 59,
+  HealingCommons: 60,
 } as const;
 export type BuiltKind = (typeof BuiltKind)[keyof typeof BuiltKind];
 
 /** Roads (street/avenue/highway). Rail is transport but not a road. */
 export const isRoadKind = (k: number): boolean => k >= 1 && k <= 3;
-/** Any transport kind: roads or rail. */
-export const isTransportKind = (k: number): boolean => k >= 1 && k <= 4;
-/** Any building kind, including reserved-but-unused codes in 24..47. */
-export const isBuildingKind = (k: number): boolean => k >= 16 && k <= 47;
+/** Any transport kind: classic roads/rail (1..4) or transit kinds (5..15). */
+export const isTransportKind = (k: number): boolean => k >= 1 && k <= 15;
+/** Any building kind across the widened 16..127 band (transport never overlaps). */
+export const isBuildingKind = (k: number): boolean => k >= 16 && k <= 127;
 
 // --- Parcels -------------------------------------------------------------
 //
@@ -241,6 +264,14 @@ export function hashWorld(world: HashableWorld): string {
 const MIN_FOOTPRINT = 1;
 const MAX_FOOTPRINT = 3;
 
+// Highest transport code the junction merge can resolve safely. placeTransport
+// merges overlaps with max(existing, kind), which is capacity-ordered only for
+// classic kinds 1..4 (street < avenue < highway < rail by code). Transit kinds
+// 5..9 break that ordering (QuietStreet=7 would "win" over Highway=3), so
+// canPlaceTransport fences them off until build-tools replaces max() with a
+// conversion/capacity table.
+const MERGEABLE_TRANSPORT_MAX = 4;
+
 /**
  * True iff a `w`×`h` building footprint anchored at (x, y) can be placed:
  * footprint size in 1..3, fully in-bounds, and every covered tile is land,
@@ -289,6 +320,10 @@ export function placeParcel(map: GameMap, store: ParcelStore, init: ParcelInit):
  */
 export function canPlaceTransport(map: GameMap, x: number, y: number, kind: number): boolean {
   if (!isTransportKind(kind)) return false;
+  // Placement fence: only classic, capacity-orderable kinds may be placed (see
+  // MERGEABLE_TRANSPORT_MAX). Transit kinds 5..9 are granted by the tree but not
+  // placeable until the merge becomes capacity-aware in build-tools.
+  if (kind > MERGEABLE_TRANSPORT_MAX) return false;
   if (!map.inBounds(x, y)) return false;
   const i = map.idx(x, y);
   if (map.water[i] !== Water.None) return false;
@@ -360,11 +395,26 @@ export function demolishTransportAt(map: GameMap, x: number, y: number): boolean
 
 // --- Connectivity queries ------------------------------------------------
 
-/** 0 = not transport, 1 = road category, 2 = rail category. */
-function transportCategory(kind: number): number {
-  if (isRoadKind(kind)) return 1;
-  if (kind === BuiltKind.Rail) return 2;
-  return 0;
+// Connection category per transport kind: tiles connect (and autotile) only to
+// same-category neighbours. Explicit table, not range logic, because the transit
+// kinds cut across the numeric order: Streetcar(6)/ElevatedRail(8) share the RAIL
+// category, QuietStreet(7) reads as ROAD (for masks only — frontage stays on
+// isRoadKind this feature), and Promenade(9) is its own PEDESTRIAN category.
+const TRANSPORT_CATEGORY: Readonly<Record<number, number>> = {
+  [BuiltKind.RoadStreet]: 1, // road
+  [BuiltKind.RoadAvenue]: 1,
+  [BuiltKind.RoadHighway]: 1,
+  [BuiltKind.Rail]: 2, // rail
+  [BuiltKind.BikePath]: 3, // bike
+  [BuiltKind.Streetcar]: 2, // shares rail
+  [BuiltKind.QuietStreet]: 1, // reads as road
+  [BuiltKind.ElevatedRail]: 2, // shares rail
+  [BuiltKind.Promenade]: 4, // pedestrian
+};
+
+/** 0 = not transport, 1 = road, 2 = rail, 3 = bike, 4 = pedestrian. */
+export function transportCategory(kind: number): number {
+  return TRANSPORT_CATEGORY[kind] ?? 0;
 }
 
 // 4-neighbour offsets paired with the mask bit each sets: N=1, E=2, S=4, W=8.

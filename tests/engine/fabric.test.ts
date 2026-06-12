@@ -12,6 +12,7 @@ import {
   placeTransport,
   checkParcelAgreement,
   transportMask,
+  transportCategory,
   parcelTouchesRoad,
   demolishParcel,
   demolishTransportAt,
@@ -38,6 +39,40 @@ describe('BuiltKind taxonomy', () => {
     expect(BuiltKind.ParkingLot).toBe(22);
     expect(BuiltKind.Civic).toBe(23);
   });
+
+  it('packs tech-tree transit kinds into 5..9', () => {
+    expect(BuiltKind.BikePath).toBe(5);
+    expect(BuiltKind.Streetcar).toBe(6);
+    expect(BuiltKind.QuietStreet).toBe(7);
+    expect(BuiltKind.ElevatedRail).toBe(8);
+    expect(BuiltKind.Promenade).toBe(9);
+  });
+
+  it('packs tech-tree-era buildings into 48..60', () => {
+    expect(BuiltKind.Parklet).toBe(48);
+    expect(BuiltKind.CommunityGarden).toBe(49);
+    expect(BuiltKind.CompostHub).toBe(50);
+    expect(BuiltKind.VerticalFarm).toBe(51);
+    expect(BuiltKind.WastewaterWorks).toBe(52);
+    expect(BuiltKind.EnergyNode).toBe(53);
+    expect(BuiltKind.AINode).toBe(54);
+    expect(BuiltKind.ADU).toBe(55);
+    expect(BuiltKind.CoopHousing).toBe(56);
+    expect(BuiltKind.Commune).toBe(57);
+    expect(BuiltKind.Bazaar).toBe(58);
+    expect(BuiltKind.MakerSpace).toBe(59);
+    expect(BuiltKind.HealingCommons).toBe(60);
+  });
+
+  it('assigns a unique code to every BuiltKind (no collisions)', () => {
+    const values = Object.values(BuiltKind);
+    expect(new Set(values).size).toBe(values.length);
+    // Every code sits in an honest band: 0, transport 1..15, buildings 16..127.
+    for (const v of values) {
+      const inBand = v === 0 || (v >= 1 && v <= 15) || (v >= 16 && v <= 127);
+      expect(inBand, `code ${v} is outside the reserved bands`).toBe(true);
+    }
+  });
 });
 
 describe('BuiltKind predicates (boundaries)', () => {
@@ -49,22 +84,52 @@ describe('BuiltKind predicates (boundaries)', () => {
     expect(isRoadKind(16)).toBe(false); // building
   });
 
-  it('isTransportKind is true on 1..4 only', () => {
+  it('isTransportKind is true across the widened transport band 1..15', () => {
     expect(isTransportKind(0)).toBe(false);
     expect(isTransportKind(1)).toBe(true);
     expect(isTransportKind(4)).toBe(true); // Rail
-    expect(isTransportKind(5)).toBe(false);
-    expect(isTransportKind(16)).toBe(false);
+    expect(isTransportKind(5)).toBe(true); // BikePath — now a transport kind
+    expect(isTransportKind(9)).toBe(true); // Promenade
+    expect(isTransportKind(15)).toBe(true); // top of the reserved transport band
+    expect(isTransportKind(16)).toBe(false); // building
   });
 
-  it('isBuildingKind is true on 16..47 only', () => {
+  it('isBuildingKind is true across the widened building band 16..127', () => {
     expect(isBuildingKind(15)).toBe(false);
     expect(isBuildingKind(16)).toBe(true); // first building
     expect(isBuildingKind(23)).toBe(true); // last defined Moses building
-    expect(isBuildingKind(47)).toBe(true); // top of reserved range
-    expect(isBuildingKind(48)).toBe(false); // tech-tree era reserved, not a building yet
+    expect(isBuildingKind(47)).toBe(true); // old top of reserved range
+    expect(isBuildingKind(48)).toBe(true); // Parklet — now a building kind
+    expect(isBuildingKind(60)).toBe(true); // HealingCommons
+    expect(isBuildingKind(127)).toBe(true); // top of the widened building band
+    expect(isBuildingKind(128)).toBe(false); // past the band
     expect(isBuildingKind(0)).toBe(false);
     expect(isBuildingKind(4)).toBe(false); // transport
+  });
+});
+
+describe('transportCategory (connection table)', () => {
+  // 0 = not transport, 1 = road, 2 = rail, 3 = bike, 4 = pedestrian.
+  it('classifies classic transport: roads share road, rail is rail', () => {
+    expect(transportCategory(BuiltKind.RoadStreet)).toBe(1);
+    expect(transportCategory(BuiltKind.RoadAvenue)).toBe(1);
+    expect(transportCategory(BuiltKind.RoadHighway)).toBe(1);
+    expect(transportCategory(BuiltKind.Rail)).toBe(2);
+  });
+
+  it('classifies each transit kind by its connection category', () => {
+    expect(transportCategory(BuiltKind.BikePath)).toBe(3); // bike
+    expect(transportCategory(BuiltKind.Streetcar)).toBe(2); // shares rail
+    expect(transportCategory(BuiltKind.QuietStreet)).toBe(1); // reads as road (masks)
+    expect(transportCategory(BuiltKind.ElevatedRail)).toBe(2); // shares rail
+    expect(transportCategory(BuiltKind.Promenade)).toBe(4); // pedestrian
+  });
+
+  it('returns 0 for non-transport kinds (None, buildings)', () => {
+    expect(transportCategory(BuiltKind.None)).toBe(0);
+    expect(transportCategory(BuiltKind.HouseSingle)).toBe(0);
+    expect(transportCategory(BuiltKind.Parklet)).toBe(0);
+    expect(transportCategory(99)).toBe(0);
   });
 });
 
@@ -325,6 +390,29 @@ describe('canPlaceTransport / placeTransport', () => {
   });
 });
 
+describe('canPlaceTransport placement fence (transit kinds 5..9)', () => {
+  // The junction merge resolves overlaps via max(existing, kind), which is
+  // capacity-ordered only for classic kinds 1..4. Transit kinds 5..9 are NOT
+  // capacity-ordered (QuietStreet=7 would "win" over Highway=3), so placement is
+  // fenced off entirely until build-tools replaces max() with a capacity table.
+  const TRANSIT_KINDS = [
+    BuiltKind.BikePath,
+    BuiltKind.Streetcar,
+    BuiltKind.QuietStreet,
+    BuiltKind.ElevatedRail,
+    BuiltKind.Promenade,
+  ];
+
+  for (const kind of TRANSIT_KINDS) {
+    it(`refuses to place transit kind ${kind} on empty land, writing nothing`, () => {
+      const map = new GameMap(8, 8);
+      expect(canPlaceTransport(map, 1, 1, kind)).toBe(false);
+      expect(placeTransport(map, 1, 1, kind)).toBe(false);
+      expect(map.getBuilt(1, 1)).toBe(0);
+    });
+  }
+});
+
 describe('checkParcelAgreement (bidirectional sweep)', () => {
   it('passes a clean placement and is non-vacuous (catches corruption)', () => {
     const map = new GameMap(8, 8);
@@ -417,6 +505,44 @@ describe('transportMask', () => {
     placeTransport(map, 0, 1, BuiltKind.RoadStreet); // south neighbour
     // N and W are off-map => unset; only E and S set.
     expect(transportMask(map, 0, 0)).toBe(E | S);
+  });
+});
+
+describe('transportMask: transit category connections', () => {
+  // The placement fence blocks placeTransport for kinds 5..9, so these category
+  // fixtures are injected directly via map.setBuilt — the mask only reads the
+  // built layer through transportCategory and must connect by shared category.
+  it('connects a streetcar to a rail neighbour (shared rail category)', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.Streetcar); // category rail
+    map.setBuilt(2, 1, BuiltKind.Rail); // north rail — connects
+    map.setBuilt(3, 2, BuiltKind.RoadStreet); // east road — different category
+    expect(transportMask(map, 2, 2)).toBe(N);
+  });
+
+  it('connects a bike path only to another bike path', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.BikePath); // category bike
+    map.setBuilt(2, 1, BuiltKind.BikePath); // north bike — connects
+    map.setBuilt(1, 2, BuiltKind.RoadStreet); // west road — no connect
+    map.setBuilt(3, 2, BuiltKind.Rail); // east rail — no connect
+    expect(transportMask(map, 2, 2)).toBe(N);
+  });
+
+  it('connects a quiet street to a road neighbour (reads as road for masks)', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.QuietStreet); // category road
+    map.setBuilt(1, 2, BuiltKind.RoadStreet); // west road — connects
+    map.setBuilt(2, 1, BuiltKind.Rail); // north rail — no connect
+    expect(transportMask(map, 2, 2)).toBe(W);
+  });
+
+  it('connects a promenade only to another promenade (pedestrian category)', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.Promenade); // category pedestrian
+    map.setBuilt(2, 3, BuiltKind.Promenade); // south promenade — connects
+    map.setBuilt(1, 2, BuiltKind.RoadStreet); // west road — no connect
+    expect(transportMask(map, 2, 2)).toBe(S);
   });
 });
 
