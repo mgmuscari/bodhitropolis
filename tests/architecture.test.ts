@@ -55,7 +55,7 @@ const techFiles = tsFiles(techDir);
 // forgets to append here goes unguarded. NEW PURE-UI MODULES MUST BE ADDED HERE.
 // If they multiply, migrate them to a scanned src/ui/pure/ directory so the
 // guard becomes fail-closed.
-const PURE_UI_ALLOWLIST = ['src/ui/openingContent.ts'];
+const PURE_UI_ALLOWLIST = ['src/ui/openingContent.ts', 'src/ui/techContent.ts'];
 
 describe('architecture guard: headless + deterministic', () => {
   it('discovers engine and worldgen source files', () => {
