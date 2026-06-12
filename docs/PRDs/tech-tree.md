@@ -66,10 +66,12 @@ next feature; this one makes the unlocks real, deterministic, and visible.
   added to the pure-ui allowlist), `src/ui/techPanel.ts` (DOM shell).
 - **Modified**: `src/engine/fabric.ts` (new BuiltKind codes 5-9 and 48+;
   `isTransportKind`/`transportCategory`/`isRoadKind` extended with explicit
-  category decisions per new transit kind); `src/ui/renderer.ts` (palette
-  entries only for new kinds so granted tiles aren't invisible later);
+  category decisions per new transit kind);
   `src/main.ts` (sim tick wiring: effort accrual + panel mount/toggle);
   `tests/architecture.test.ts` (scan `src/tech` as a first-class pure dir).
+  Renderer art/palette for the new kinds is explicitly DEFERRED to the
+  build-tools feature — fenced/unplaceable kinds cannot appear on any map
+  this feature can produce, so palette entries would be dead code here.
 - **Data model**: TechState is the first mutable non-map game state;
   byte-stable snapshot mirrors ParcelStore's pattern. No map-layer changes.
 - **Dependencies**: none added.
@@ -82,8 +84,9 @@ next feature; this one makes the unlocks real, deterministic, and visible.
 2. The seeded tree: ≥25 nodes across all seven branches (every branch ≥2
    nodes); every example path from the design brief present (road diets,
    decentralized infra, zoning/density, transit chains); DAG validity
-   tested (no cycles, no dangling prereq ids, every node reachable from
-   its branch root); ≥3 cross-branch prereq edges.
+   tested (no cycles, no dangling prereq ids, every node's prereq closure
+   terminates at root nodes — a cross-branch node's closure may terminate
+   at another branch's root); ≥3 cross-branch prereq edges.
 3. New BuiltKind codes: transit kinds within 5-15, building kinds within
    48+, no collisions (tested); transport predicates/categories updated
    with explicit per-kind category and mask behavior tested (the
@@ -94,9 +97,10 @@ next feature; this one makes the unlocks real, deterministic, and visible.
    sequences → identical state snapshots; divergent sequences → divergent
    snapshots.
 5. Effort accrual is deterministic in tick count (N ticks twice → equal
-   balances), scales with the wellbeing inputs (higher condition mean →
-   strictly more effort per tick, tested on fixtures), and the placeholder
-   formula is marked as such in code at the definition site.
+   balances), scales with the wellbeing inputs (non-decreasing in
+   condition mean, and strictly greater across a quantization-step
+   boundary of the floor-based formula — tested on fixtures), and the
+   placeholder formula is marked as such in code at the definition site.
 6. Tech panel: `T` toggles; renders seven branches with node states from
    the pure content module; clicking an affordable node unlocks it and the
    panel + effort counter update; locked/unaffordable clicks no-op. Pure

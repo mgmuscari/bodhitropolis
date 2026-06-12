@@ -16,28 +16,40 @@ transit kinds off entirely (the merge rule is not capacity-safe for them).
 ## 2. Codebase Analysis
 
 - **Kind space + predicates** — `src/engine/fabric.ts`: `BuiltKind`
-  as-const (:19-37; transport 1-4 with 5-15 reserved per the header
+  as-const (:19-36; transport 1-4 with 5-15 reserved per the header
   comment :13; buildings 16-23 with 48+ reserved), `isRoadKind` :40,
   `isTransportKind` :42 (hardcoded ≤4 — the recorded follow-up this
-  feature closes), `isBuildingKind` :44 (16..47 — new 48+ kinds need a
-  second range or a widened predicate: **decide widened**:
-  `isBuildingKind = (16..47) || (48..127)` collapsed to `k >= 16 && k <=
-  127 && !isTransportKind(k)`… NO — keep it simple and explicit: building
-  iff `(k >= 16 && k <= 47) || (k >= 48 && k <= 127)` ≡ `k >= 16 && k <=
-  127`; transport range never overlaps. Use `k >= 16 && k <= 127`.),
-  `transportCategory` :280-284 (range-based — must become table-based with
-  the new kinds), junction merge `max(existing, kind)` at :273 — **NOT
+  feature closes), `isBuildingKind` :44 (16..47 — **decision: widen to
+  `k >= 16 && k <= 127`**; transport 1-15 never overlaps, so the two
+  reserved building ranges collapse into one honest predicate),
+  `transportCategory` :364-368 (currently a PRIVATE/non-exported helper,
+  range-based — must become table-based AND be exported so Task 1 can
+  unit-test the per-kind category table), junction merge
+  `max(existing, kind)` at :313 (inside `placeTransport`) — **NOT
   capacity-safe** once codes 5-9 exist (QuietStreet=7 would "win" over
   Highway=3); hence the placement fence (Task 1).
-- **Regression contract**: the existing 16-mask exhaustive test, 4-way
-  junction test, and street<avenue<highway merge tests
-  (tests/engine/fabric.test.ts) must pass UNMODIFIED — editing them is a
-  red flag per the PRD.
-- **Per-tick hook point** — `src/main.ts:53-56`: `new
+- **Regression contract — FROZEN vs. REQUIRED edits** (the widening forces
+  exactly two existing tests to change; the PRP must say which, or the
+  executor hits a "tests pass unmodified" + "editing tests is a red flag"
+  contradiction the moment they widen the predicate):
+  - **FROZEN** (must pass UNMODIFIED — these only exercise kinds 1-4, so
+    the widening cannot touch them; editing any is the PRD §5 red flag):
+    the transportMask 16-config sweep (tests/engine/fabric.test.ts:371),
+    the 4-way street/avenue junction (:403), the street<avenue<highway
+    merge (:292), and the rail-on-rail / road↔rail crossing cases (:304).
+  - **REQUIRED edits** (the widening changes their truth by design — they
+    encode the OLD boundaries, so their rewrite is expected, NOT a red
+    flag): "isTransportKind is true on 1..4 only" (:52-58) →
+    `isTransportKind(5)` flips false→true; "isBuildingKind is true on
+    16..47 only" (:60-68) → `isBuildingKind(48)` flips false→true. Rename
+    both off the "…only" titles. (The `isRoadKind` boundary test :44-50 is
+    unchanged — `isRoadKind` stays 1..3.)
+- **Per-tick hook point** — `src/main.ts:77`: `new
   FixedTickLoop(SIM_TICK_MS, () => {})` — the empty callback becomes the
-  effort-accrual call; `FixedTickLoop` passes the tick index (engine/loop.ts).
+  effort-accrual call; `FixedTickLoop` passes the tick index
+  (engine/loop.ts:21,61 — `onTick: (tick: number) => void`).
 - **Snapshot pattern to mirror** — `ParcelStore.snapshotBytes`
-  (fabric.ts:148-163): fixed-width little-endian records; TechState does
+  (fabric.ts:187-203): fixed-width little-endian records; TechState does
   the same (unlocked node ids sorted lexically + effort as u32).
 - **Pure-ui pattern** — `src/ui/openingContent.ts` + allowlist in
   tests/architecture.test.ts (`PURE_UI_ALLOWLIST`); panel mirrors
@@ -59,8 +71,8 @@ no browser) and the `.dialectic-tier` strip.
 **Test Command:** `npx vitest run`
 
 ### Task 1: BuiltKind extension + placement fence
-**Files:** `src/engine/fabric.ts`, `src/ui/renderer.ts`,
-`tests/engine/fabric.test.ts`
+**Files:** `src/engine/fabric.ts`, `tests/engine/fabric.test.ts`
+(renderer.ts intentionally NOT modified — see the deferral note below)
 **Approach:**
 - New codes — transit: `BikePath: 5, Streetcar: 6, QuietStreet: 7,
   ElevatedRail: 8, Promenade: 9`; buildings: `Parklet: 48,
@@ -71,27 +83,55 @@ no browser) and the `.dialectic-tier` strip.
 - Predicates: `isTransportKind` → `k >= 1 && k <= 15` (range stays
   honest); `isBuildingKind` → `k >= 16 && k <= 127`; `isRoadKind`
   unchanged (1-3 — QuietStreet is NOT classic-road-mergeable, see fence).
-  `transportCategory` becomes an explicit table: 1-3 → road(1), 4 → rail(2),
-  5 → bike(3), 6 → rail(2) (streetcar shares rail), 7 → road(1) (quiet
-  street reads as street for masks/frontage), 8 → rail(2), 9 →
-  pedestrian(4).
+  `transportCategory` becomes an explicit table AND is EXPORTED (it is
+  currently a private/non-exported helper at fabric.ts:364 — the export is
+  required so Task 1's "category table per new kind" test can reach it):
+  1-3 → road(1), 4 → rail(2), 5 → bike(3), 6 → rail(2) (streetcar shares
+  rail), 7 → road(1) (quiet street reads as street for MASKS only — NOT
+  frontage, which stays on isRoadKind this feature; see the deferral note),
+  8 → rail(2), 9 → pedestrian(4).
 - **Placement fence**: `canPlaceTransport` rejects kinds 5-9 outright
   (`MERGEABLE_TRANSPORT = kind <= 4`), with a comment: the `max(kind)`
   junction merge is not capacity-ordered for 5-9; the build-tools feature
   replaces it with a conversion/capacity table before enabling placement.
-- `parcelTouchesRoad` frontage: extend to count category-road tiles
-  (QuietStreet counts as frontage when it exists later) — via
-  `transportCategory(k) === 1` instead of `isRoadKind` internally; classic
-  behavior unchanged (verified by untouched existing tests).
-- Renderer: palette entries for all 18 new kinds (cheap colors; bands/
-  dither reuse) so granted kinds are never invisible later.
+- `parcelTouchesRoad` and the renderer are INTENTIONALLY NOT touched this
+  feature (scope discipline — both are speculative for kinds nothing can
+  place yet; neither is required by any PRD acceptance criterion):
+  - `parcelTouchesRoad` stays on `isRoadKind` (unchanged). Making
+    QuietStreet count as frontage (`transportCategory(k) === 1`) only
+    matters once QuietStreet can be placed — it is unreachable behind the
+    fence and would modify a frontage function under a regression contract
+    for zero in-feature benefit. Deferred to build-tools. **Coupling note
+    for that feature:** transportCategory already classifies QuietStreet(7)
+    as road for MASKS, so masks and frontage hold two different notions of
+    "road" for kind 7 until then — when build-tools un-defers, the frontage
+    swap, the renderer dispatch extension, and any capacity-aware
+    junction-merge change must land TOGETHER to reconcile it, not piecemeal.
+  - Renderer: DEFERRED to build-tools. "Palette entries" alone do not make
+    kinds visible — the renderer DISPATCHES on kind (renderer.ts:332-339):
+    transit routes through a binary rail-vs-road split (Streetcar(6)/
+    ElevatedRail(8) mis-key as `road-6`/`road-8`; BikePath(5)/QuietStreet(7)/
+    Promenade(9) have no bike/pedestrian branch) and buildings key
+    `b-${kind}` against `BUILDING_STYLES` (16-23 only). Delivering "never
+    invisible later" needs the DISPATCH extended (rail/road/bike/pedestrian
+    + building keyspaces), not a color table — and with the fence + no build
+    tools, NOTHING places 5-9/48-60 this feature, so any entry is
+    unreachable at runtime and untestable in a headless RED suite. Natural
+    home is build-tools, where placement exists and rendering can be
+    exercised behind a pure `builtRenderKey(kind, mask)` seam. (Diverges
+    from PRD §3's "renderer palette entries now" — flagged to team lead.)
 **Tests (RED):** code ranges + no collisions (programmatic sweep of the
-BuiltKind table); predicate boundaries (4/5, 15/16, 47/48, 127/128);
-category table per new kind; `canPlaceTransport` rejects each 5-9 kind on
-empty land (the fence, asserted per kind); existing mask/junction/merge
-tests pass UNMODIFIED; mask behavior: streetcar connects to rail,
+BuiltKind table); predicate boundaries (4/5, 15/16, 47/48, 127/128) — this
+REQUIRES editing the two existing predicate-boundary tests
+(fabric.test.ts:52-58 `isTransportKind`, :60-68 `isBuildingKind`) so 5 and
+48 now read true and the titles drop "…only" (an expected edit, NOT the
+PRD red flag — see §2 FROZEN vs. REQUIRED); category table per new kind;
+`canPlaceTransport` rejects each 5-9 kind on empty land (the fence,
+asserted per kind); the FROZEN mask/junction/merge tests (§2: :292, :304,
+:371, :403) pass UNMODIFIED; mask behavior: streetcar connects to rail,
 bike path connects only to bike path, quiet street connects to street
-(category-level fixtures).
+(category-level fixtures injected via `map.setBuilt`, since the fence
+blocks placing kinds 5-9 through `placeTransport`).
 **Validation:** `npx vitest run`; `npx tsc --noEmit`
 
 ### Task 2: Tree data model + guard extension
@@ -136,17 +176,30 @@ table (ids kebab-case):
 | drone-deliveries | Solarpunk | community-ai-nodes | cap:drone-deliveries | 45 |
 | mutual-aid | AnarchoCommunism | — | cap:mutual-aid | 10 |
 | collective-ownership | AnarchoCommunism | mutual-aid, community-land-trust | cap:collective-ownership | 25 |
-| communes | AnarchoCommunism | collective-ownership | kind:Commune | 35 |
-| community-ai-nodes | AnarchoCommunism | mutual-aid, local-grids | kind:AINode | 40 |
+| communes | AnarchoCommunism | collective-ownership, healing-commons | kind:Commune | 35 |
+| community-ai-nodes | AnarchoCommunism | mutual-aid, local-grids, participatory-budgeting | kind:AINode | 40 |
 
-(34 nodes; 8 cross-branch edges. Flavor lines authored at implementation,
-≤90 chars, dharmapunk register.)
+(34 nodes; 11 cross-branch edges — verified by a branch-vs-prereq audit.
+Per the team-lead design ruling, all three non-root RestorativeJustice
+nodes are load-bearing across branches: `community-land-trust` ←
+collective-ownership, `healing-commons` ← communes, `participatory-
+budgeting` ← community-ai-nodes (RJ is the thesis — you cannot heal the
+built environment without healing the community). The two added edges
+keep closures shallow and acyclic: healing-commons←community-land-trust←
+circles, participatory-budgeting←circles, neither reaches back into AC.
+Flavor lines authored at implementation, ≤90 chars, dharmapunk register.)
 - `validateTree(nodes)`: duplicate ids, dangling prereqs, cycles
-  (Kahn/DFS), branch-root reachability (every node reaches a no-prereq
-  ancestor in… nodes may have cross-branch prereqs, so reachability =
-  every node's full prereq closure terminates at roots), kinds granted
-  at most once across the tree, granted kinds are valid BuiltKind codes.
-  Exported — the test calls it AND it self-checks on synthetic bad trees.
+  (Kahn/DFS), **root-termination reachability** — every node's transitive
+  prereq closure terminates ONLY at no-prereq roots, cross-branch edges
+  allowed. This is NOT per-branch reachability: `drone-deliveries` is
+  Solarpunk but its only direct prereq `community-ai-nodes` is
+  AnarchoCommunism, so a "reach this node's OWN branch root within the
+  branch" rule false-flags it by construction — use closure-terminates-at-
+  some-root instead. (This intentionally refines the PRD §2/AC#2 "reachable
+  from its branch root" wording, which is false for cross-branch nodes; the
+  team lead is routing the PRD-side rewording.) Plus: kinds granted at most
+  once across the tree, granted kinds are valid BuiltKind codes. Exported —
+  the test calls it AND it self-checks on synthetic bad trees.
 - Guard: add `src/tech` to scanned dirs; `src/ui/techContent.ts` to the
   pure-ui allowlist (it doesn't exist yet — the guard tolerates listed-
   but-absent files OR the entry lands in Task 5; **decide: add the
@@ -154,12 +207,25 @@ table (ids kebab-case):
   change to the `src/tech` dir).
 **Tests (RED):** validateTree passes on TECH_TREE; per-property synthetic
 failures (cycle, dangling, dup id, dup kind grant, bad kind code) each
-flagged (self-check); branch coverage ≥2 nodes each; ≥3 cross-branch
-edges (count actual: 8); every design-brief example node present by id
-(explicit list); guard scans src/tech (drop a synthetic violation via a
-temp-file approach OR assert the dir is in the scanned list — simplest:
-export the scanned-dirs array and assert membership + that tree.ts is
-among scanned files).
+flagged (self-check); root-termination reachability accepts the
+cross-branch case BY NAME — `drone-deliveries` (Solarpunk) whose only
+direct prereq is `community-ai-nodes` (AnarchoCommunism), asserting its
+closure still terminates at no-prereq roots — and flags a synthetic node
+whose closure never reaches a root; branch coverage ≥2 nodes each;
+cross-branch edges assert `>= 3` (the actual count is 11 — do NOT pin an
+exact value); every design-brief example node present by id (explicit
+list); guard scans src/tech FAIL-CLOSED — prove it BEHAVIORALLY with a
+synthetic violation, not a config assertion: write a throwaway
+`src/tech/__guard_probe__.ts` holding a DOM token, re-run the scan's
+`tsFiles(techDir)` + `stripComments` + `FORBIDDEN_DOM`, assert the probe is
+discovered AND flagged, then unlink it (try/finally or `afterEach`). (Do
+NOT "assert src/tech is in a scanned-dirs list" — that's circular config-
+testing, and there's nothing to import: `engineDir`/`worldgenDir`/
+`engineFiles` are file-local consts at architecture.test.ts:15-16,43-44
+with no exports.) Separately confirm `effort.ts` SURVIVES the new
+fail-closed scan: the scan bans DOM/transcendental-Math/ui-imports but
+ALLOWS engine imports, and effort.ts's `world` is typed structurally / via
+engine only (never worldgen, per Task 4), so it passes clean.
 **Validation:** `npx vitest run`
 
 ### Task 3: TechState machine
@@ -182,30 +248,48 @@ exactly cost and grants kinds+caps; double-unlock rejected without
 mutation; prereq chain end-to-end (root → mid → leaf); cross-branch
 prereq enforced (coop-housing needs AC's collective-ownership);
 determinism: same action sequence twice → byte-equal snapshots; divergent
-sequence → different; snapshot stable under unlock-order permutation of
-the SAME final set? — NO: snapshot encodes the set sorted, so two orders
-reaching the same set ARE byte-equal — assert that deliberately (set
-semantics, order-free) while effort balances may differ (cost sums equal
-here, so equal — fixture uses equal-cost paths to pin set-sorting).
+sequence → different. **Set-semantics (order-independence):** take ONE
+fixed unlocked set and unlock it in two different valid orders from the
+SAME starting effort — assert byte-equal snapshots (the snapshot sorts
+ids, so order cannot leak; effort is identical because the spent cost is
+the sum of the same node costs). Separately assert a DIFFERENT final set
+yields DIFFERENT bytes. (No equal-cost-path contrivance is needed or
+correct: same set ⇒ same spent cost by construction, so the earlier
+"balances may differ" hedge was wrong — permute order of one fixed set,
+never compare two different sets that merely share a total cost.)
 **Validation:** `npx vitest run`
 
 ### Task 4: Communal effort accrual (first real sim work)
 **Files:** `src/tech/effort.ts`, `tests/tech/effort.test.ts`,
 `src/main.ts`
 **Approach:** `effortPerTick(world): number` — PLACEHOLDER banner comment
-(replaced by the civic sim): `max(1, floor(aliveParcels/8 +
-conditionMean/32))` — integer math only. `accrue(state, world, ticks)`
-adds `ticks * effortPerTick(world)` (formula constant within a call;
-recompute per call, not per tick — placement/condition won't change
-mid-frame yet). main.ts: the FixedTickLoop callback becomes
-`tech.effort += effortPerTick(world)` via `accrue(tech, world, 1)` and
-marks the panel dirty if open. Headless safety unchanged (wiring stays
-inside `main()`).
-**Tests (RED):** formula on fixtures (empty world → 1 minimum; higher
-condition mean → strictly more, same parcel count); N ticks twice →
-equal balances (determinism in tick count); integer-only output;
-placeholder banner present (string assertion on the source via the
-guard-style read — cheap honesty check).
+(replaced by the civic sim). Define `conditionMean` with an explicit
+zero-parcel guard: `aliveParcels === 0 ? 0 : floor(sumCondition /
+aliveParcels)` — without it the empty world divides 0/0 = NaN, and
+`max(1, floor(NaN)) = NaN` (NaN comparisons are false, so `max` returns
+NaN), poisoning `state.effort` and every downstream u32 snapshot. Then
+`effortPerTick = max(1, floor(aliveParcels/8 + conditionMean/32))` —
+integer math only, ALWAYS a finite integer ≥ 1. `world` is typed
+structurally (`{ parcels: ParcelStore }`, mirroring fabric.ts's
+`HashableWorld`) so src/tech never imports worldgen. `accrue(state, world,
+ticks)` adds `ticks * effortPerTick(world)` (formula constant within a
+call; recompute per call, not per tick — placement/condition won't change
+mid-frame yet). main.ts: the FixedTickLoop callback becomes `accrue(tech,
+world, 1)` and, if the panel is open, sets a SEPARATE `panelDirty` flag —
+distinct from the existing canvas `dirty` (main.ts:44-47), which only
+drives `renderer.render(world, camera)` (:82-85) and never touches the DOM
+panel. Headless safety unchanged (wiring stays inside `main()`).
+**Tests (RED):** zero-parcel world → `effortPerTick` is EXACTLY 1 AND
+`Number.isInteger` (the NaN-guard pin); integer-only output on populated
+fixtures; **monotonicity is NON-DECREASING, not strict** — assert
+`effortPerTick(hi) >= effortPerTick(lo)` for higher condition mean at the
+same parcel count, PLUS one explicit boundary-crossing fixture whose
+condition means are separated enough to span a `floor(.../32)` step,
+asserting strictly greater there (the `floor` quantizes in steps of 32, so
+strictness only holds across a step — PRD §5/AC#5 "strictly more" is
+overstated and the team lead is routing the reword); N ticks twice → equal
+balances (determinism in tick count); placeholder banner present (string
+assertion on the source via the guard-style read — cheap honesty check).
 **Validation:** `npx vitest run`
 
 ### Task 5: Pure tech-panel content
@@ -215,26 +299,52 @@ guard-style read — cheap honesty check).
 columns ordered as the PRD lists the philosophies, each with nodes in
 topological-ish display order (roots first, then by cost); per-node
 `{id, name, flavor, cost, status: 'locked'|'affordable'|'unlocked',
-missing: string[]}`; `effortLine(state)`. All strings ≤90 chars.
+missing: string[]}`; `effortLine(state)`. Also the pure input-gate seam
+`shouldTogglePanel(key: string, overlayActive: boolean): boolean` (true
+iff `key` is `t`/`T` AND not `overlayActive`), consumed by the Task 6 DOM
+shell — it lives in this pure module so the overlay-suppression gate is
+unit-tested rather than left to manual QA. All strings ≤90 chars.
 **Tests (RED):** status transitions across a scripted unlock sequence;
 missing lists name the actual unmet prereqs (by name, not id); column
-count/order; allowlist now includes techContent.ts and the guard passes;
-determinism (pure data in → same out).
+count/order; `shouldTogglePanel` truth table (`t`/`T` + inactive ⇒ true;
+`t`/`T` + active ⇒ false; any non-toggle key ⇒ false); allowlist now
+includes techContent.ts and the guard passes; determinism (pure data in →
+same out).
 **Validation:** `npx vitest run`
 
 ### Task 6: Tech panel shell + wiring
 **Files:** `src/ui/techPanel.ts`, `src/main.ts`, `index.html`
 **Approach:** `mountTechPanel(container, deps)` mirroring `mountOpening`:
-zero game imports — deps are `{getContent(): …, onUnlock(id): boolean}`
-callbacks; `T` toggles (ignores keypresses while the opening overlay is
-up); click affordable → `onUnlock` → re-render from `getContent()`;
-effort counter refreshed on a dirty flag from the tick callback. Styles in
-index.html (panel right-docked, palette-consistent, internal scroll).
-main.ts wires tree+state+accrual+panel; `?seed=` unaffected.
-**Tests:** headless import safety (existing smoke); panel logic beyond
-content is the thin-shell exception — covered by the lead's live browser
-pass (toggle, unlock end-to-end, gating visible, coexistence with
-overlay/map, reload determinism).
+zero game imports — deps are `{ getContent(): …, onUnlock(id): boolean,
+isOverlayActive(): boolean }`. **Overlay/`T` coordination (concrete
+mechanism, NOT deferred to QA):** the opening overlay binds its OWN global
+keydown and unbinds only on dismiss (opening.ts:64-77), exposing no
+"active" state — so if the panel blindly binds a second `T` listener it
+toggles the panel *underneath* the live overlay, and no dep would let it
+learn the overlay is up. Resolution: (1) the panel's keydown handler
+routes through the pure `shouldTogglePanel(key, overlayActive)` seam from
+Task 5, calling `deps.isOverlayActive()` each keypress and ignoring `T`
+while it returns true; (2) opening.ts stays UNTOUCHED — main.ts, the single
+composition root, owns an `overlayActive` boolean (init `params.get('nointro')
+!== '1'`; set false inside the dismiss/`onBegin` callback it already passes
+to `mountOpening`) and supplies `isOverlayActive: () => overlayActive`. The
+coupling is explicit main.ts wiring, not a hidden cross-module dependency,
+and both modules keep their "zero game imports" property. Then: click
+affordable → `onUnlock` → re-render from `getContent()`. **Tick refresh:**
+on the SEPARATE `panelDirty` flag (Task 4; NOT the canvas `dirty`) the open
+panel re-renders its FULL content from `getContent()` — not just the effort
+counter line: as effort accrues past a node's cost the node flips
+locked→affordable, so node STATUS genuinely changes each tick and must
+re-derive, otherwise newly-affordable nodes stay greyed until the next
+click. Styles in index.html (panel right-docked, palette-consistent,
+internal scroll). main.ts wires tree+state+accrual+panel; `?seed=`
+unaffected.
+**Tests:** the gate decision IS unit-tested as the pure `shouldTogglePanel`
+seam in Task 5 (truth table) — not deferred to manual QA. The remaining
+DOM binding is the thin-shell exception: headless import safety (existing
+smoke) plus the lead's live browser pass confirms the WIRING (toggle,
+unlock end-to-end, gating visible, coexistence with overlay/map, reload
+determinism).
 **Validation:** `npx vitest run`; `npm run build`; lead browser pass.
 
 ### Task 7: Docs
@@ -254,23 +364,39 @@ npm run dev   # lead: T toggle, unlock flow, gating, coexistence, determinism
 
 ## 5. Rollback Plan
 
-Additive (new src/tech + ui modules; fabric.ts code/predicate additions
-behind the placement fence; main.ts wiring). Revert = don't merge. The
-placement fence guarantees no map state can contain kinds 5-9/48+ yet, so
-reverting cannot strand data.
+Additive (new src/tech + ui modules; fabric.ts code/predicate additions;
+main.ts wiring). Revert = don't merge. No map state can contain the new
+kinds, so a revert strands no data — but the two mechanisms differ and the
+guarantee must be stated precisely (it is NOT "everything is fenced"):
+transit 5-9 are FENCED — `canPlaceTransport` rejects them outright because
+the `max(kind)` junction merge is not capacity-safe for them; building
+kinds 48-60 are NOT fenced — `canPlaceParcel`/`placeParcel` (fabric.ts:249-
+282) validate footprint/land/overlap but never the kind, so a 48+ parcel
+WOULD persist if a caller requested it. They are safe only because nothing
+calls `placeParcel` with new kinds yet (no build tools) and parcels carry
+no junction-merge hazard. Either way nothing writes a new kind into a tile
+this feature, so reverting cannot strand data.
 
 ## 6. Uncertainty Log
 
 - **Costs are placeholder balance** (tier-scaled 10-50); the structural
   acceptance bar (DAG/gating/determinism) is what's tested. Balancing
-  feature later.
+  feature later. One structural-but-balance-adjacent consequence of the RJ
+  design ruling to revisit at cost-tuning: `community-ai-nodes` is gated
+  across THREE branches (AnarchoCommunism + Solarpunk + RestorativeJustice)
+  and `drone-deliveries` (longest-prereq depth L4) then sits behind a
+  four-branch closure — the deepest, most cross-coupled unlock in the tree.
+  Correct as a design call now; flagged so the balancing pass eyes it.
 - **`accrue` recomputes the formula per call, not per tick** — correct
   while nothing mutates the world mid-frame; the build-tools feature must
   revisit (noted in the banner comment).
 - **Capability strings are unvalidated free text** by design (consumers
   arrive in later features); validateTree could pin a registry later.
-- **Panel-while-overlay key handling**: `T` ignored until the opening
-  overlay dismisses — verify interaction in the lead's browser pass.
+- **Panel-while-overlay key handling**: RESOLVED in Task 6 — the panel
+  routes `T` through the pure `shouldTogglePanel(key, overlayActive)` seam
+  (unit-tested in Task 5) and main.ts owns the `overlayActive` flag, so the
+  gate is decided in tested pure code; the lead's browser pass only
+  confirms the wiring, not the gate logic.
 - **transportCategory table values** (streetcar=rail, quiet-street=road,
   promenade=pedestrian) are design calls the build-tools feature will
   exercise for real; masks are tested now so changing them later is a
