@@ -14,6 +14,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const engineDir = path.join(root, 'src/engine');
 const worldgenDir = path.join(root, 'src/worldgen');
+// src/tech is scanned fail-closed: every file there must be headless and
+// deterministic (it imports only from the engine layer). The scan auto-covers
+// future tech files — see the behavioral probe test below.
+const techDir = path.join(root, 'src/tech');
 
 // DOM globals that must never appear in headless layers.
 const FORBIDDEN_DOM = /\b(window|document|HTMLCanvasElement|requestAnimationFrame|navigator|localStorage)\b/;
@@ -42,6 +46,7 @@ function tsFiles(dir: string): string[] {
 
 const engineFiles = tsFiles(engineDir);
 const worldgenFiles = tsFiles(worldgenDir);
+const techFiles = tsFiles(techDir);
 
 // Pure-ui allowlist: ui modules that carry NO DOM and NO transcendental Math, so
 // they can be headless-tested like the engine/worldgen layers. The src/ui dir as
@@ -58,7 +63,7 @@ describe('architecture guard: headless + deterministic', () => {
     expect(worldgenFiles.length).toBeGreaterThan(0);
   });
 
-  for (const file of [...engineFiles, ...worldgenFiles]) {
+  for (const file of [...engineFiles, ...worldgenFiles, ...techFiles]) {
     const rel = path.relative(root, file);
     it(`${rel} is DOM-free, ui-free, and transcendental-Math-free`, () => {
       const code = stripComments(fs.readFileSync(file, 'utf8'));
@@ -75,6 +80,29 @@ describe('architecture guard: headless + deterministic', () => {
       expect(WORLDGEN_IMPORT.test(code), `${rel} imports from worldgen`).toBe(false);
     });
   }
+});
+
+describe('architecture guard: src/tech scanned fail-closed', () => {
+  it('scans src/tech and finds at least one file (tree.ts)', () => {
+    expect(techFiles.length).toBeGreaterThan(0);
+  });
+
+  // Behavioral proof that the scan covers src/tech: drop a throwaway file holding
+  // a DOM token, re-run the exact scan primitives (tsFiles + stripComments +
+  // FORBIDDEN_DOM), and assert it is BOTH discovered AND flagged — then unlink.
+  // This is fail-closed: any future tech file is auto-covered, no allowlist needed.
+  it('discovers and flags a synthetic DOM violation dropped into src/tech', () => {
+    const probe = path.join(techDir, '__guard_probe__.ts');
+    fs.writeFileSync(probe, 'export const el = document.getElementById("probe");\n');
+    try {
+      const discovered = tsFiles(techDir);
+      expect(discovered, 'scan did not discover the probe file').toContain(probe);
+      const code = stripComments(fs.readFileSync(probe, 'utf8'));
+      expect(FORBIDDEN_DOM.test(code), 'scan did not flag the DOM token').toBe(true);
+    } finally {
+      fs.unlinkSync(probe);
+    }
+  });
 });
 
 describe('architecture guard: pure-ui allowlist', () => {
