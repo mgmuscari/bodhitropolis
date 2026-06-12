@@ -60,6 +60,16 @@ export interface MosesParams {
   era3MinDemolish: number; // a corridor must cut through at least this many parcels
   corridorTopK: number; // rng jitter among the top-K scored corridors
   era3Projects: number; // tower-in-the-park Projects placed along the corridor
+  // Era 4 suburban flight
+  suburbRadius: number; // road-network distance beyond which sprawl begins
+  era4Spurs: number; // street spurs grown into open land
+  era4SpurMin: number; // min spur length
+  era4SpurMax: number; // max spur length
+  era4Houses: number; // suburban houses on far frontage
+  era4Offices: number; // downtown offices near the crossroads
+  era4DeclineRadius: number; // inner-city residential decline radius (the ring beyond downtown)
+  era4DeclineMin: number; // min condition lost by a declining inner-city parcel
+  era4DeclineMax: number; // max condition lost by a declining inner-city parcel
 }
 
 export const DEFAULT_MOSES_PARAMS: MosesParams = {
@@ -87,6 +97,15 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era3MinDemolish: 5,
   corridorTopK: 3,
   era3Projects: 3,
+  suburbRadius: 20,
+  era4Spurs: 8,
+  era4SpurMin: 4,
+  era4SpurMax: 8,
+  era4Houses: 25,
+  era4Offices: 3,
+  era4DeclineRadius: 18,
+  era4DeclineMin: 20,
+  era4DeclineMax: 60,
 };
 
 // --- Shared state --------------------------------------------------------
@@ -774,4 +793,130 @@ function demolishAllRail(map: GameMap): number {
     }
   }
   return n;
+}
+
+// --- Era 4: suburban flight ----------------------------------------------
+
+/** Residential building kinds (the ones that decline as the core empties). */
+const RESIDENTIAL = new Set<number>([BuiltKind.HouseSingle, BuiltKind.Apartments, BuiltKind.Projects]);
+
+/** Index of the nearest road tile to (cx, cy), or -1 if the map has no roads. */
+function nearestRoadIndex(map: GameMap, cx: number, cy: number): number {
+  const maxR = map.width + map.height;
+  for (let r = 0; r <= maxR; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = cx + dx;
+        const y = cy + dy;
+        if (!map.inBounds(x, y)) continue;
+        if (isRoadKind(map.built[map.idx(x, y)]!)) return map.idx(x, y);
+      }
+    }
+  }
+  return -1;
+}
+
+/**
+ * Era 4 — suburban flight. Using road-network distance from the crossroads
+ * (BFS through road tiles only — yield point 2), grows street spurs into open
+ * land beyond suburbRadius, fills suburban houses on far-road frontage (every
+ * placed house is road-adjacent and beyond suburbRadius by construction), adds
+ * downtown offices near the crossroads, and declines the condition of core
+ * residential parcels as the middle class leaves. No-ops if never founded.
+ */
+export function era4Suburbs(world: WorldState, rng: Rng, p: MosesParams, state: MosesState): void {
+  if (!state.founded) return;
+  const { map, parcels } = world;
+  const { siteX, siteY } = state;
+
+  const src = nearestRoadIndex(map, siteX, siteY);
+  if (src < 0) return;
+  const isRoad = (i: number): boolean => isRoadKind(map.built[i]!);
+
+  // 1. Spurs: grow straight streets outward from far road tiles into open land.
+  const net0 = distanceField(map, (i) => i === src, isRoad);
+  const spurRng = rng.fork('spurs');
+  const spurBases: number[] = [];
+  for (let i = 0; i < map.built.length; i++) {
+    if (!isRoad(i) || net0[i]! <= p.suburbRadius) continue;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const dx = x === siteX ? 0 : x > siteX ? 1 : -1;
+    const dy = y === siteY ? 0 : y > siteY ? 1 : -1;
+    // Outward step on the dominant axis; require open land to grow into.
+    const ax = Math.abs(x - siteX) >= Math.abs(y - siteY) ? dx : 0;
+    const ay = ax === 0 ? dy : 0;
+    if (ax === 0 && ay === 0) continue;
+    if (map.inBounds(x + ax, y + ay) && map.built[map.idx(x + ax, y + ay)] === 0 && map.water[map.idx(x + ax, y + ay)] === Water.None) {
+      spurBases.push(i);
+    }
+  }
+  let spurs = 0;
+  for (const i of spurBases) {
+    if (spurs >= p.era4Spurs) break;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const ax = Math.abs(x - siteX) >= Math.abs(y - siteY) ? (x > siteX ? 1 : -1) : 0;
+    const ay = ax === 0 ? (y > siteY ? 1 : -1) : 0;
+    const len = p.era4SpurMin + spurRng.nextInt(p.era4SpurMax - p.era4SpurMin + 1);
+    let grew = 0;
+    for (let s = 1; s <= len; s++) {
+      if (!placeTransport(map, x + ax * s, y + ay * s, BuiltKind.RoadStreet)) break;
+      grew++;
+    }
+    if (grew > 0) spurs++;
+  }
+
+  // 2a. Offices near the crossroads (downtown intensifies as homes leave).
+  const buildRng = rng.fork('build');
+  const toCore = (i: number): number => {
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    return Math.abs(x - siteX) + Math.abs(y - siteY);
+  };
+  const allRoads = collectRoadTiles(map, 0, 0, map.width - 1, map.height - 1);
+  const byCore = [...allRoads].sort((a, b) => toCore(a) - toCore(b) || a - b);
+  let offices = 0;
+  for (const i of byCore) {
+    if (offices >= p.era4Offices) break;
+    if (toCore(i) > p.coreRadius) continue;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    if (placeAdjacent(map, parcels, x, y, 2, 2, BuiltKind.Offices, buildRng) !== -1) offices++;
+  }
+
+  // 2b. Sprawl: houses (and the occasional strip) on far-road frontage. The
+  //     net1 field includes the new spurs; the accept predicate guarantees each
+  //     placed house sits beyond suburbRadius in road-network distance.
+  const net1 = distanceField(map, (i) => i === src, isRoad);
+  const far = allRoads.filter((i) => net1[i]! > p.suburbRadius);
+  let houses = 0;
+  for (const i of far) {
+    if (houses >= p.era4Houses) break;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const beyond = (ax: number, ay: number): boolean => net1[map.idx(ax, ay)]! > p.suburbRadius;
+    const kind = houses % 6 === 5 ? BuiltKind.CommercialStrip : BuiltKind.HouseSingle;
+    const w = kind === BuiltKind.CommercialStrip ? 2 : 1;
+    if (placeAdjacent(map, parcels, x, y, w, 1, kind, buildRng, beyond) !== -1) houses++;
+  }
+
+  // 3. Early decline: inner-city residential parcels (the ring beyond the
+  //    commercial downtown) lose condition as the middle class leaves
+  //    (deterministic order via aliveIndices).
+  const declineRng = rng.fork('decline');
+  let declined = 0;
+  for (const idx of parcels.aliveIndices()) {
+    if (!RESIDENTIAL.has(parcels.kindAt(idx))) continue;
+    const e = parcels.get(idx);
+    if (Math.abs(e.x - siteX) + Math.abs(e.y - siteY) > p.era4DeclineRadius) continue;
+    const loss = p.era4DeclineMin + declineRng.nextInt(p.era4DeclineMax - p.era4DeclineMin + 1);
+    parcels.setCondition(idx, e.condition - loss);
+    declined++;
+  }
+
+  world.log.push(
+    `era4: suburban flight — ${spurs} spurs, ${houses} suburban parcels, ${offices} offices, ${declined} core parcels declined`,
+  );
 }

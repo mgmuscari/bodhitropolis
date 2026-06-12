@@ -15,19 +15,20 @@ import {
   era1Founding,
   era2MotorAge,
   era3Highways,
+  era4Suburbs,
   DEFAULT_MOSES_PARAMS,
   type MosesParams,
   type MosesState,
 } from '../../src/worldgen/moses';
-import { boxDensity } from '../../src/worldgen/fields';
+import { boxDensity, distanceField } from '../../src/worldgen/fields';
 
 const SEEDS = ['moses-1', 'moses-2', 'moses-3'];
 const P = DEFAULT_MOSES_PARAMS;
 
 // The era functions in order; the test runner forks each era's rng exactly the
 // way the stage does, so a prefix of history is reproducible and measurable.
-const ERAS = [era1Founding, era2MotorAge, era3Highways] as const;
-const ERA_NAMES = ['era1', 'era2', 'era3'] as const;
+const ERAS = [era1Founding, era2MotorAge, era3Highways, era4Suburbs] as const;
+const ERA_NAMES = ['era1', 'era2', 'era3', 'era4'] as const;
 
 // Runs terrain, then the first `n` eras, forking each era rng like the stage.
 function runEras(
@@ -408,6 +409,108 @@ describe('era3Highways', () => {
 
     it(`seed "${seed}": tiles still agree with the store`, () => {
       const { world } = runEra3(seed);
+      expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
+    });
+  }
+});
+
+const RESIDENTIAL_KINDS: number[] = [BuiltKind.HouseSingle, BuiltKind.Apartments, BuiltKind.Projects];
+
+// Nearest road tile to (cx, cy) — mirrors era4's network-distance source.
+function nearestRoad(map: GameMap, cx: number, cy: number): number {
+  const maxR = map.width + map.height;
+  for (let r = 0; r <= maxR; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const x = cx + dx;
+        const y = cy + dy;
+        if (!map.inBounds(x, y)) continue;
+        if (isRoadKind(map.built[map.idx(x, y)]!)) return map.idx(x, y);
+      }
+    }
+  }
+  return -1;
+}
+
+// Road-network distance from the crossroads (BFS through road tiles only).
+function roadNetDist(map: GameMap, state: MosesState): Int32Array {
+  const src = nearestRoad(map, state.siteX, state.siteY);
+  return distanceField(map, (i) => i === src, (i) => isRoadKind(map.built[i]!));
+}
+
+function farHouseCount(map: GameMap, parcels: WorldState['parcels'], net: Int32Array): number {
+  let n = 0;
+  for (const i of parcels.aliveIndices()) {
+    if (parcels.kindAt(i) !== BuiltKind.HouseSingle) continue;
+    const e = parcels.get(i); // era-4 houses are 1×1
+    if (net[map.idx(e.x, e.y)]! > P.suburbRadius) n++;
+  }
+  return n;
+}
+
+// Runs eras 1-3, snapshots the core-residential cohort condition and the
+// pre-era-4 far-house count, then runs era 4.
+function runEra4(seed: string) {
+  const { world, state } = runEras(seed, 3);
+  const { map, parcels } = world;
+  const cohort: number[] = [];
+  for (const i of parcels.aliveIndices()) {
+    if (!RESIDENTIAL_KINDS.includes(parcels.kindAt(i))) continue;
+    const e = parcels.get(i);
+    if (Math.abs(e.x - state.siteX) + Math.abs(e.y - state.siteY) <= P.era4DeclineRadius) cohort.push(i);
+  }
+  const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const condBefore = mean(cohort.map((i) => parcels.conditionAt(i)));
+  const farBefore = farHouseCount(map, parcels, roadNetDist(map, state));
+  era4Suburbs(world, createRng(seed).fork('era4'), P, state);
+  return { world, state, cohort, condBefore, farBefore, mean };
+}
+
+describe('era4Suburbs determinism', () => {
+  it('produces an identical canonical hash for the same seed', () => {
+    expect(hashWorld(runEras('moses-1', 4).world)).toBe(hashWorld(runEras('moses-1', 4).world));
+  });
+});
+
+describe('era4Suburbs', () => {
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": >= 15 suburban houses beyond suburbRadius (road-network distance, yield point 2)`, () => {
+      const { world, state, farBefore } = runEra4(seed);
+      const { map, parcels } = world;
+      const net = roadNetDist(map, state);
+      const farHouses = parcels
+        .aliveIndices()
+        .filter((i) => parcels.kindAt(i) === BuiltKind.HouseSingle && net[map.idx(parcels.get(i).x, parcels.get(i).y)]! > P.suburbRadius);
+      expect(farHouses.length).toBeGreaterThanOrEqual(15);
+      expect(farHouses.length).toBeGreaterThan(farBefore); // era 4 actually built sprawl
+      for (const i of farHouses) {
+        expect(parcelTouchesRoad(map, parcels, i)).toBe(true);
+        const e = parcels.get(i);
+        expect(net[map.idx(e.x, e.y)]!).toBeGreaterThan(P.suburbRadius);
+      }
+    });
+
+    it(`seed "${seed}": >= 2 offices near the center`, () => {
+      const { world, state } = runEra4(seed);
+      const { parcels } = world;
+      const offices = parcels.aliveIndices().filter((i) => {
+        if (parcels.kindAt(i) !== BuiltKind.Offices) return false;
+        const e = parcels.get(i);
+        return Math.abs(e.x - state.siteX) + Math.abs(e.y - state.siteY) <= P.coreRadius + 2;
+      });
+      expect(offices.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it(`seed "${seed}": core residential declines below its pre-era-4 mean`, () => {
+      const { world, cohort, condBefore, mean } = runEra4(seed);
+      expect(cohort.length).toBeGreaterThanOrEqual(3); // non-vacuous cohort
+      const condAfter = mean(cohort.map((i) => world.parcels.conditionAt(i)));
+      expect(condAfter).toBeLessThan(condBefore);
+    });
+
+    it(`seed "${seed}": tiles still agree with the store`, () => {
+      const { world } = runEra4(seed);
       expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
     });
   }
