@@ -3,11 +3,24 @@ import {
   branchColumns,
   effortLine,
   shouldTogglePanel,
+  panelSignature,
+  techNodeClass,
   type BranchColumn,
   type NodeView,
+  type NodeStatus,
 } from '../../src/ui/techContent';
 import { Branch, TECH_TREE } from '../../src/tech/tree';
 import { createTechState, TechState } from '../../src/tech/state';
+
+/** Build a NodeView inline for the pure-helper tests. */
+function node(id: string, status: NodeStatus, over: Partial<NodeView> = {}): NodeView {
+  return { id, name: id, flavor: '', cost: 1, status, missing: [], ...over };
+}
+
+/** Build a single-column BranchColumn wrapping the given nodes. */
+function col(nodes: NodeView[]): BranchColumn {
+  return { branch: Branch.NewUrbanism, title: 'New Urbanism', nodes };
+}
 
 const BRANCH_ORDER = [
   Branch.NewUrbanism,
@@ -126,6 +139,57 @@ describe('shouldTogglePanel gate', () => {
     expect(shouldTogglePanel('Enter', false)).toBe(false);
     expect(shouldTogglePanel('Escape', true)).toBe(false);
     expect(shouldTogglePanel('', false)).toBe(false);
+  });
+});
+
+describe('panelSignature', () => {
+  it('is stable for equal columns', () => {
+    const a = [col([node('a', 'locked'), node('b', 'affordable')])];
+    const b = [col([node('a', 'locked'), node('b', 'affordable')])];
+    expect(panelSignature(a)).toBe(panelSignature(b));
+  });
+
+  it('changes when a node status flips (locked -> affordable)', () => {
+    const before = [col([node('a', 'locked')])];
+    const after = [col([node('a', 'affordable')])];
+    expect(panelSignature(before)).not.toBe(panelSignature(after));
+  });
+
+  it('depends only on node id+status, not on the effort header or other fields', () => {
+    // Same id+status, but name/flavor/cost/missing all differ → same signature.
+    const lean = [col([node('a', 'affordable')])];
+    const rich = [col([node('a', 'affordable', { name: 'X', flavor: 'Y', cost: 99, missing: ['P'] })])];
+    expect(panelSignature(rich)).toBe(panelSignature(lean));
+  });
+
+  it('is real over the live tree as effort lifts a node to affordable', () => {
+    const s = fresh(0);
+    const locked = panelSignature(branchColumns(TECH_TREE, s));
+    s.effort = 10; // walkable-streets: locked -> affordable
+    const affordable = panelSignature(branchColumns(TECH_TREE, s));
+    expect(affordable).not.toBe(locked);
+  });
+});
+
+describe('techNodeClass', () => {
+  it('locked omits tech-node-clickable', () => {
+    expect(techNodeClass(node('a', 'locked'))).toBe('tech-node tech-node-locked');
+  });
+
+  it('unlocked omits tech-node-clickable', () => {
+    expect(techNodeClass(node('a', 'unlocked'))).toBe('tech-node tech-node-unlocked');
+  });
+
+  it('affordable includes tech-node-clickable', () => {
+    expect(techNodeClass(node('a', 'affordable'))).toBe(
+      'tech-node tech-node-affordable tech-node-clickable',
+    );
+  });
+
+  it('embeds the status in the tech-node-${status} segment', () => {
+    expect(techNodeClass(node('a', 'locked'))).toContain('tech-node-locked');
+    expect(techNodeClass(node('a', 'unlocked'))).toContain('tech-node-unlocked');
+    expect(techNodeClass(node('a', 'affordable'))).toContain('tech-node-affordable');
   });
 });
 

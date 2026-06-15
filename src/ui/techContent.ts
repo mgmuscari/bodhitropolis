@@ -92,6 +92,32 @@ export function effortLine(state: TechState): string {
 }
 
 /**
+ * A compact signature of the panel's STRUCTURAL/visible state — each node's
+ * `id:status`, in column-then-node order. Deliberately excludes the effort header
+ * (it ticks every 100ms but does not change a node's class) so the host only
+ * triggers a FULL panel re-derive when a node actually flips status; the cheap
+ * header text is refreshed separately. Order-stable: equal trees in equal states
+ * yield equal signatures.
+ */
+export function panelSignature(columns: readonly BranchColumn[]): string {
+  return columns
+    .flatMap((c) => c.nodes.map((n) => `${n.id}:${n.status}`))
+    .join('|');
+}
+
+/**
+ * The FULL className for a tech node — the shell sets it wholesale
+ * (`el.className = techNodeClass(node)`) so a stale `tech-node-locked`/`-affordable`
+ * + `tech-node-clickable` drops by construction when status flips: base
+ * `tech-node tech-node-${status}`, plus `tech-node-clickable` iff affordable.
+ */
+export function techNodeClass(node: NodeView): string {
+  let cls = `tech-node tech-node-${node.status}`;
+  if (node.status === 'affordable') cls += ' tech-node-clickable';
+  return cls;
+}
+
+/**
  * Pure input gate for the panel's `T` toggle. True iff `key` is `t`/`T` AND no
  * overlay is active — so the opening overlay (which owns its own keydown) is
  * never toggled underneath. Lives here, not in the DOM shell, so the
