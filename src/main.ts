@@ -28,6 +28,7 @@ import {
   compositeKeyFor,
   type CompositeState,
   type CivicOverlayView,
+  type OverlayKind,
 } from './ui/civicOverlayContent';
 import { pulseLine } from './ui/pulseContent';
 import { mountPulseDock } from './ui/pulseDock';
@@ -36,12 +37,13 @@ import { mountOpening, type OpeningContent } from './ui/opening';
 import { TECH_TREE } from './tech/tree';
 import { createTechState } from './tech/state';
 import { wellbeing } from './tech/effort';
-import { branchColumns, effortLine } from './ui/techContent';
+import { branchColumns, effortLine, panelSignature } from './ui/techContent';
 import { mountTechPanel } from './ui/techPanel';
 import { isTransportKind } from './engine/fabric';
 import { availableTools, previewTool, applyTool, toolDef, type ToolId } from './tools/tools';
-import { toolbarRows } from './ui/toolbarContent';
+import { toolbarRows, refreshSignature, addedIds } from './ui/toolbarContent';
 import { mountToolbar } from './ui/toolbar';
+import { metaButtons } from './ui/dockContent';
 import { computeNeighborhoods } from './civic/neighborhoods';
 import { createCivicState } from './civic/state';
 import { simTick, type SimDeps } from './civic/compose';
@@ -122,14 +124,26 @@ export function main(): void {
   // the opening overlay is up (isOverlayActive), so it never toggles beneath it.
   const techPanel = mountTechPanel(document.body, {
     getContent: () => ({ effort: effortLine(tech), columns: branchColumns(TECH_TREE, tech) }),
-    onUnlock: (id) => tech.unlock(id),
+    // Cheap per-tick header source (no branchColumns derive) for refreshHeader (Y5).
+    getEffort: () => effortLine(tech),
+    onUnlock: (id) => {
+      const ok = tech.unlock(id);
+      if (ok) {
+        // The panel re-renders itself (its delegated click listener). Refresh the
+        // dock too — effort dropped (affordability) and an unlock may grant a new
+        // tool — and snapshot both signatures so the next sim-gated check is a
+        // no-op. The unlock FLASH still fires from the sim-gated addedIds path.
+        toolbar.refresh();
+        snapshotDock();
+        snapshotPanel();
+      }
+      return ok;
+    },
     isOverlayActive: () => overlayActive,
+    // Y3: fired for the T key, the dock [Tech] button, AND any dismiss — keeps the
+    // dock's [Tech] active-state in sync from ONE callback, off the rAF frame.
+    onToggle: () => toolbar.refreshMeta(),
   });
-
-  // panelDirty is DISTINCT from the canvas `dirty` flag: `dirty` drives only
-  // renderer.render(world, camera); panelDirty drives a FULL panel re-derive so
-  // nodes flip locked -> affordable as effort accrues, without needing a click.
-  let panelDirty = false;
 
   // Tool state: the selected tool id (null = none). A "line tool" (transport build
   // 5..9 or any conversion) paints a dragged line; everything else is point-apply.
@@ -144,7 +158,15 @@ export function main(): void {
     return false;
   };
 
-  // Bottom tool dock: always on, derived from tech grants + selection + effort.
+  // The single composite overlay (eco | civic | null). Declared HERE — before the
+  // dock mount — because the dock's getMetaButtons reads it at mount time and on
+  // every refreshMeta. applyOverlay / cycleOverlay below own the transitions.
+  let activeOverlay: CompositeState = null;
+
+  // Bottom tool dock: always on, derived from tech grants + selection + effort. The
+  // meta row ([Tech][Eco][Civic]) mirrors the T/E/C keys: getMetaButtons derives
+  // the active flags from the live panel/overlay state; onMeta routes a click to
+  // the SAME closures the keys use (techPanel.toggle / cycleOverlay).
   const toolbar = mountToolbar(document.body, {
     getRows: () => toolbarRows(availableTools(tech), selectedToolId, tech.effort),
     onSelect: (id) => {
@@ -153,8 +175,59 @@ export function main(): void {
       toolbar.setStatus(null); // a prior inspect readout is stale on tool change
       dirty = true;
       toolbar.refresh();
+      snapshotDock(); // selection moved the signature → keep the sim-gated check a no-op
+    },
+    getMetaButtons: () => metaButtons(techPanel.isOpen(), activeOverlay && { kind: activeOverlay.kind }),
+    onMeta: (id) => {
+      if (id === 'tech') techPanel.toggle();
+      else cycleOverlay(id); // 'eco' | 'civic' — the SAME closure the E/C keys call
     },
   });
+
+  // Sim-cadence gating (Y5): the heavy availableTools / branchColumns derivations +
+  // signature compares run at most ONCE per frame, and only when a sim tick has
+  // moved state (simChanged) — NOT every rAF frame. Discrete events (select /
+  // hotkey / unlock) refresh directly and snapshot the signature so the immediately
+  // following gated check is a no-op. prevToolIds is SEEDED from the initial rows
+  // (Y7) so the first diff is empty → no spurious unlock flash on load.
+  const initRows = toolbarRows(availableTools(tech), selectedToolId, tech.effort);
+  let lastToolSig = refreshSignature(initRows);
+  let prevToolIds: string[] = initRows.map((r) => r.id);
+  let lastPanelSig = panelSignature(branchColumns(TECH_TREE, tech));
+  let simChanged = false;
+
+  const snapshotDock = (): void => {
+    lastToolSig = refreshSignature(toolbarRows(availableTools(tech), selectedToolId, tech.effort));
+  };
+  const snapshotPanel = (): void => {
+    lastPanelSig = panelSignature(branchColumns(TECH_TREE, tech));
+  };
+
+  // The sim-gated sync (run once per frame when simChanged): re-derive the dock
+  // rows + signature and refresh ONLY on a real change; flash the dock when a new
+  // tool id appears (Y7); while the panel is open, cheaply refresh its header each
+  // tick and fully refresh only when the panel signature flips (a status change).
+  const syncDock = (): void => {
+    const rows = toolbarRows(availableTools(tech), selectedToolId, tech.effort);
+    const sig = refreshSignature(rows);
+    if (sig !== lastToolSig) {
+      toolbar.refresh();
+      lastToolSig = sig;
+    }
+    const ids = rows.map((r) => r.id);
+    if (addedIds(prevToolIds, ids).length > 0) {
+      toolbar.flash();
+      prevToolIds = ids;
+    }
+    if (techPanel.isOpen()) {
+      techPanel.refreshHeader();
+      const psig = panelSignature(branchColumns(TECH_TREE, tech));
+      if (psig !== lastPanelSig) {
+        techPanel.refresh();
+        lastPanelSig = psig;
+      }
+    }
+  };
 
   // Always-on wellbeing pulse dock: its OWN dedicated element (not the shared
   // toolbar status, which inspect/legend clobber), refreshed on the civic cadence
@@ -173,7 +246,6 @@ export function main(): void {
   // tiles are not tinted (eco lives on land); civic tiles with no neighborhood
   // (id 0) are not tinted.
   const overlayWater = world.map.water;
-  let activeOverlay: CompositeState = null;
   const applyOverlay = (): void => {
     if (activeOverlay === null) {
       renderer.setOverlay(null);
@@ -215,13 +287,11 @@ export function main(): void {
     });
   };
 
-  // E and C self-bind through the shared compositeKeyFor gate (suppressed while
-  // the opening overlay is up). The active overlay's legend shares the dock status
-  // slot with the inspect readout — latest action wins.
-  window.addEventListener('keydown', (event) => {
-    const kind = compositeKeyFor(event.key, overlayActive);
-    if (kind === null) return;
-    event.preventDefault();
+  // The SHARED overlay-cycle body — one closure for BOTH the E/C keys and the dock
+  // [Eco]/[Civic] buttons, so a key press and a button click can never diverge.
+  // Cycles the single composite overlay, re-points the renderer, surfaces the
+  // legend in the dock status slot, and refreshes the dock meta active-state.
+  const cycleOverlay = (kind: OverlayKind): void => {
     activeOverlay = cycleComposite(activeOverlay, kind);
     applyOverlay();
     const legend =
@@ -232,6 +302,17 @@ export function main(): void {
           : civicLegendLine(activeOverlay.view as CivicOverlayView);
     toolbar.setStatus(legend);
     dirty = true;
+    toolbar.refreshMeta(); // the active overlay changed → dock [Eco]/[Civic] state
+  };
+
+  // E and C self-bind through the shared compositeKeyFor gate (suppressed while the
+  // opening overlay is up); both delegate to cycleOverlay — the same body the dock
+  // buttons call.
+  window.addEventListener('keydown', (event) => {
+    const kind = compositeKeyFor(event.key, overlayActive);
+    if (kind === null) return;
+    event.preventDefault();
+    cycleOverlay(kind);
   });
 
   const previewAt = (tx: number, ty: number): void => {
@@ -256,8 +337,15 @@ export function main(): void {
     }
     if (r.ok) {
       dirty = true;
-      panelDirty = true; // effort changed → tech-panel affordability
-      toolbar.refresh(); // effort changed → dock affordability
+      // Effort changed → dock affordability + (if open) tech-panel affordability.
+      // Refresh directly and snapshot both signatures so the next sim-gated check
+      // is a no-op (the discrete-event path, per Y5).
+      toolbar.refresh();
+      snapshotDock();
+      if (techPanel.isOpen()) {
+        techPanel.refresh();
+        snapshotPanel();
+      }
       previewAt(tx, ty); // re-tint the just-touched tile
       // Repair forwarding (the sanctioned tools→civic crossing): a successful
       // repair-classified placement credits the anchor tile's neighborhood from
@@ -286,12 +374,9 @@ export function main(): void {
       toolbar.setStatus(null);
       dirty = true;
       toolbar.refresh();
+      snapshotDock(); // selection moved the signature → keep the sim-gated check a no-op
     },
   });
-
-  // Refresh the dock's affordability when effort actually changes (it accrues each
-  // sim tick); cheap, and avoids rebuilding the dock on idle frames.
-  let lastEffort = tech.effort;
 
   window.addEventListener('resize', () => {
     cssWidth = window.innerWidth;
@@ -302,13 +387,14 @@ export function main(): void {
   });
 
   // Simulation loop: the composite orchestrator advances effort every tick and
-  // ecology/civic on their cadences. When the panel is open, the tick marks
-  // panelDirty so the next frame re-derives its full content. Overlays re-push on
-  // their source's tick; the pulse refreshes on the civic cadence only.
+  // ecology/civic on their cadences. Each tick sets simChanged so the next frame
+  // re-derives the dock/panel signatures ONCE (~10Hz), not per rAF frame (Y5).
+  // Overlays re-push on their source's tick; the pulse refreshes on the civic
+  // cadence only.
   const sim = new FixedTickLoop(SIM_TICK_MS, (tick) => {
     currentTick = tick;
     const r = simTick(deps, tick);
-    if (techPanel.isOpen()) panelDirty = true;
+    simChanged = true; // effort accrued / grants may have moved → re-sync next frame
     if (r.ecoTicked && activeOverlay?.kind === 'eco') {
       // biodiversity is derived → recompute + re-push; soil/flora/fauna read the
       // live layers and need no recompute.
@@ -335,13 +421,11 @@ export function main(): void {
       renderer.render(world, camera);
       dirty = false;
     }
-    if (panelDirty) {
-      techPanel.refresh();
-      panelDirty = false;
-    }
-    if (tech.effort !== lastEffort) {
-      toolbar.refresh();
-      lastEffort = tech.effort;
+    // Sim-gated (Y5): re-derive the dock/panel signatures + refresh on change ONLY
+    // when a sim tick has run since the last sync — not every rAF frame.
+    if (simChanged) {
+      syncDock();
+      simChanged = false;
     }
     window.requestAnimationFrame(frame);
   };

@@ -33,6 +33,12 @@ export interface TechPanelContent {
 
 export interface TechPanelDeps {
   getContent(): TechPanelContent;
+  /**
+   * Cheap header source: JUST the effort line, with no column derive. refreshHeader
+   * uses it each tick so the live effort number stays current without recomputing
+   * branchColumns. Optional: falls back to getContent().effort when absent.
+   */
+  getEffort?(): string;
   /** Attempt to unlock a node; returns true if it succeeded (state changed). */
   onUnlock(id: string): boolean;
   /** Whether the opening overlay is currently up (suppresses the `T` toggle). */
@@ -191,7 +197,7 @@ export function mountTechPanel(container: HTMLElement, deps: TechPanelDeps): Tec
     },
     toggle: () => setOpen(!open),
     refreshHeader: () => {
-      if (open) header.textContent = deps.getContent().effort;
+      if (open) header.textContent = deps.getEffort ? deps.getEffort() : deps.getContent().effort;
     },
   };
 }
