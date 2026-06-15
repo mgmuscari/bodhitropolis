@@ -1,14 +1,38 @@
 // Dock meta content: the pure view-model for the dock's [Tech][Eco][Civic] meta
 // buttons — the keyboard-only depth (T/E/C) surfaced as always-visible controls.
-// No DOM, no transcendental Math (it will join the architecture guard's pure-ui
-// allowlist in Task 6, alongside the metaButtons() derivation). This file
-// currently declares the shared MetaButton type the toolbar shell renders; the
-// pure metaButtons(panelOpen, activeOverlay) derivation is added in Task 6 so the
-// active-state logic is unit-tested rather than left to manual QA.
+// No DOM, no transcendental Math (the architecture guard's pure-ui allowlist scans
+// this file). Keeping the active-state derivation here, not in the toolbar shell,
+// lets it be unit-tested rather than left to manual QA — and gives main ONE pure
+// source of truth that the dock and the keyboard paths both feed.
 
 /** One dock meta button: which control it is, its label, and whether it's active. */
 export interface MetaButton {
   id: 'tech' | 'eco' | 'civic';
   label: string;
   active: boolean;
+}
+
+/** Fixed labels — the bracketed key echoes the hotkey the button mirrors. */
+const META_LABELS: Record<MetaButton['id'], string> = {
+  tech: 'Tech (T)',
+  eco: 'Eco (E)',
+  civic: 'Civic (C)',
+};
+
+/**
+ * The three dock meta buttons in fixed tech/eco/civic order, with their active
+ * flags derived from the live UI state: Tech is active iff the tech panel is open;
+ * Eco/Civic are active iff the single composite overlay is of that kind (they are
+ * mutually exclusive, so at most one of Eco/Civic is ever active). Pure — main
+ * passes (techPanel.isOpen(), the active overlay's kind or null).
+ */
+export function metaButtons(
+  panelOpen: boolean,
+  activeOverlay: { kind: 'eco' | 'civic' } | null,
+): MetaButton[] {
+  return [
+    { id: 'tech', label: META_LABELS.tech, active: panelOpen },
+    { id: 'eco', label: META_LABELS.eco, active: activeOverlay?.kind === 'eco' },
+    { id: 'civic', label: META_LABELS.civic, active: activeOverlay?.kind === 'civic' },
+  ];
 }
