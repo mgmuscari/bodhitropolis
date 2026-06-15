@@ -9,6 +9,7 @@ import {
   hashWorld,
   parcelTouchesRoad,
   checkParcelAgreement,
+  ParcelStore,
 } from '../../src/engine/fabric';
 import {
   createMosesState,
@@ -18,11 +19,13 @@ import {
   era4Suburbs,
   era5Disinvestment,
   mosesCenturyStage,
+  placeParkingField,
   DEFAULT_MOSES_PARAMS,
   type MosesParams,
   type MosesState,
 } from '../../src/worldgen/moses';
 import { boxDensity, distanceField } from '../../src/worldgen/fields';
+import { wideRoadAt } from '../../src/ui/decoration';
 
 const SEEDS = ['moses-1', 'moses-2', 'moses-3'];
 const P = DEFAULT_MOSES_PARAMS;
@@ -329,6 +332,50 @@ describe('era2MotorAge', () => {
     it(`seed "${seed}": tiles still agree with the store`, () => {
       const { world } = runEras(seed, 2);
       expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
+    });
+  }
+});
+
+describe('placeParkingField (all-or-nothing, unit)', () => {
+  it('places cols*rows lots on a fully-free region as one contiguous field', () => {
+    const map = new GameMap(20, 20);
+    const parcels = new ParcelStore();
+    const n = placeParkingField(map, parcels, createRng('pf'), 2, 2, 2, 2);
+    expect(n).toBe(4); // a 2x2 grid of 2x2 lots
+    // The 4 lots tile a 4x4 rectangle → one 4-connected component of 16 tiles.
+    expect(componentSizes(map, BuiltKind.ParkingLot).sort((a, b) => b - a)).toEqual([16]);
+    expect(checkParcelAgreement(map, parcels)).toEqual([]);
+  });
+
+  it('places nothing and returns 0 if any tile in the rectangle is occupied', () => {
+    const map = new GameMap(20, 20);
+    const parcels = new ParcelStore();
+    map.built[map.idx(3, 3)] = BuiltKind.RoadStreet; // one occupied tile inside the 4x4
+    const n = placeParkingField(map, parcels, createRng('pf'), 2, 2, 2, 2);
+    expect(n).toBe(0);
+    expect(countBuilt(map, BuiltKind.ParkingLot)).toBe(0);
+  });
+});
+
+describe('era2MotorAge density & widening (urban-density Task 5)', () => {
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": widens an arterial into a 2-row avenue (wideRoadAt)`, () => {
+      const { map } = runEras(seed, 2).world;
+      let found = false;
+      for (let y = 0; y < map.height && !found; y++) {
+        for (let x = 0; x < map.width && !found; x++) {
+          if (map.built[map.idx(x, y)] === BuiltKind.RoadAvenue && wideRoadAt(map, x, y)) found = true;
+        }
+      }
+      expect(found).toBe(true);
+    });
+
+    it(`seed "${seed}": lays a parking field (>= 16-tile ParkingLot component)`, () => {
+      // The fringe field is all-or-nothing in open land past the dense grid, so the
+      // full 4x4 (16 tiles) lands as one component — satisfiable by construction.
+      const { map } = runEras(seed, 2).world;
+      const sizes = componentSizes(map, BuiltKind.ParkingLot).sort((a, b) => b - a);
+      expect(sizes[0]).toBeGreaterThanOrEqual(16);
     });
   }
 });
