@@ -850,23 +850,38 @@ function corridorParcels(map: GameMap, c: Corridor): number {
 }
 
 /**
- * Carve corridor `c`: demolish every parcel on the line, rip out any rail in the
- * path, then lay RoadHighway along the full run (merging over street/avenue).
- * Returns [parcels demolished, rail tiles removed].
+ * Carve corridor `c` as a 3-ROW highway: demolish every parcel and rip any rail
+ * across the center spine PLUS the two parallel rows (index ± 1, perpendicular to
+ * the axis), then lay RoadHighway across all three (merging over street/avenue).
+ * The parallel tiles are 4-adjacent to the gap-free spine, so the band is one
+ * connected highway mass. Returns [parcels demolished, rail tiles removed], summed
+ * over ALL THREE rows — the chronicle/balance equation depends on the TOTAL.
+ * demolishParcel clears a whole footprint and tombstones once, so a parcel spanning
+ * rows is demolished (and counted) exactly once.
  */
 function carveCorridor(map: GameMap, store: ParcelStore, c: Corridor): [number, number] {
   let demolished = 0;
   let rail = 0;
-  for (let s = c.lo; s <= c.hi; s++) {
-    const [x, y] = corridorTile(c, s);
-    const i = map.idx(x, y);
-    const pid = map.parcel[i]!;
-    if (pid !== 0 && demolishParcel(map, store, pid - 1)) demolished++;
-    if (map.built[i] === BuiltKind.Rail && demolishTransportAt(map, x, y)) rail++;
+  const offsets = [0, -1, 1]; // center spine, then the two parallel rows
+  const tileOf = (s: number, off: number): [number, number] =>
+    c.axis === 'row' ? [s, c.index + off] : [c.index + off, s];
+  // Demolish all three rows first, then lay continuous highway across them.
+  for (const off of offsets) {
+    for (let s = c.lo; s <= c.hi; s++) {
+      const [x, y] = tileOf(s, off);
+      if (!map.inBounds(x, y)) continue;
+      const i = map.idx(x, y);
+      const pid = map.parcel[i]!;
+      if (pid !== 0 && demolishParcel(map, store, pid - 1)) demolished++;
+      if (map.built[i] === BuiltKind.Rail && demolishTransportAt(map, x, y)) rail++;
+    }
   }
-  for (let s = c.lo; s <= c.hi; s++) {
-    const [x, y] = corridorTile(c, s);
-    placeTransport(map, x, y, BuiltKind.RoadHighway);
+  for (const off of offsets) {
+    for (let s = c.lo; s <= c.hi; s++) {
+      const [x, y] = tileOf(s, off);
+      if (!map.inBounds(x, y)) continue;
+      placeTransport(map, x, y, BuiltKind.RoadHighway);
+    }
   }
   return [demolished, rail];
 }
@@ -1117,13 +1132,21 @@ export function era4Suburbs(world: WorldState, rng: Rng, p: MosesParams, state: 
   };
   const allRoads = collectRoadTiles(map, 0, 0, map.width - 1, map.height - 1);
   const byCore = [...allRoads].sort((a, b) => toCore(a) - toCore(b) || a - b);
+  // Downtown offices sit within coreRadius+2 of the crossroads. The denser fabric +
+  // the 3-row highway carve leave almost no 2x2 room inside coreRadius itself, so
+  // consider road tiles out to coreRadius+2 and pin the office ANCHOR within that
+  // same radius (the `nearCore` accept) — the room just outside the carved core,
+  // exactly the band the test counts as "near the center".
+  const officeReach = p.coreRadius + 2;
+  const nearCore = (ax: number, ay: number): boolean =>
+    Math.abs(ax - siteX) + Math.abs(ay - siteY) <= officeReach;
   let offices = 0;
   for (const i of byCore) {
     if (offices >= p.era4Offices) break;
-    if (toCore(i) > p.coreRadius) continue;
+    if (toCore(i) > officeReach) continue;
     const x = i % map.width;
     const y = (i - x) / map.width;
-    if (placeAdjacent(map, parcels, x, y, 2, 2, BuiltKind.Offices, buildRng) !== -1) offices++;
+    if (placeAdjacent(map, parcels, x, y, 2, 2, BuiltKind.Offices, buildRng, nearCore) !== -1) offices++;
   }
 
   // 2b. Sprawl: houses (and the occasional strip) on far-network frontage,

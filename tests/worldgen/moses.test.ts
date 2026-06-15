@@ -417,6 +417,25 @@ function countBuilt(map: GameMap, kind: number): number {
   return n;
 }
 
+// True iff any 2x2 block is ALL RoadHighway — the signature of a multi-row carve.
+// A single-row corridor cannot form one (even at a + crossing or alongside grid
+// streets, the diagonal cell is never a 2nd highway row).
+function hasHighwaySlab(map: GameMap): boolean {
+  for (let y = 0; y < map.height - 1; y++) {
+    for (let x = 0; x < map.width - 1; x++) {
+      if (
+        map.built[map.idx(x, y)] === BuiltKind.RoadHighway &&
+        map.built[map.idx(x + 1, y)] === BuiltKind.RoadHighway &&
+        map.built[map.idx(x, y + 1)] === BuiltKind.RoadHighway &&
+        map.built[map.idx(x + 1, y + 1)] === BuiltKind.RoadHighway
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // Min Manhattan distance from any footprint tile of parcel `i` to the nearest
 // tile of `kind`, capped at `cap`.
 function parcelNearKind(map: GameMap, parcels: WorldState['parcels'], i: number, kind: number, cap: number): boolean {
@@ -476,6 +495,16 @@ describe('era3Highways', () => {
         if (map.built[i] === BuiltKind.RoadHighway && density[i]! >= q75) inMask++;
       }
       expect(inMask).toBeGreaterThanOrEqual(5);
+    });
+
+    it(`seed "${seed}": carves a 3-row highway slab (a 2x2 all-highway block)`, () => {
+      const { world } = runEra3(seed);
+      const { map } = world;
+      // The signature of a multi-row carve: a 2x2 block of ALL RoadHighway tiles.
+      // A 1-wide carve cannot form one even where it abuts grid streets — and
+      // wideRoadAt alone admits mixed-kind 2x2s, so it can't discriminate the band.
+      // Every tile of an all-highway 2x2 also reads wide to the renderer.
+      expect(hasHighwaySlab(map)).toBe(true);
     });
 
     it(`seed "${seed}": demolition balance equation holds (yield point 5b)`, () => {
