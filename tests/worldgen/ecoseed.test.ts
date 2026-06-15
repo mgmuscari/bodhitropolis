@@ -3,7 +3,7 @@ import { GameMap, Water, LandCover } from '../../src/engine/map';
 import { runPipeline, type WorldState } from '../../src/worldgen/pipeline';
 import { terrainStage } from '../../src/worldgen/terrain';
 import { mosesCenturyStage } from '../../src/worldgen/moses';
-import { ecoSeedStage, ECO_SEED_WOUND } from '../../src/worldgen/ecoseed';
+import { ecoSeedStage, ECO_SEED_WOUND, seedEcology } from '../../src/worldgen/ecoseed';
 import { hashWorld, BuiltKind, ParcelStore } from '../../src/engine/fabric';
 import { distanceField } from '../../src/worldgen/fields';
 import { parseChronicle } from '../../src/worldgen/chronicle';
@@ -162,6 +162,66 @@ describe('ecoSeedStage: degenerate all-water seed', () => {
     }
     // The record line is still appended (durable record), but it is harmless here.
     expect(world.log).toContain(ECO_SEED_WOUND);
+  });
+});
+
+describe('ecoSeedStage: corridor-width soil suppression is monotonic (AC #9)', () => {
+  // Characterization (no src change): a WIDER highway corridor suppresses soil at
+  // least as much. seedEcology wounds soil by CORRIDOR_WOUND/(1+highwayDist)
+  // (ecoseed.ts:85), so more highway ROWS shrink highwayDist across the corridor
+  // neighbourhood => strictly more total wound. This documents AC #9 and guards
+  // against a future influence/eco-seed change silently inverting the ordering.
+  const W = 40;
+  const Hh = 24;
+  const cy = 12; // corridor center row
+  const x0 = 6;
+  const x1 = 34; // highway run [x0, x1)
+
+  function uniformLandMap(): GameMap {
+    const m = new GameMap(W, Hh);
+    m.landCover.fill(LandCover.Grass);
+    m.moisture.fill(0.5);
+    return m;
+  }
+
+  // Sum a Uint8 ecology field over the corridor neighbourhood (within Manhattan R
+  // of the center line), the same region in both maps.
+  function corridorSum(m: GameMap, field: Uint8Array, r: number): number {
+    let s = 0;
+    for (let x = x0; x < x1; x++) {
+      for (let dy = -r; dy <= r; dy++) s += field[m.idx(x, cy + dy)]!;
+    }
+    return s;
+  }
+
+  function layCorridors(): { a: GameMap; b: GameMap } {
+    const a = uniformLandMap(); // 1-wide highway line at row cy
+    const b = uniformLandMap(); // 3-wide highway band at rows cy-1..cy+1
+    for (let x = x0; x < x1; x++) {
+      a.built[a.idx(x, cy)] = BuiltKind.RoadHighway;
+      for (let dy = -1; dy <= 1; dy++) b.built[b.idx(x, cy + dy)] = BuiltKind.RoadHighway;
+    }
+    seedEcology(a);
+    seedEcology(b);
+    return { a, b };
+  }
+
+  it('a 3-wide highway band suppresses soil <= a 1-wide line over the corridor', () => {
+    const { a, b } = layCorridors();
+    const soilA = corridorSum(a, a.soilHealth, 5);
+    const soilB = corridorSum(b, b.soilHealth, 5);
+    expect(soilA).toBeGreaterThan(0); // non-vacuous: the 1-wide corridor has soil
+    expect(soilB).toBeLessThanOrEqual(soilA); // monotonic in corridor width
+    // Strictly more suppressed: the wider band wounds the between-rows tiles too.
+    expect(soilB).toBeLessThan(soilA);
+  });
+
+  it('the wider band also depresses fauna periphery weight over the corridor', () => {
+    const { a, b } = layCorridors();
+    const faunaA = corridorSum(a, a.faunaPresence, 5);
+    const faunaB = corridorSum(b, b.faunaPresence, 5);
+    expect(faunaA).toBeGreaterThan(0);
+    expect(faunaB).toBeLessThanOrEqual(faunaA);
   });
 });
 
