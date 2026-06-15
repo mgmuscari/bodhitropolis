@@ -109,7 +109,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era4Spurs: 10,
   era4SpurMin: 4,
   era4SpurMax: 12,
-  era4Houses: 25,
+  era4Houses: 55,
   era4Offices: 3,
   era4DeclineRadius: 18,
   era4DeclineMin: 20,
@@ -1241,12 +1241,27 @@ export function era5Disinvestment(world: WorldState, rng: Rng, p: MosesParams, s
     if (!demolishParcel(map, parcels, idx)) continue;
     abandoned++;
     if (!craterRng.chance(p.craterChance)) continue;
-    const w = e.width >= 2 ? 2 : 1;
-    const h = e.height >= 2 ? 2 : 1;
-    const condition = 40 + craterRng.nextInt(50);
-    if (placeParcel(map, parcels, { x: e.x, y: e.y, width: w, height: h, kind: BuiltKind.ParkingLot, density: 1, condition }) !== -1) {
-      craters++;
+    // Some craters expand into a small parking FIELD where the cleared land allows
+    // (a 2x2 grid of lots on the doomed footprint + open neighbours); otherwise a
+    // single vacant lot. placeParkingField is all-or-nothing and draws ZERO rng when
+    // it can't fit, so in the dense organic city (no room) the rng stream — and the
+    // crater condition draw — is unchanged. `craters` sums the ACTUAL ParkingLot
+    // parcels placed (field count or 1), NOT crater events, so the exact balance
+    // equation alive === preEra5Alive − abandoned + craters holds with fields.
+    let lots = placeParkingField(map, parcels, craterRng, e.x, e.y, 2, 2);
+    if (lots === 0) {
+      const w = e.width >= 2 ? 2 : 1;
+      const h = e.height >= 2 ? 2 : 1;
+      const condition = 40 + craterRng.nextInt(50);
+      if (
+        placeParcel(map, parcels, {
+          x: e.x, y: e.y, width: w, height: h, kind: BuiltKind.ParkingLot, density: 1, condition,
+        }) !== -1
+      ) {
+        lots = 1;
+      }
     }
+    craters += lots;
   }
 
   world.log.push(

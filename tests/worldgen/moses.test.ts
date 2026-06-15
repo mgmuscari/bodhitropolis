@@ -10,6 +10,7 @@ import {
   parcelTouchesRoad,
   checkParcelAgreement,
   ParcelStore,
+  placeParcel,
 } from '../../src/engine/fabric';
 import {
   createMosesState,
@@ -710,6 +711,37 @@ describe('era5Disinvestment blight & abandonment', () => {
   }
 });
 
+describe('era5Disinvestment crater fields (urban-density Task 7)', () => {
+  it('a crater expands into a parking field on cleared land; balance stays exact', () => {
+    // Constructed fixture (seed-independent): a highway tile + an adjacent
+    // low-condition house with open land around it, so era-5 decay dooms the
+    // house and the crater FIELD has contiguous room to form. Pins the wiring
+    // (placeParkingField reused on the cleared footprint, count summed into
+    // craters) without relying on fragile organic clustering on moses-1/2/3.
+    const map = new GameMap(24, 24);
+    const parcels = new ParcelStore();
+    map.built[map.idx(10, 5)] = BuiltKind.RoadHighway;
+    placeParcel(map, parcels, {
+      x: 10, y: 6, width: 1, height: 1, kind: BuiltKind.HouseSingle, density: 1, condition: 45,
+    });
+    const world: WorldState = { seed: 'crater-field', map, parcels, log: [] };
+    const state = createMosesState();
+    state.founded = true;
+    const params: MosesParams = { ...DEFAULT_MOSES_PARAMS, craterChance: 1 };
+    era5Disinvestment(world, createRng('crater-field').fork('era5'), params, state);
+
+    // A field formed: a ParkingLot component larger than a single 2x2 lot (4 tiles).
+    const sizes = componentSizes(map, BuiltKind.ParkingLot).sort((a, b) => b - a);
+    expect(sizes[0]).toBeGreaterThanOrEqual(8);
+    // Balance is exact: craters counts EVERY placed lot, not crater events.
+    const line = world.log.find((l) => /disinvestment/.test(l))!;
+    const abandoned = Number(/(\d+) abandoned/.exec(line)![1]);
+    const craters = Number(/(\d+) craters/.exec(line)![1]);
+    expect(parcels.aliveCount()).toBe(state.preEra5Alive - abandoned + craters);
+    expect(checkParcelAgreement(map, parcels)).toEqual([]);
+  });
+});
+
 describe('mosesCenturyStage (full assembly)', () => {
   it('produces an identical canonical hash for the same seed', () => {
     expect(hashWorld(runFullStage('moses-1'))).toBe(hashWorld(runFullStage('moses-1')));
@@ -718,6 +750,16 @@ describe('mosesCenturyStage (full assembly)', () => {
   it('produces different canonical hashes for different seeds', () => {
     expect(hashWorld(runFullStage('moses-1'))).not.toBe(hashWorld(runFullStage('moses-2')));
   });
+
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": three full-stage runs are byte-identical (triple-snapshot)`, () => {
+      const h1 = hashWorld(runFullStage(seed));
+      const h2 = hashWorld(runFullStage(seed));
+      const h3 = hashWorld(runFullStage(seed));
+      expect(h1).toBe(h2);
+      expect(h1).toBe(h3);
+    });
+  }
 
   it('logs the pipeline stage order terrain → moses-century', () => {
     const world = runFullStage('moses-1');
