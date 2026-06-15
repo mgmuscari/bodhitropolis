@@ -88,13 +88,17 @@ game logic and no guard-scanned directory except the allowlist append.
    tech-panel nodes are clickable repeatedly while communal effort is
    actively accruing, with no dropped clicks — verified in the live pass in
    **both Safari and Chromium**.
-3. **Reconciliation, not rebuild:** when a refresh leaves a row's content
-   unchanged, its DOM element identity is preserved (the same node
-   reference survives the refresh); nodes are inserted/removed only when the
-   id set changes. Asserted by a DOM test in jsdom (vitest's environment)
-   over the reconcile helper, OR by the live pass if the helper is not
-   cleanly extractable — the PRP decides, but the id-set-change behavior is
-   covered by the pure `addedIds` test regardless.
+3. **Reconciliation, not rebuild:** the reconcile *decision* — for a prior
+   id list and the next rows, which nodes to keep/update vs. insert/remove
+   and in what order — is a **pure, tested helper** (the test environment is
+   node-only; no jsdom is added). It is exhaustively unit-tested: unchanged
+   rows → no insert/remove (identity preserved); affordability/selection
+   change → update-in-place, no structural change; id-set growth/removal →
+   exactly the added/removed ids; reorder handled. The thin DOM shell merely
+   applies the plan (createElement / textContent / classList / append /
+   remove) and is verified by the live pass. So "identity preserved on
+   unchanged content" is pinned by an automated test against the plan, not
+   left to manual QA.
 4. **Signature gating (pure, tested):** `refreshSignature(rows)` is stable
    for equal input and changes on an affordability flip, a selection
    change, and an id-set growth (the tool-appears-on-unlock case, asserted
@@ -143,10 +147,14 @@ game logic and no guard-scanned directory except the allowlist append.
    per button; cheap and aids discoverability.)
 2. Flash duration / style? (Assume ~1s CSS animation, palette-consistent;
    tuning is cosmetic, settled in the live pass.)
-3. Does reconciliation need a jsdom test or is the pure `addedIds` +
-   live pass sufficient? (Assume the PRP picks the lightest path that still
-   pins "identity preserved on unchanged content" — likely a small jsdom
-   test since vitest already runs jsdom-capable.)
+3. ~~Does reconciliation need a jsdom test?~~ **Resolved (no jsdom).** The
+   test environment is node-only and jsdom would be both an infra change and
+   self-deceiving on the Safari axis the bug hid on (jsdom ≠ WebKit). The
+   reconcile *decision* (order/insert/remove) is a pure `reconcilePlan`
+   module tested in node; class staleness is eliminated by pure
+   `toolbarToolClass`/`techNodeClass` helpers the shell applies wholesale
+   (`el.className = pureClass(...)`); delegated-click-survival is verified by
+   the Safari + Chromium live pass.
 
 ## 7. Out of Scope
 
