@@ -36,8 +36,21 @@ export interface InputHandlers {
 export function attachInput(canvas: HTMLCanvasElement, camera: Camera, handlers: InputHandlers): void {
   let dragging = false;
   let suppressPan = false; // true during a line-tool drag (paint, don't pan)
-  let downSx = 0;
-  let downSy = 0;
+  // The whole captured drag/click path is sourced from clientX/clientY, NOT
+  // offsetX/offsetY: at pointerup the event is DISPATCHED while the pointer is
+  // still captured (releasePointerCapture runs after, in-handler), and WebKit's
+  // offset-under-capture behavior is the exact untested Safari risk — a mis-read
+  // there would place a parcel on the WRONG tile, not just mis-pan. clientX/Y are
+  // populated regardless of capture; classification needs only a delta (origin
+  // cancels) and tile resolution converts client→canvas via getBoundingClientRect.
+  // offsetX/Y survive only in the non-captured paths — the hover branch of
+  // pointermove and the wheel handler — neither of which runs under pointer
+  // capture, so offset is reliable there. downClientX/Y is the press anchor;
+  // lastClientX/Y is the running pan reference.
+  let downClientX = 0;
+  let downClientY = 0;
+  let lastClientX = 0;
+  let lastClientY = 0;
   let hoverX = Number.NaN;
   let hoverY = Number.NaN;
 
@@ -48,26 +61,47 @@ export function attachInput(canvas: HTMLCanvasElement, camera: Camera, handlers:
 
   canvas.addEventListener('pointerdown', (e) => {
     dragging = true;
-    downSx = e.offsetX;
-    downSy = e.offsetY;
+    // Anchor both the press point (for click/drag classification + the line-tool
+    // start tile) and the pan reference in client space — pointerdown is pre-capture
+    // here, but keeping the pair client-relative makes classification compare like
+    // with like against the (captured) pointerup point.
+    downClientX = e.clientX;
+    downClientY = e.clientY;
+    lastClientX = e.clientX;
+    lastClientY = e.clientY;
     // A line tool paints on drag (pan suppressed); the middle button always pans.
     suppressPan = handlers.isLineTool() && e.button !== MIDDLE_BUTTON;
-    canvas.setPointerCapture(e.pointerId);
+    // Pointer capture can throw (e.g. an invalid/stale pointerId in some browsers);
+    // a failed capture must not abort the drag — pan still works off clientX/Y.
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch {
+      /* capture is best-effort; the drag proceeds regardless */
+    }
   });
 
   canvas.addEventListener('pointerup', (e) => {
     if (!dragging) return;
     dragging = false;
-    canvas.releasePointerCapture(e.pointerId);
+    try {
+      canvas.releasePointerCapture(e.pointerId);
+    } catch {
+      /* release is best-effort (capture may never have been granted) */
+    }
 
     if (handlers.hasTool()) {
-      const kind = classifyPointer(downSx, downSy, e.offsetX, e.offsetY);
-      const end = tileUnder(e.offsetX, e.offsetY);
+      // Classify from raw client deltas (origin-invariant, so capture can't skew it)
+      // and resolve tiles from client→canvas coordinates via the bounding rect —
+      // NOT offsetX/offsetY, which is unreliable while the pointer is still captured
+      // at pointerup dispatch (the WebKit wrong-tile risk).
+      const kind = classifyPointer(downClientX, downClientY, e.clientX, e.clientY);
+      const rect = canvas.getBoundingClientRect();
+      const end = tileUnder(e.clientX - rect.left, e.clientY - rect.top);
       if (kind === 'click') {
         handlers.applyAt(end.tx, end.ty);
       } else if (suppressPan) {
         // Line-tool drag: paint every tile from the down tile to the up tile.
-        const start = tileUnder(downSx, downSy);
+        const start = tileUnder(downClientX - rect.left, downClientY - rect.top);
         for (const t of lineTiles(start.tx, start.ty, end.tx, end.ty)) handlers.applyAt(t.x, t.y);
       }
       // A non-line tool drag was a pan (handled live in pointermove); nothing to apply.
@@ -78,7 +112,13 @@ export function attachInput(canvas: HTMLCanvasElement, camera: Camera, handlers:
   canvas.addEventListener('pointermove', (e) => {
     if (dragging) {
       if (suppressPan) return; // line-tool paint drag: no pan
-      camera.pan(e.movementX, e.movementY);
+      // Capture-stable pan: delta from the last clientX/Y (NOT e.movementX/Y, which
+      // is unreliable under capture in WebKit). camera.pan takes screen-pixel deltas.
+      const dx = e.clientX - lastClientX;
+      const dy = e.clientY - lastClientY;
+      lastClientX = e.clientX;
+      lastClientY = e.clientY;
+      camera.pan(dx, dy);
       // Drop the stale hover tint while panning — the world is sliding under the
       // cursor, so the last hovered tile is no longer where the pointer is. It
       // re-previews on the next (non-drag) move. Resetting hoverX/Y forces that

@@ -230,6 +230,57 @@
         opacity: 0.45;
       }
 
+      /* Dock meta row: [Tech (T)] [Eco (E)] [Civic (C)] — the keyboard-only depth
+         surfaced as always-visible toggles, sitting in the dock below the tool row.
+         Read as secondary controls (smaller, muted) until active, when they take the
+         meadow-gold selection palette shared with .toolbar-tool-selected. */
+      .toolbar-meta {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 0.4rem;
+      }
+      .toolbar-meta-button {
+        padding: 0.28rem 0.6rem;
+        font: inherit;
+        font-size: 0.72rem;
+        letter-spacing: 0.04em;
+        color: #b6b2c6;
+        background: #1f1d2e;
+        border: 1px solid #3a3850;
+        border-radius: 2px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .toolbar-meta-button:hover {
+        background: #2a2740;
+      }
+      .toolbar-meta-active {
+        border-color: #c8c264;
+        background: #2f2b46;
+        color: #c8c264;
+      }
+
+      /* Unlock flash: a ~1s meadow-gold pulse on the whole dock when the tech tree
+         grants a new tool (added once by the shell, removed after the timeout). */
+      @keyframes toolbar-flash {
+        0% {
+          border-color: #969e4a;
+          box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.45);
+        }
+        30% {
+          border-color: #e0da82;
+          box-shadow: 0 0 20px 4px rgba(200, 194, 100, 0.85);
+        }
+        100% {
+          border-color: #969e4a;
+          box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.45);
+        }
+      }
+      .toolbar-tool-flash {
+        animation: toolbar-flash 1s ease-out;
+      }
+
       /* Wellbeing pulse: a thin always-on readout, top-center over the live map.
          Its own dedicated dock (never the toolbar status), refreshed on the civic
          cadence so it never flickers. Palette matches the docks. */
