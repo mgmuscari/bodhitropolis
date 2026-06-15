@@ -78,6 +78,52 @@ describe('builtRenderKey kind → prefix mapping', () => {
   });
 });
 
+describe('builtRenderKey wide-body variant', () => {
+  it('appends -w only for road kinds when wide=true', () => {
+    expect(builtRenderKey(BuiltKind.RoadAvenue, 15, 'c', 0, true)).toBe('road-2-15-w');
+    expect(builtRenderKey(BuiltKind.RoadHighway, 7, 'c', 0, true)).toBe('road-3-7-w');
+    expect(builtRenderKey(BuiltKind.RoadStreet, 3, 'c', 0, true)).toBe('road-1-3-w');
+  });
+
+  it('defaults wide=false: 4-arg calls and explicit false are unchanged', () => {
+    expect(builtRenderKey(BuiltKind.RoadAvenue, 15, 'c', 0)).toBe('road-2-15');
+    expect(builtRenderKey(BuiltKind.RoadAvenue, 15, 'c', 0, false)).toBe('road-2-15');
+  });
+
+  it('ignores wide for QuietStreet(7) — it never widens (no road-7-*-w)', () => {
+    expect(builtRenderKey(BuiltKind.QuietStreet, 5, 'c', 0, true)).toBe('road-7-5');
+  });
+
+  it('ignores wide for rail/transit and building kinds', () => {
+    expect(builtRenderKey(BuiltKind.Rail, 2, 'c', 0, true)).toBe('rail-2');
+    expect(builtRenderKey(BuiltKind.Streetcar, 8, 'c', 0, true)).toBe('streetcar-8');
+    expect(builtRenderKey(BuiltKind.HouseSingle, 0, 'e', 1, true)).toBe('b-16-e-1');
+  });
+});
+
+describe('renderKeyspace wide-body enumeration', () => {
+  const keyspace = new Set(renderKeyspace());
+
+  it('enumerates road-{k}-{m}-w for kinds 1–3 across all 16 masks', () => {
+    for (const k of [1, 2, 3]) {
+      for (let m = 0; m < 16; m++) {
+        expect(keyspace.has(`road-${k}-${m}-w`), `road-${k}-${m}-w missing`).toBe(true);
+      }
+    }
+    // Spot-checks from the PRP.
+    expect(keyspace.has('road-2-15-w')).toBe(true);
+    expect(keyspace.has('road-3-0-w')).toBe(true);
+  });
+
+  it('excludes QuietStreet wide keys (road-7-*-w) but keeps plain road-7-{m}', () => {
+    const quietWide = renderKeyspace().filter((k) => k.startsWith('road-7-') && k.endsWith('-w'));
+    expect(quietWide).toEqual([]);
+    for (let m = 0; m < 16; m++) {
+      expect(keyspace.has(`road-7-${m}`), `road-7-${m} missing`).toBe(true);
+    }
+  });
+});
+
 // Crash-on-load guard: buildAtlas iterates renderKeyspace() and paintForKey derefs
 // ROAD_STYLES[k]! / BUILDING_STYLES[kind]! and switches on the key prefix. A
 // renderKey kind/prefix the renderer has no style/case for throws at Renderer
