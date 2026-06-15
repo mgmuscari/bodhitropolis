@@ -183,6 +183,12 @@ effort. An always-on dock at the bottom of the screen lists every tool the tech
 tree has unlocked so far; click one to select it (its cost shows as `Name ·
 cost`, and it greys out when you cannot afford it), then click the map to apply.
 
+The dock also carries a **meta row** — **[Tech (T)]**, **[Eco (E)]**, **[Civic
+(C)]** — that mirrors the keyboard shortcuts exactly: click a button or press
+its key and the active control highlights the same either way, so the tech panel
+and the eco/civic overlays are discoverable without knowing the hotkeys. When
+the tech tree unlocks a new tool, the dock **pulses** to surface it.
+
 - **Hotkeys** — **`i`** selects Inspect (a free, non-mutating readout of the
   clicked tile — kind, condition, parcel — shown as a status line in the dock),
   **`x`** selects Bulldoze, and **`Escape`** deselects.
