@@ -55,9 +55,17 @@ elsewhere):
   **`Apartments=17` is in the taxonomy + `RESIDENTIAL` set (`moses.ts:812`)
   but never yet placed** — this PRP introduces it for near-core density.
 - `placeParcel`, `demolishParcel`, `placeTransport`, `demolishTransportAt`,
-  `canPlaceParcel` (`:315,410,363,431,294`). `placeTransport` merges via
-  `max(existing, kind)` on a same-category junction (`:367`) — parallel road
-  rows fuse. `isRoadKind(k) = 1≤k≤3` (`:64`).
+  `canPlaceParcel` (`:315,410,363,431,294`). **Two distinct connectivity
+  mechanisms — do not conflate them (YP5b):** (1) `placeTransport`'s
+  `max(existing, kind)` resolves two kinds occupying the **same tile** (`:367`)
+  — this is the *center-line overlay* case (laying `RoadHighway` over an
+  existing avenue/street tile fuses to highway). (2) **Parallel rows are
+  DISTINCT 4-adjacent tiles**; they join into one component via plain
+  4-adjacency (the `roadNetwork` BFS, `moses.test.ts:66-97`) and autotile
+  together via `transportMask` (`:478`) — NOT via `max()`. The implementer must
+  not expect `placeTransport` to do anything special *between* neighbours; a
+  parallel row connects simply because each of its tiles sits next to the spine.
+  `isRoadKind(k) = 1≤k≤3` (`:64`).
 - `transportMask(map, x, y)` (`:478`) is the 4-neighbour autotile mask;
   `transportCategory` (`:459`); `parcelTouchesRoad` (`:498`).
 - `hashWorld(world)` (`:246`) folds `map.snapshot()` + `parcels.snapshotBytes()`.
@@ -122,17 +130,30 @@ include `npx tsc --noEmit` and `npm run build`.
   for transport-prefix and building kinds (they never widen). Default `false`
   keeps all existing 4-arg callers/keys identical.
 - `renderKeyspace()` — after the existing `road-${k}-${m}` loop, also push
-  `road-${k}-${m}-w` for every `k` in `ROAD_RENDER_KINDS` × mask. Keep order
-  stable and duplicate-free (append the wide block right after the plain road
-  block).
+  `road-${k}-${m}-w` for every `k` in a new **`WIDE_ROAD_KINDS` =
+  `ROAD_RENDER_KINDS.filter(isRoadKind)` = `[RoadStreet, RoadAvenue,
+  RoadHighway]` (1–3)**, × mask. Keep order stable and duplicate-free (append
+  the wide block right after the plain road block). **Deliberately EXCLUDE
+  `QuietStreet(7)`** (YP5a): `wideRoadAt` is `isRoadKind`-based (1–3, Task 2),
+  so `render()` can only ever request a wide key for kinds 1–3 — enumerating
+  `road-7-{m}-w` would emit 16 painted-but-unreachable atlas tiles (keyspace
+  cruft, and a contradiction with the Uncertainty-Log note that quiet streets
+  never form a 2×2 band). Restricting to `isRoadKind` keeps the wide keyspace ==
+  exactly the keys `render()` can request: no dead keys, no blank-tile risk.
+  (Kinds 1 AND 2 AND 3 are all included because `wideRoadAt` can report `true`
+  for any of them — a 2×2 of streets, though rare in worldgen, must not render
+  blank.)
 **Tests (RED first):**
 - `builtRenderKey(RoadAvenue, 15, 'c', 0, true) === 'road-2-15-w'`;
   `builtRenderKey(RoadHighway, 7, 'c', 0, true) === 'road-3-7-w'`.
 - `wide` ignored for buildings: `builtRenderKey(HouseSingle, 0, 'e', 1, true)
   === 'b-16-e-1'`; and for rail: `builtRenderKey(Rail, 2, 'c', 0, true) ===
   'rail-2'`.
-- `renderKeyspace()` contains `road-2-15-w` and `road-3-0-w` for all road
-  kinds × 16 masks; still has no duplicates and is order-stable.
+- `renderKeyspace()` contains `road-1-{m}-w`, `road-2-15-w`, and `road-3-0-w`
+  for road kinds 1–3 × 16 masks; still has no duplicates and is order-stable.
+- **No `road-7-*-w` keys exist** (the QuietStreet wide-exclusion is pinned):
+  `renderKeyspace().filter((k) => k.startsWith('road-7-') && k.endsWith('-w'))`
+  is empty, while the plain `road-7-{m}` keys remain present.
 - The existing totality + keyspace⊆paintable + no-dup tests remain green
   (the 4-arg calls default `wide=false`).
 **Validation:** `npx vitest run tests/ui/renderKey.test.ts` then full suite +
@@ -157,6 +178,12 @@ include `npx tsc --noEmit` and `npm run build`.
   neighbour (runs horizontally) → `x % POLE_SPACING === 0`; else if it has an
   N or S road neighbour (vertical) → `y % POLE_SPACING === 0`; isolated road
   tiles → no pole. Deterministic in `(map, x, y)` only.
+- `poleWireDirs(map, x, y): ReadonlyArray<[number, number]>` (YP4) — the wire
+  segments to draw from a pole at `(x, y)`: the subset of `{[1,0],[0,1]}` (E, S)
+  whose neighbour is a road tile of the same run. Pure; this is the *only* wire
+  decision — the shell just draws a segment toward each returned offset. Empty
+  if `powerPoleAt` is false. (Extracting this means the renderer's decoration
+  pass holds **zero** branching logic beyond looping the pure predicates.)
 - Append `'src/ui/decoration.ts'` to `PURE_UI_ALLOWLIST`.
 **Tests (RED first), using `new GameMap(w,h)` fixtures:**
 - `wideRoadAt`: a 2-row avenue band (rows y=5,6, x=2..10) → every interior
@@ -166,6 +193,27 @@ include `npx tsc --noEmit` and `npm run build`.
 - `powerPoleAt`: a horizontal avenue at y=5, x=0..12 → true at x=0,4,8,12 and
   false elsewhere on the row; false on a `RoadHighway` tile; false on empty
   land, water, rail, and a building tile; deterministic (two calls equal).
+- `poleWireDirs`: on the same horizontal avenue, a pole at x=4 returns `[[1,0]]`
+  (E wire only, no S neighbour); a pole at an L/T junction with both an E and S
+  road run returns `[[1,0],[0,1]]`; returns `[]` where `powerPoleAt` is false.
+- **Exact-set integration over a worldgen-shaped fixture (YP4):** build a
+  `new GameMap(w,h)` laid out like real worldgen output — a 1-wide street grid
+  (`blockSpacing` apart) with a **2-row avenue band** and a **3-row highway
+  band** crossing it — then assert the **complete set** of `{(x,y) :
+  wideRoadAt}` equals exactly the avenue+highway band tiles (and excludes every
+  grid `+` intersection), and the **complete set** of `{(x,y) : powerPoleAt}`
+  equals exactly the expected pole tiles. This is the headless proof that the
+  predicates compose correctly over a realistic layout — the decision half of
+  the render integration that Task 3's shell then only *draws*.
+  - **Known, intentional boundary case (YP4 residual):** a 1-wide cross-street
+    tile abutting the 2-row avenue band can itself complete a 2×2 of road tiles
+    and so legitimately reads `wide` (correct `isRoadKind`-based behaviour, not a
+    bug). The fixture+expected-set must handle this **deliberately** — either lay
+    the grid so no street abuts the band edge-to-edge (isolating the bands to
+    keep the asserted set clean), OR include those boundary tiles in the expected
+    wide set. It is cosmetic (a boundary tile rendering as slab vs stripe), so
+    the *visual* is left to the live pass; named here so a future reader does not
+    mistake an isolated-band fixture for full mixed-kind-boundary coverage.
 - The architecture allowlist test now includes `decoration.ts` and passes
   (pure).
 **Validation:** `npx vitest run tests/ui/decoration.test.ts
@@ -173,9 +221,14 @@ tests/architecture.test.ts` then full suite + `tsc`.
 
 ### Task 3: Renderer wide-body slab + power-line decoration (thin shell)
 **Files:** `src/ui/renderer.ts`
-**Approach (no new unit test — thin DOM shell; the pure inputs are tested in
-T1/T2, and `npm run build` + the keyspace⊆paintable guard + the live pass are
-the gates):**
+**Approach (thin DOM shell — every DECISION is a pure, headless-tested helper
+from T1/T2; the shell holds zero branching beyond looping those helpers and
+issuing `ctx` calls. YP4: by pushing the wide-flag, pole, and wire-direction
+decisions into `decoration.ts` (with the exact-set fixture test in T2), the
+only thing left untested here is literal `drawImage`/`fillRect`, validated by
+`npm run build` + the keyspace⊆paintable guard + the live pass — matching the
+renderer's existing no-unit-test convention while shrinking the untested
+surface to pure pixel I/O):**
 - `makeRoadTile(kind, mask, wide = false)` — when `wide`, paint a fuller
   asphalt slab: dither the base edge-to-edge and **suppress the per-edge lane
   markings / isolated stub** (or draw only a faint center seam) so adjacent
@@ -189,10 +242,15 @@ the gates):**
   `builtRenderKey`. (Only roads can be wide; for non-road transport pass
   `false`/omit.)
 - **Decoration pass:** right after the built `drawImage` (`:459`), if
-  `powerPoleAt(map, tx, ty)` draw a small dark mast at the tile and a thin
-  wire segment toward the next pole along the road (toward +x/+y road
-  neighbours). Pure-visual `ctx` drawing; no atlas key.
-**Tests:** none new (shell). Validation leans on the guard + build + live pass.
+  `powerPoleAt(map, tx, ty)` draw a small dark mast at the tile, then for each
+  offset in `poleWireDirs(map, tx, ty)` draw a thin wire segment toward that
+  neighbour. The shell makes **no** decisions of its own — `powerPoleAt` and
+  `poleWireDirs` (pure, T2-tested) own them; this is pure-visual `ctx` drawing,
+  no atlas key.
+**Tests:** none new in this file (the shell is pure pixel I/O); the wide/pole/
+wire DECISIONS are covered headlessly by T2 (including the exact-set fixture
+test). Validation leans on the T2 set test + the keyspace guard + build + live
+pass.
 **Validation:** `npx tsc --noEmit && npm run build && npx vitest run` (the
 keyspace⊆paintable guard must stay green). Team lead live-pass verifies slabs +
 poles render.
@@ -205,13 +263,24 @@ poles render.
   road tile try **all four** lanes (N,S,W,E via the `placeAdjacent` anchor
   pattern) — not first-fit — placing a 1×1 (or 2×1 for `CommercialStrip`)
   parcel of `pickKind(coreDist)` where the lane is free (`canPlaceParcel`),
-  drawing `HEALTHY_ATTRS`, until `budget` is reached. Every placed parcel is
-  road-adjacent by construction (preserves the `parcelTouchesRoad` invariant)
-  and goes through `placeParcel` (preserves `checkParcelAgreement`). Returns
-  the count placed.
+  drawing a **kind-aware attr gen** (see next bullet), until `budget` is
+  reached. Every placed parcel is road-adjacent by construction (preserves the
+  `parcelTouchesRoad` invariant) and goes through `placeParcel` (preserves
+  `checkParcelAgreement`). Returns the count placed.
 - `pickKind(coreDist)`: `≤ commercialRadius` → occasional `CommercialStrip`
   (e.g. every 5th) else `Apartments`; `≤ coreRadius` → `Apartments`; else
   `HouseSingle`. (Density rises toward the core.)
+- **Kind-aware density (YP6c):** `Apartments` are the *dense* near-core kind, so
+  draw them with a denser attr gen — a new `DENSE_ATTRS: AttrGen` (e.g.
+  `density: 2 + rng.nextInt(2)` → 2–3, `condition: 200 + rng.nextInt(56)`) —
+  while `HouseSingle`/`CommercialStrip` keep `HEALTHY_ATTRS` (density 1–2). Pick
+  the attr gen from the chosen kind inside `fillFrontage`. This keeps the
+  *same* rng draw shape (two `nextInt` calls per placement, so the `'fill'`
+  stream's structure is unchanged) while making `density` actually rise toward
+  the core. `density` participates in `hashWorld` via `snapshotBytes`
+  (`fabric.ts:222`), so it stays deterministic; no test reads density today, so
+  this is forward-compat for any later density-reading feature, not a gate
+  change. (Stays in scope — no new `BuiltKind`, no engine change.)
 - Raise `era1Parcels: 40 → 150`. In `era1Founding`, keep the civic + the
   `era1Commercial` placements on the `'fabric'` fork; **replace the first-fit
   housing loop** (`:474-480`) with a `fillFrontage(... rng.fork('fill') ...,
@@ -224,6 +293,14 @@ poles render.
   small test helper that, for each road tile, counts 4-neighbour parcel ids
   belonging to distinct parcels and asserts `max ≥ 2`.
 - **Denser:** `parcels.aliveCount()` after era 1 `≥ 80` (was ~40), per seed.
+  The `≥ 80` floor is empirical — era-1 frontage is bounded by the
+  `foundingGridSpan: 24` grid, and a water-heavy seed realizes fewer than the
+  `era1Parcels: 150` budget (YP6a). During GREEN, **measure the actual realized
+  `aliveCount()` on all three seeds and confirm the minimum clears 80 with
+  margin**; if a seed under-realizes, set the asserted floor defensibly below
+  the realized minimum (the AC-#4 intent is "materially denser, ≥ 2× the old
+  ~40 baseline") rather than inflating the budget to force a number. The budget
+  is a cap, not a guarantee — the test asserts the *realized* density floor.
 - Existing era-1 guards stay green: civic ≥ 1, commercial ≥ 3, house ≥ 15,
   every parcel touches a road, `checkParcelAgreement` empty, single road
   component.
@@ -232,22 +309,46 @@ poles render.
 ### Task 5: Era 2 — 2-row avenues + denser fill + parking fields
 **Files:** `src/worldgen/moses.ts`, `tests/worldgen/moses.test.ts`
 **Approach:**
-- New `widenAvenue(map, parcels, axis, index, lo, hi, rng)`: for `s` in
+- New `widenAvenue(map, parcels, axis, index, lo, hi, rng): number`: for `s` in
   `[lo,hi]`, on the parallel line (`index+1` for the row/col), demolish any
   parcel at that tile (`demolishParcel` via the baked `parcel` id − 1) then
   `placeTransport(RoadAvenue)`; the parallel tile is 4-adjacent to the spine
   so the network stays one component (gaps at water/edge are fine — each
-  placed tile attaches to the continuous primary line). Use
-  `rng.fork('widen')` only if any rng is needed (likely none — widening is
-  deterministic geometry).
+  placed tile attaches to the continuous primary line). **Returns the count of
+  avenue tiles it placed** (YP6b). Use `rng.fork('widen')` only if any rng is
+  needed (likely none — widening is deterministic geometry).
 - In `era2MotorAge`, after the arterial upgrade (`:521-522`), call
   `widenAvenue` on `arterialRow` (along `gridX0..gridX1`) and `arterialCol`
-  (along `gridY0..gridY1`).
-- Add `placeParkingField(map, parcels, rng, ax, ay, cols, rows)`: lay a grid
-  of 2×2 `ParkingLot` parcels (`placeParcel`) covering ~`2*cols × 2*rows`
-  (target 4×4–6×6) where free; near the auto-age sprawl just outside the core.
-  Add param `era2ParkingFields: 1` (count) + `parkingFieldCells: 2` (→ 4×4).
-  Place via `rng.fork('parkfield')`.
+  (along `gridY0..gridY1`), and **add their returned counts into the `avenues`
+  tally** before the era-2 chronicle line (`:613-614`) — so `${avenues} avenue
+  tiles` honestly reports the upgrade PLUS the widening, not just the upgrade
+  pass. (No test parses this string — `avenueTileCount(map)` is read directly,
+  `moses.test.ts:248-250` — so this is chronicle honesty, not a gate fix.)
+- Add `placeParkingField(map, parcels, rng, ax, ay, cols, rows): number`: lay a
+  grid of `cols × rows` 2×2 `ParkingLot` parcels (`placeParcel`) covering a
+  `2*cols × 2*rows` rectangle anchored at `(ax, ay)`. **ALL-OR-NOTHING (YP3):**
+  FIRST verify the **entire** `2*cols × 2*rows` rectangle is placeable (every
+  constituent 2×2 lot passes `canPlaceParcel`); only if the whole rectangle is
+  free, place all `cols*rows` lots and return `cols*rows`; otherwise place
+  nothing and return `0`. This guarantees any field that lands is a full,
+  contiguous component (no partial field → no sub-target component → no flaky
+  `≥ 16` failure). Place via `rng.fork('parkfield')`. **Returns the number of
+  `ParkingLot` parcels actually placed** (`cols*rows` on success, `0` on
+  failure — a field is N parcels, not 1). Era 5 (Task 7) folds this count into
+  its chronicled crater total so the demolition/crater balance equation stays
+  exact (see Task 7).
+- **Placement region = OPEN FRINGE land, NOT the gridded blocks (YP3).** With
+  `blockSpacing: 4` (`:89`) and 1-wide roads, block interiors are only **3×3**
+  (tiles at offsets 1,2,3 between streets at 0 and 4) — and the denser
+  `fillFrontage` consumes most of that — so **no contiguous 4×4 free area
+  exists inside the developed grid**; a 4×4 field can only fit in open land
+  beyond it. The era-2 caller therefore SCANS open land just past the grid
+  (e.g. land tiles with `built === 0 && parcel === 0` whose Manhattan distance
+  to the core exceeds the grid half-span, ordered deterministically) and calls
+  `placeParkingField` at the first anchor where the full rectangle fits, up to
+  `era2ParkingFields` fields. (On the standard 128×128 seeds this fringe always
+  exists; an all-water/tight map simply places 0 fields and the existence test
+  is gated on the same viable seeds the other era-2 guards use.)
 - Raise `era2Parcels: 24 → 90`; replace era 2's first-fit infill loop
   (`:603-611`) with a `fillFrontage(... rng.fork('fill') ...)` over the era-2
   grid road tiles. Keep the existing industry (`'fabric'`) + the 2 near-core
@@ -256,7 +357,18 @@ poles render.
 - **2-row avenue exists:** after era 2, `≥ 1` `RoadAvenue` tile satisfies
   `wideRoadAt(map, x, y)` (import `wideRoadAt`).
 - **Parking field exists:** a `ParkingLot` connected component (reuse the
-  test's `componentSizes`) of size `≥ 16` (a 4×4 field).
+  test's `componentSizes`) of size `≥ 16` (a full 4×4 field) — satisfiable **by
+  construction** now that placement is all-or-nothing in the open fringe (a
+  partial field can never form, so the component is exactly the placed
+  rectangle). **Empirical caveat (same as YP6a):** the stage-level `≥ 16` test
+  still requires a free 4×4 to actually EXIST in the fringe on each gated seed —
+  fold this into the same "verify-on-all-three-seeds-with-margin" GREEN
+  instruction as the era-1 floor (on the standard 128×128 moses-1/2/3 the fringe
+  is ample, but confirm rather than assume). The all-or-nothing contract itself
+  is pinned seed-independently by a focused unit test of `placeParkingField` on
+  a bare `new GameMap(w,h)` fixture: on a fully-free region it places `cols*rows`
+  lots and returns that count (component `= 4*cols*rows` tiles); on a region with
+  one occupied tile in the rectangle it places nothing and returns `0`.
 - Existing era-2 guards stay green: avenue tiles ≥ 20 (widening only ADDS
   avenue tiles), industry ≥ 2, parking ≥ 1, single road component,
   `checkParcelAgreement` empty; determinism self-hash.
@@ -290,15 +402,51 @@ poles render.
 ### Task 7: Era 4/5 density + crater parking fields + full-stage determinism
 **Files:** `src/worldgen/moses.ts`, `tests/worldgen/moses.test.ts`
 **Approach:**
-- Raise `era4Houses: 25 → 90`. Keep era 4's special far-sprawl loop
-  (`:929-938`, the `beyond suburbRadius` accept + farthest-from-highway order)
-  but with the raised budget; optionally add a light inner-core
-  `fillFrontage` for the offices ring (keep it modest to protect the era-5
-  ratio — see Risk).
+- Raise `era4Houses: 25 → 55` (a MODERATE ~2.2× bump, not 90 — see the lever
+  correction below). Keep era 4's special far-sprawl loop (`:929-938`, the
+  `beyond suburbRadius` accept + farthest-from-highway order) with the raised
+  budget; optionally add a light inner-core `fillFrontage` for the offices ring
+  (keep it modest).
+  - **Era-5 ratio — correct lever (YP2).** The era-5 guard needs `abandoned ≥
+    10%` of `preEra5Alive` (`moses.test.ts:572`). The DOMINANT diluter is the
+    **far-suburb budget `era4Houses`, NOT the optional inner-core fill.** Far
+    houses sit at highway distance `d ≥ 16`; their era-5 decay loss is
+    `floor(maxDecay/(1+decayK·d)) = floor(200/(1+0.15·16)) = 58`
+    (`moses.ts:998-999`), so a `HEALTHY_ATTRS` house (condition 200–255) lands
+    at ~140–197 — far above `abandonThreshold: 40`. Every far house is a
+    near-guaranteed era-5 SURVIVOR that adds to the denominator with ~zero
+    numerator contribution. So the prior plan (90 far houses, "cap the inner
+    fill") aimed at the wrong knob. Fix: hold `era4Houses` MODERATE (55), and
+    point the abandonment numerator at the carved core instead —
+    **`fillFrontage` is weighted toward the core** (`pickKind` already places
+    the dense `Apartments`/`CommercialStrip` near the crossroads, exactly where
+    era 3 carves the 3-row highway), so the d≤2 heavy-decay band (widened by
+    Task 6) gains parcels in step with the denominator.
+  - **Structural floor argument (not just "sweep and tune").** Numerator
+    (abandoned) is driven by near-corridor dense fill — which the 3-row carve
+    (Task 6) *widens* the kill-band for and which `fillFrontage` *concentrates*
+    near the core; denominator growth from the far suburbs is held to a moderate
+    `era4Houses: 55`. Because the near-fill scales with the same core the
+    corridor cleaves while the far-fill is capped, the abandoned fraction is
+    structurally bounded BELOW only by how core-weighted the fill is — a knob we
+    control — not by the far budget outrunning it. The seed-sweep is the
+    empirical CHECK on this argument, not the mitigation itself.
 - Era 5: a fraction of demolition craters expand from a single 2×2
   `ParkingLot` to a small parking **field** (reuse `placeParkingField` on the
   cleared footprint where space allows), via the existing `'crater'` fork.
   Keep the abandonment passes otherwise unchanged.
+  - **Balance-equation discipline (exact, mirrors Task 6):** the chronicled
+    `craters` count MUST be the **total number of `ParkingLot` parcels placed**
+    across all craters — i.e. sum the value `placeParkingField` returns (N for
+    an N-parcel field) and `+1` for each single-lot crater — NOT the number of
+    crater *events*. The current loop (`moses.ts:1009-1020`) already increments
+    `craters` once per `placeParcel(ParkingLot)` success, so `craters` == net
+    `ParkingLot` parcels added and `aliveCount() === preEra5Alive − abandoned +
+    craters` holds (`moses.test.ts:574`). A field that adds N parcels but logs
+    `craters += 1` would under-count by `N − 1` and break that exact equation —
+    so route every field parcel through the same counter. `abandoned` is
+    unchanged (one per demolished doomed parcel); only the `craters` term must
+    sum the full field footprint.
 - Add a **full-stage triple-snapshot determinism** test: for each seed,
   `hashWorld(runFullStage(seed))` run three times are all equal; different
   seeds differ (extends the existing `mosesCenturyStage` determinism block).
@@ -308,12 +456,32 @@ poles render.
 - Existing era-5 guards green **across all three seeds** (the seed-sweep):
   abandoned ≥ 10% of `preEra5Alive`, near/far cohorts ≥ 5, blight gradient
   (near < far), parking-lot count increases; chronicle balance
-  `alive === preEra5Alive − abandoned + craters`.
+  `alive === preEra5Alive − abandoned + craters`. **This balance test
+  (`moses.test.ts:574`) is the guard for the crater-field counting above** —
+  with fields adding multiple parcels, it stays green ONLY if `craters` sums
+  every placed `ParkingLot` parcel. Cover the counting fix **non-vacuously
+  without relying on organic clustering on moses-1/2/3** (era-5 fields form only
+  where adjacent doomed parcels happen to clear contiguous space — seed-
+  dependent and fragile to assert): the `placeParkingField` return-count is
+  pinned by the focused Task-5 unit test, and the era-5 *wiring* is pinned by a
+  **constructed fixture** — a `new GameMap(w,h)` seeded with a short run of
+  adjacent low-condition parcels beside a `RoadHighway` tile, run through
+  `era5Disinvestment`, asserting (i) a newly-created `ParkingLot` component of
+  size ≥ 2 appears (a field formed) and (ii) `aliveCount() === preEra5Alive −
+  abandoned + craters` holds exactly. The three-seed stage test then only needs
+  the balance equation green (which it is by construction, since `craters` sums
+  placed parcels regardless of whether a field forms).
 - Triple-snapshot: three full-stage hashes equal per seed; cross-seed differ.
 - Post-stage single road component (`moses.test.ts:621`) holds.
 **Validation:** `npx vitest run tests/worldgen/moses.test.ts`. If any seed's
-era-5 abandonment dips < 10%, tune the `fillFrontage` core-weighting / cap the
-era-4 inner fill (NOT the decay formula); re-sweep.
+era-5 abandonment dips < 10%, the levers in priority order are: (1) sharpen the
+`fillFrontage` core-weighting (more near-corridor parcels = more numerator);
+(2) lower the far-suburb budget `era4Houses` further (fewer survivors = smaller
+denominator — this is the dominant diluter per YP2, so it is the second lever,
+not the inner fill); (3) modestly raise `craterChance`/`abandonThreshold`.
+**NEVER the decay formula** (`decayK`/`maxDecay`/the rational falloff) — that is
+the determinism-and-blight-gradient contract. Re-sweep all three seeds after any
+tune; do not stop at a single passing seed (overfitting the gate).
 
 ### Task 8: Ecology suppression monotonicity (characterization)
 **Files:** `tests/worldgen/ecoseed.test.ts` (add a case) — **no `src` change**
@@ -357,8 +525,13 @@ save impact (no save format exists). No data migration anywhere.
 
 ## 6. Uncertainty Log
 - **Era-5 abandonment ratio under denser fabric** is the one empirical
-  unknown — must seed-sweep (Task 7). Mitigation is fill-weighting, never the
-  decay formula. Flag for the team lead's live + sweep.
+  unknown — must seed-sweep (Task 7). The dominant diluter is the **far-suburb
+  budget `era4Houses`** (far houses at `d ≥ 16` barely decay and become
+  guaranteed survivors in the denominator), so it is held MODERATE (25→55, not
+  90), and the abandonment numerator is steered to the carved core via
+  core-weighted `fillFrontage`. Levers if a seed dips: fill core-weighting →
+  lower `era4Houses` → `craterChance`/`abandonThreshold`; **never the decay
+  formula**. Flag for the team lead's live + sweep.
 - **`new GameMap(w, h)` constructor signature** — confirm against
   `tests/engine/map.test.ts` before writing the Task 2 fixtures (the predicate
   logic is independent of how the fixture map is built).
