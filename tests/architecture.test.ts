@@ -92,6 +92,7 @@ const PURE_UI_ALLOWLIST = [
   'src/ui/civicOverlayContent.ts',
   'src/ui/pulseContent.ts',
   'src/ui/repairTools.ts',
+  'src/ui/reconcile.ts',
 ];
 
 describe('architecture guard: headless + deterministic', () => {
