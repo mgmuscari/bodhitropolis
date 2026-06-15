@@ -206,6 +206,59 @@ describe('era1Founding settlement', () => {
   }
 });
 
+// Count of road tiles flanked by parcels on BOTH sides (>= 2 distinct adjacent
+// parcel ids). A 1-wide street tile has only its two perpendicular neighbours
+// available as frontage, so per-tile this saturates at "both sides" — the COUNT
+// across the grid is the all-lane signature: an all-lane fillFrontage drives it
+// to ~72, where the old first-fit-one-lane loop reaches only ~14 (mostly around
+// the civic megablock). So the COUNT, not a per-tile max, is the discriminator.
+function bothSidesBuilt(map: GameMap): number {
+  const { width, height } = map;
+  let n = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!isRoadKind(map.built[map.idx(x, y)]!)) continue;
+      const ids = new Set<number>();
+      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]] as const) {
+        if (!map.inBounds(nx, ny)) continue;
+        const pid = map.parcel[map.idx(nx, ny)]!;
+        if (pid !== 0) ids.add(pid);
+      }
+      if (ids.size >= 2) n++;
+    }
+  }
+  return n;
+}
+
+describe('era1Founding density (urban-density Task 4)', () => {
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": fills BOTH sides of streets (all-lane, not first-fit)`, () => {
+      const { map } = runEra1(seed).world;
+      // All-lane fillFrontage flanks ~72 road tiles on both sides; the old first-fit
+      // loop manages ~14. The >= 40 bar cleanly separates them — a clean RED on the
+      // pre-impl first-fit code (verified: 14 < 40), GREEN on the all-lane fill.
+      expect(bothSidesBuilt(map)).toBeGreaterThanOrEqual(40);
+    });
+
+    it(`seed "${seed}": is materially denser than the old baseline (>= 2x ~40)`, () => {
+      // Realized era-1 alive is 80 on moses-1/2/3 (era1Parcels=80, the AC#4 ">= 2x
+      // the old ~40 baseline" target; the PRP's unmeasured 150 saturated the core
+      // and collapsed the era-5 far cohort, so it was calibrated down to 80). The
+      // asserted floor sits below the realized minimum with margin per the
+      // budget-as-cap discipline — defensible against a water-heavier seed.
+      const alive = runEra1(seed).world.parcels.aliveCount();
+      expect(alive).toBeGreaterThanOrEqual(72);
+    });
+
+    it(`seed "${seed}": places dense near-core Apartments`, () => {
+      // fillFrontage steers Apartments (the dense kind, DENSE_ATTRS density 2-3)
+      // into the core — the band era 3 later carves the highway through, which is
+      // what keeps the era-5 abandonment numerator healthy by construction.
+      expect(aliveKindCount(runEra1(seed).world, BuiltKind.Apartments)).toBeGreaterThanOrEqual(5);
+    });
+  }
+});
+
 // Manhattan distance from any tile of parcel `i`'s footprint to the nearest
 // rail or water tile, capped at `cap` (searches a small neighbourhood).
 function nearRailOrWater(map: GameMap, parcels: WorldState['parcels'], i: number, cap = 2): boolean {

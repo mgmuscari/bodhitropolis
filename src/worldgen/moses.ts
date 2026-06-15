@@ -90,7 +90,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   railLines: 2,
   railExtension: 10,
   railMinLength: 6,
-  era1Parcels: 40,
+  era1Parcels: 80,
   era1Commercial: 6,
   commercialRadius: 6,
   coreRadius: 8,
@@ -226,6 +226,12 @@ type AttrGen = (rng: Rng) => { density: number; condition: number };
 const HEALTHY_ATTRS: AttrGen = (rng) => ({ density: 1 + rng.nextInt(2), condition: 200 + rng.nextInt(56) });
 /** Urban-renewal projects: built dense and cheap (condition 140..180). */
 const PROJECT_ATTRS: AttrGen = (rng) => ({ density: 3 + rng.nextInt(2), condition: 140 + rng.nextInt(41) });
+/**
+ * Dense near-core construction (Apartments): density 2..3, pristine-ish condition.
+ * Same TWO-nextInt draw shape as HEALTHY_ATTRS, so swapping it in inside
+ * fillFrontage leaves the 'fill' rng stream structure (and determinism) unchanged.
+ */
+const DENSE_ATTRS: AttrGen = (rng) => ({ density: 2 + rng.nextInt(2), condition: 200 + rng.nextInt(56) });
 
 function placeAdjacent(
   map: GameMap,
@@ -252,6 +258,51 @@ function placeAdjacent(
     return placeParcel(map, store, { x: ax, y: ay, width: w, height: h, kind, density, condition });
   }
   return -1;
+}
+
+/**
+ * Pack frontage on ALL FOUR lanes of every road tile (not first-fit), walking the
+ * caller-supplied deterministic order (e.g. byCore), placing pickKind(roadIndex)
+ * parcels until `budget` is reached. Each parcel is 1×1 (or 2×1 for a
+ * CommercialStrip), placed only where the lane is free (canPlaceParcel) and via
+ * placeParcel — so every placed parcel is road-adjacent BY CONSTRUCTION and the
+ * store/tile agreement (checkParcelAgreement) is preserved. Apartments draw the
+ * dense attr gen; other kinds the healthy one — same two-nextInt draw shape, so the
+ * rng stream is kind-independent. Returns the number of parcels placed.
+ */
+function fillFrontage(
+  map: GameMap,
+  parcels: ParcelStore,
+  roadTiles: number[],
+  rng: Rng,
+  budget: number,
+  pickKind: (roadIndex: number) => BuiltKind,
+): number {
+  let placed = 0;
+  for (const i of roadTiles) {
+    if (placed >= budget) break;
+    const rx = i % map.width;
+    const ry = (i - rx) / map.width;
+    const kind = pickKind(i);
+    const w = kind === BuiltKind.CommercialStrip ? 2 : 1;
+    const h = 1;
+    const attrs: AttrGen = kind === BuiltKind.Apartments ? DENSE_ATTRS : HEALTHY_ATTRS;
+    const anchors: ReadonlyArray<readonly [number, number]> = [
+      [rx, ry - h], // N: parcel's south edge abuts the road
+      [rx, ry + 1], // S
+      [rx - w, ry], // W
+      [rx + 1, ry], // E
+    ];
+    for (const [ax, ay] of anchors) {
+      if (placed >= budget) break;
+      if (!canPlaceParcel(map, ax, ay, w, h)) continue;
+      const { density, condition } = attrs(rng);
+      if (placeParcel(map, parcels, { x: ax, y: ay, width: w, height: h, kind, density, condition }) !== -1) {
+        placed++;
+      }
+    }
+  }
+  return placed;
 }
 
 /** Minimum value of `field` over a w×h footprint anchored at (ax, ay). */
@@ -471,13 +522,20 @@ export function era1Founding(world: WorldState, rng: Rng, p: MosesParams, state:
     }
   }
 
-  // Housing fills the remaining frontage, row-major, up to the budget.
-  for (const i of roadTiles) {
-    if (placed >= p.era1Parcels) break;
-    const x = i % map.width;
-    const y = (i - x) / map.width;
-    if (placeAdjacent(map, parcels, x, y, 1, 1, BuiltKind.HouseSingle, fabRng) !== -1) placed++;
-  }
+  // Housing & near-core density fill the remaining frontage on ALL lanes, core
+  // first: dense Apartments (with the occasional CommercialStrip) toward the
+  // crossroads, single houses farther out. Core-weighting steers the later era-5
+  // abandonment numerator into the band era 3 carves the highway through.
+  let commercialSeen = 0;
+  const pickKind = (i: number): BuiltKind => {
+    const coreDist = manhattanToCore(i);
+    if (coreDist <= p.commercialRadius) {
+      return commercialSeen++ % 5 === 4 ? BuiltKind.CommercialStrip : BuiltKind.Apartments;
+    }
+    if (coreDist <= p.coreRadius) return BuiltKind.Apartments;
+    return BuiltKind.HouseSingle;
+  };
+  placed += fillFrontage(map, parcels, byCore, rng.fork('fill'), p.era1Parcels - placed, pickKind);
 
   world.log.push(`era1: fabric — ${placed} parcels (${commercial} commercial)`);
 }
