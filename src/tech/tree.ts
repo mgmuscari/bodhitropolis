@@ -70,6 +70,8 @@ export const TECH_TREE: readonly TechNode[] = [
     'Car-free corridors stitch the district together, on foot and in conversation.'),
   node('streetcar-revival', NewUrbanism, 'Streetcar Revival', ['road-diets', 'renewable-energy'], 40, kind(BuiltKind.Streetcar),
     'The old rails hum back to life, electric and unhurried, threading the commons.'),
+  node('pocket-parks', NewUrbanism, 'Pocket Parks', ['parklets'], 25, kind(BuiltKind.Park),
+    'Rezone a tired lot into a pocket of shade and birdsong; the block grows a lung.'),
 
   // --- Green Development -----------------------------------------------------
   node('soil-and-soul', GreenDevelopment, 'Soil and Soul', [], 10, cap('soil-care'),
@@ -82,6 +84,8 @@ export const TECH_TREE: readonly TechNode[] = [
     'Greens climb the walls; a warehouse becomes an acre stacked toward the sun.'),
   node('wastewater-recycling', GreenDevelopment, 'Wastewater Recycling', ['soil-and-soul'], 30, kind(BuiltKind.WastewaterWorks),
     'Greywater is too precious to flush away; reclaim it and let the reeds work.'),
+  node('rewilding', GreenDevelopment, 'Rewilding', ['community-gardens'], 30, kind(BuiltKind.RewildedLand),
+    'Let the lot go feral — bramble, milkweed, fox; the city makes room for the wild.'),
 
   // --- Restorative Justice (the structural thesis) ---------------------------
   node('circles', RestorativeJustice, 'Circles', [], 10, cap('circles'),

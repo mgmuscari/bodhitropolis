@@ -54,6 +54,21 @@ describe('QuietStreet(7) renders into the road set (missing-style regression)', 
   });
 });
 
+describe('Park(61) + RewildedLand(62) render into the building set', () => {
+  const keyspace = new Set(renderKeyspace());
+
+  it('keys b-61/b-62 and enumerates the full pos×tier sets', () => {
+    expect(builtRenderKey(BuiltKind.Park, 0, 'c', 0)).toBe('b-61-c-0');
+    expect(builtRenderKey(BuiltKind.RewildedLand, 0, 'e', 1)).toBe('b-62-e-1');
+    for (const pos of POSITIONS) {
+      for (const tier of TIERS) {
+        expect(keyspace.has(`b-61-${pos}-${tier}`), `b-61-${pos}-${tier} missing`).toBe(true);
+        expect(keyspace.has(`b-62-${pos}-${tier}`), `b-62-${pos}-${tier} missing`).toBe(true);
+      }
+    }
+  });
+});
+
 describe('builtRenderKey kind → prefix mapping', () => {
   it('maps each transport kind to its category prefix (mask used, pos/tier ignored)', () => {
     expect(builtRenderKey(BuiltKind.RoadStreet, 1, 'c', 0)).toBe('road-1-1');

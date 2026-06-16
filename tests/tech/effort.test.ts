@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { effortPerTick, wellbeing, accrue, type EffortWorld } from '../../src/tech/effort';
 import { createTechState } from '../../src/tech/state';
 import { TECH_TREE } from '../../src/tech/tree';
-import { ParcelStore, BuiltKind } from '../../src/engine/fabric';
+import { ParcelStore, BuiltKind, placeParcel, convertParcel } from '../../src/engine/fabric';
+import { GameMap } from '../../src/engine/map';
 
 /** A minimal effort-world: N parcels with the given conditions. */
 function world(conditions: number[]): { parcels: ParcelStore } {
@@ -143,6 +144,33 @@ describe('wellbeing composition (the real three-system effort)', () => {
   it('effortPerTick is max(1, wellbeing) — the pulse line reads the same scalar', () => {
     const w = world(new Array(8).fill(200));
     expect(effortPerTick(w)).toBe(Math.max(1, wellbeing(w)));
+  });
+});
+
+describe('wellbeing: green rezone is restorative; greens are not residential', () => {
+  it('a derelict→Park rezone makes wellbeing rise-or-hold (condition reset, no kind miscount)', () => {
+    const map = new GameMap(8, 8);
+    const parcels = new ParcelStore();
+    placeParcel(map, parcels, { x: 2, y: 2, width: 1, height: 1, kind: BuiltKind.Projects, condition: 20 });
+    const before = wellbeing({ parcels });
+    expect(convertParcel(map, parcels, 2, 2, BuiltKind.Park)).toBe(true);
+    const after = wellbeing({ parcels });
+    // alive count unchanged; condition 20→255 lifts the mean — wellbeing has no kind
+    // branch, so a green parcel is an ordinary alive parcel at condition 255.
+    expect(after).toBeGreaterThanOrEqual(before);
+    expect(after).toBeGreaterThan(before); // non-vacuous: the reset actually lifts it here
+  });
+
+  it('Park and RewildedLand are not residential kinds (moses-only classification)', () => {
+    // Mirrors moses.ts RESIDENTIAL (module-private) without importing it — no
+    // worldgen change. The rezoning greens must never read as residential zones.
+    const RESIDENTIAL = new Set<number>([
+      BuiltKind.HouseSingle,
+      BuiltKind.Apartments,
+      BuiltKind.Projects,
+    ]);
+    expect(RESIDENTIAL.has(BuiltKind.Park)).toBe(false);
+    expect(RESIDENTIAL.has(BuiltKind.RewildedLand)).toBe(false);
   });
 });
 

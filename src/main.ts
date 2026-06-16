@@ -39,8 +39,8 @@ import { createTechState } from './tech/state';
 import { wellbeing } from './tech/effort';
 import { branchColumns, effortLine, panelSignature } from './ui/techContent';
 import { mountTechPanel } from './ui/techPanel';
-import { isTransportKind } from './engine/fabric';
 import { availableTools, previewTool, applyTool, toolDef, type ToolId } from './tools/tools';
+import { isLineTool } from './ui/lineTools';
 import { toolbarRows, refreshSignature, addedIds } from './ui/toolbarContent';
 import { mountToolbar } from './ui/toolbar';
 import { metaButtons } from './ui/dockContent';
@@ -146,17 +146,10 @@ export function main(): void {
   });
 
   // Tool state: the selected tool id (null = none). A "line tool" (transport build
-  // 5..9 or any conversion) paints a dragged line; everything else is point-apply.
+  // 5..9 or transport convert) paints a dragged line; everything else — building
+  // build AND building convert (rezoning greens) — is point-apply. The predicate
+  // lives in src/ui/lineTools.ts (pure, unit-tested); it reads the ToolDef's kind.
   let selectedToolId: ToolId | null = null;
-  const isLineTool = (id: ToolId | null): boolean => {
-    if (id === null) return false;
-    if (id.startsWith('convert-')) return true;
-    if (id.startsWith('build-')) {
-      const def = toolDef(id);
-      return def?.kind !== undefined && isTransportKind(def.kind);
-    }
-    return false;
-  };
 
   // The single composite overlay (eco | civic | null). Declared HERE — before the
   // dock mount — because the dock's getMetaButtons reads it at mount time and on
@@ -361,7 +354,7 @@ export function main(): void {
   attachInput(canvas, camera, {
     onChange: markDirty,
     hasTool: () => selectedToolId !== null,
-    isLineTool: () => isLineTool(selectedToolId),
+    isLineTool: () => selectedToolId !== null && isLineTool(toolDef(selectedToolId)!),
     applyAt,
     hover: previewAt,
     clearHover: () => {

@@ -73,6 +73,32 @@ describe('ecologyTick: soil', () => {
   });
 });
 
+describe('ecologyTick: depave exemption (rezoned greens heal their own soil)', () => {
+  // The load-bearing convert payoff: a converted park has parcel != 0, so without
+  // the isUnsealed exemption it would seal its OWN soil at PAVED_CAP (the perverse
+  // inverse of depaving). A ParkingLot with the same parcel cover is the control —
+  // it stays sealed and capped. Non-vacuous: drop the exemption and the Park stays
+  // pinned <= 40 and the final assertion fails.
+  it('a Park parcel rises above the paved cap; a ParkingLot control stays capped', () => {
+    const park = landMap(8, 8);
+    park.setBuilt(3, 3, BuiltKind.Park);
+    park.setParcel(3, 3, 1); // parcel-covered, exactly like a converted parcel
+    park.setSoilHealth(3, 3, 40);
+
+    const lot = landMap(8, 8);
+    lot.setBuilt(3, 3, BuiltKind.ParkingLot);
+    lot.setParcel(3, 3, 1);
+    lot.setSoilHealth(3, 3, 40);
+
+    for (let t = 0; t < 8; t++) {
+      ecologyTick(park);
+      ecologyTick(lot);
+      expect(lot.getSoilHealth(3, 3)).toBeLessThanOrEqual(40); // sealed: capped throughout
+    }
+    expect(park.getSoilHealth(3, 3)).toBeGreaterThan(40); // unsealed: healed past the cap
+  });
+});
+
 describe('ecologyTick: flora', () => {
   it('grows where prev soil is healthy, stays flat on poor soil', () => {
     const map = landMap(8, 8);

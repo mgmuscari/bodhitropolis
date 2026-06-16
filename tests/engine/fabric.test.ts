@@ -19,6 +19,9 @@ import {
   TRANSPORT_CONVERSIONS,
   canConvertTransport,
   convertTransport,
+  REZONE_TARGETS,
+  canConvertParcel,
+  convertParcel,
 } from '../../src/engine/fabric';
 import { GameMap, Water } from '../../src/engine/map';
 import { runPipeline } from '../../src/worldgen/pipeline';
@@ -559,6 +562,137 @@ describe('TRANSPORT_CONVERSIONS table + canConvertTransport / convertTransport',
     placeTransport(map, 1, 2, BuiltKind.RoadStreet); // west frontage
     expect(convertTransport(map, 1, 2, BuiltKind.QuietStreet)).toBe(true);
     expect(checkParcelAgreement(map, store)).toEqual([]);
+  });
+});
+
+describe('REZONE_TARGETS + canConvertParcel / convertParcel', () => {
+  it('exposes exactly the two rezoning greens', () => {
+    expect(REZONE_TARGETS.has(BuiltKind.Park)).toBe(true);
+    expect(REZONE_TARGETS.has(BuiltKind.RewildedLand)).toBe(true);
+    expect(REZONE_TARGETS.has(BuiltKind.Parklet)).toBe(false);
+    expect(REZONE_TARGETS.size).toBe(2);
+  });
+
+  it('converts a 3×3 building parcel in place: every tile new kind, same pid', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    const idx = placeParcel(map, store, {
+      x: 2, y: 2, width: 3, height: 3, kind: BuiltKind.Projects, condition: 50,
+    });
+    expect(idx).toBe(0);
+    // Click a non-anchor tile (the SE corner) — conversion resolves via the parcel id.
+    expect(canConvertParcel(map, store, 4, 4, BuiltKind.Park)).toBe(true);
+    expect(convertParcel(map, store, 4, 4, BuiltKind.Park)).toBe(true);
+
+    for (let dy = 0; dy < 3; dy++) {
+      for (let dx = 0; dx < 3; dx++) {
+        expect(map.getBuilt(2 + dx, 2 + dy)).toBe(BuiltKind.Park); // kind swapped in built
+        expect(map.getParcel(2 + dx, 2 + dy)).toBe(idx + 1); // parcel-id layer unchanged
+      }
+    }
+    expect(store.kindAt(idx)).toBe(BuiltKind.Park); // kind swapped in store too
+    expect(store.conditionAt(idx)).toBe(255); // condition reset to pristine
+    expect(store.isAlive(idx)).toBe(true); // parcel stays alive
+    expect(checkParcelAgreement(map, store)).toEqual([]); // bidirectional sweep clean
+  });
+
+  it('converts to RewildedLand as well', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    const i = placeParcel(map, store, { x: 1, y: 1, width: 1, height: 1, kind: BuiltKind.ParkingLot });
+    expect(convertParcel(map, store, 1, 1, BuiltKind.RewildedLand)).toBe(true);
+    expect(map.getBuilt(1, 1)).toBe(BuiltKind.RewildedLand);
+    expect(store.kindAt(i)).toBe(BuiltKind.RewildedLand);
+    expect(checkParcelAgreement(map, store)).toEqual([]);
+  });
+
+  it('rejects an empty tile (writes nothing, returns false)', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    const snap = map.snapshot();
+    expect(canConvertParcel(map, store, 3, 3, BuiltKind.Park)).toBe(false);
+    expect(convertParcel(map, store, 3, 3, BuiltKind.Park)).toBe(false);
+    expect(map.snapshot()).toBe(snap);
+  });
+
+  it('rejects a transport tile', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    placeTransport(map, 2, 2, BuiltKind.RoadStreet);
+    expect(canConvertParcel(map, store, 2, 2, BuiltKind.Park)).toBe(false);
+    expect(convertParcel(map, store, 2, 2, BuiltKind.Park)).toBe(false);
+    expect(map.getBuilt(2, 2)).toBe(BuiltKind.RoadStreet);
+  });
+
+  it('rejects a non-REZONE target (writes nothing)', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    placeParcel(map, store, { x: 2, y: 2, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    expect(canConvertParcel(map, store, 2, 2, BuiltKind.Offices)).toBe(false);
+    expect(convertParcel(map, store, 2, 2, BuiltKind.Offices)).toBe(false);
+    expect(map.getBuilt(2, 2)).toBe(BuiltKind.HouseSingle);
+  });
+
+  it('rejects same-kind (Park → Park no-op)', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    placeParcel(map, store, { x: 2, y: 2, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    expect(convertParcel(map, store, 2, 2, BuiltKind.Park)).toBe(true); // first convert
+    expect(canConvertParcel(map, store, 2, 2, BuiltKind.Park)).toBe(false); // already Park
+    expect(convertParcel(map, store, 2, 2, BuiltKind.Park)).toBe(false);
+  });
+
+  it('rejects a dead (tombstoned) parcel even when a tile still references it', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    const i = placeParcel(map, store, { x: 2, y: 2, width: 1, height: 1, kind: BuiltKind.Projects });
+    expect(demolishParcel(map, store, i)).toBe(true);
+    // Hand-corruption: re-stamp the tile to reference the now-dead store entry.
+    map.setBuilt(2, 2, BuiltKind.Projects);
+    map.setParcel(2, 2, i + 1);
+    expect(canConvertParcel(map, store, 2, 2, BuiltKind.Park)).toBe(false);
+    expect(convertParcel(map, store, 2, 2, BuiltKind.Park)).toBe(false);
+    expect(map.getBuilt(2, 2)).toBe(BuiltKind.Projects); // unchanged
+  });
+
+  it('rejects out of bounds', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    expect(canConvertParcel(map, store, -1, 0, BuiltKind.Park)).toBe(false);
+    expect(convertParcel(map, store, 8, 8, BuiltKind.Park)).toBe(false);
+  });
+
+  it('hashWorld moves on a convert and is stable on a repeated (no-op) convert', () => {
+    const map = new GameMap(8, 8);
+    const store = new ParcelStore();
+    placeParcel(map, store, { x: 2, y: 2, width: 2, height: 2, kind: BuiltKind.HouseSingle });
+    const world = { map, parcels: store, seed: 'x', log: [] as string[] };
+    const before = hashWorld(world);
+    expect(convertParcel(map, store, 2, 2, BuiltKind.Park)).toBe(true);
+    const afterConvert = hashWorld(world);
+    expect(afterConvert).not.toBe(before); // kind 16→61 moves the hash
+    // Repeat (same-kind no-op writes nothing): hash unchanged.
+    expect(convertParcel(map, store, 2, 2, BuiltKind.Park)).toBe(false);
+    expect(hashWorld(world)).toBe(afterConvert);
+  });
+
+  it('is deterministic: the same convert sequence yields identical hashes', () => {
+    const build = () => {
+      const map = new GameMap(8, 8);
+      const store = new ParcelStore();
+      placeParcel(map, store, { x: 1, y: 1, width: 2, height: 2, kind: BuiltKind.Projects, condition: 30 });
+      convertParcel(map, store, 1, 1, BuiltKind.RewildedLand);
+      const world = { map, parcels: store, seed: 's', log: [] as string[] };
+      return hashWorld(world);
+    };
+    expect(build()).toBe(build());
+  });
+
+  it('ParcelStore.setKind swaps the stored kind', () => {
+    const store = new ParcelStore();
+    const i = store.add({ x: 0, y: 0, width: 1, height: 1, kind: BuiltKind.HouseSingle });
+    store.setKind(i, BuiltKind.Park);
+    expect(store.kindAt(i)).toBe(BuiltKind.Park);
   });
 });
 

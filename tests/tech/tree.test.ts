@@ -6,6 +6,7 @@ import {
   prereqClosure,
   type TechNode,
 } from '../../src/tech/tree';
+import { createTechState } from '../../src/tech/state';
 import { BuiltKind } from '../../src/engine/fabric';
 
 // Every node id that the design brief names. Doubles as a completeness check:
@@ -13,10 +14,10 @@ import { BuiltKind } from '../../src/engine/fabric';
 const DESIGN_BRIEF_IDS = [
   // NewUrbanism
   'walkable-streets', 'road-diets', 'parklets', 'quiet-streets',
-  'urban-promenades', 'streetcar-revival',
+  'urban-promenades', 'streetcar-revival', 'pocket-parks',
   // GreenDevelopment
   'soil-and-soul', 'urban-composting', 'community-gardens', 'vertical-farming',
-  'wastewater-recycling',
+  'wastewater-recycling', 'rewilding',
   // RestorativeJustice
   'circles', 'community-land-trust', 'healing-commons', 'participatory-budgeting',
   // IntentionalCommunities
@@ -38,8 +39,8 @@ function cap(id: string, prereqs: string[] = []): TechNode {
 }
 
 describe('TECH_TREE shape', () => {
-  it('has 34 nodes', () => {
-    expect(TECH_TREE.length).toBe(34);
+  it('has 36 nodes', () => {
+    expect(TECH_TREE.length).toBe(36);
   });
 
   it('contains exactly the design-brief node ids', () => {
@@ -81,6 +82,29 @@ describe('TECH_TREE shape', () => {
 describe('validateTree on the real tree', () => {
   it('reports no violations for TECH_TREE', () => {
     expect(validateTree(TECH_TREE)).toEqual([]);
+  });
+});
+
+describe('rezoning tech nodes (pocket-parks + rewilding)', () => {
+  it('grants Park after unlocking the pocket-parks chain (prereq parklets)', () => {
+    const tech = createTechState(TECH_TREE);
+    tech.effort = 1000;
+    for (const id of ['walkable-streets', 'road-diets', 'parklets', 'pocket-parks']) {
+      expect(tech.unlock(id), `unlock ${id}`).toBe(true);
+    }
+    expect(tech.grantedKinds().has(BuiltKind.Park)).toBe(true);
+  });
+
+  it('grants RewildedLand after unlocking the rewilding chain (prereq community-gardens)', () => {
+    const tech = createTechState(TECH_TREE);
+    tech.effort = 1000;
+    for (const id of [
+      'soil-and-soul', 'urban-composting', 'walkable-streets', 'road-diets',
+      'community-gardens', 'rewilding',
+    ]) {
+      expect(tech.unlock(id), `unlock ${id}`).toBe(true);
+    }
+    expect(tech.grantedKinds().has(BuiltKind.RewildedLand)).toBe(true);
   });
 });
 

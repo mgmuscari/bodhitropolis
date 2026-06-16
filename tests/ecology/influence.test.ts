@@ -6,6 +6,8 @@ import {
   ZERO_INFLUENCE,
   ECO_CADENCE,
   RADIUS,
+  UNSEALED_KINDS,
+  isUnsealed,
   type KindInfluence,
 } from '../../src/ecology/influence';
 
@@ -99,6 +101,40 @@ describe('influenceOf: road-diet fragmentation flag (pinned as data)', () => {
     for (const kind of NON_FRAGMENTING_TRANSIT) {
       expect(influenceOf(kind).fragmenting, `corridor ${kind} non-fragmenting`).toBe(false);
     }
+  });
+});
+
+describe('isUnsealed / UNSEALED_KINDS (depave exemption)', () => {
+  it('is true for the rezoning greens and false otherwise', () => {
+    expect(isUnsealed(BuiltKind.Park)).toBe(true);
+    expect(isUnsealed(BuiltKind.RewildedLand)).toBe(true);
+    expect(isUnsealed(BuiltKind.ParkingLot)).toBe(false);
+    expect(isUnsealed(BuiltKind.CommunityGarden)).toBe(false);
+    expect(isUnsealed(BuiltKind.None)).toBe(false);
+  });
+
+  it('UNSEALED_KINDS is exactly the two rezoning greens', () => {
+    expect(UNSEALED_KINDS.has(BuiltKind.Park)).toBe(true);
+    expect(UNSEALED_KINDS.has(BuiltKind.RewildedLand)).toBe(true);
+    expect(UNSEALED_KINDS.size).toBe(2);
+  });
+});
+
+describe('influenceOf: rezoning greens (Park / RewildedLand)', () => {
+  it('Park and RewildedLand are positive-soil, non-fragmenting boosts', () => {
+    for (const kind of [BuiltKind.Park, BuiltKind.RewildedLand]) {
+      const inf = influenceOf(kind);
+      expect(inf.soil, `green ${kind} soil > 0`).toBeGreaterThan(0);
+      expect(inf.flora, `green ${kind} flora > 0`).toBeGreaterThan(0);
+      expect(inf.fauna, `green ${kind} fauna > 0`).toBeGreaterThan(0);
+      expect(inf.fragmenting, `green ${kind} non-fragmenting`).toBe(false);
+    }
+  });
+
+  it('keeps soil below the CommunityGarden ceiling (< 6)', () => {
+    const garden = influenceOf(BuiltKind.CommunityGarden).soil;
+    expect(influenceOf(BuiltKind.Park).soil).toBeLessThan(garden);
+    expect(influenceOf(BuiltKind.RewildedLand).soil).toBeLessThan(garden);
   });
 });
 

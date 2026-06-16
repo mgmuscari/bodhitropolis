@@ -32,6 +32,21 @@ export interface KindInfluence {
 /** The neutral influence — what every off-table (neutral-by-default) kind feels. */
 export const ZERO_INFLUENCE: KindInfluence = { soil: 0, flora: 0, fauna: 0, fragmenting: false };
 
+/**
+ * Kinds whose tile, though parcel-covered, is NOT sealed pavement: the rezoning
+ * greens (Park, RewildedLand) are depaved land, so the ecology tick must exempt
+ * them from the parcel-cover soil cap (see {@link isUnsealed} use in tick.ts).
+ * Lives here — keyed on kind exactly like {@link influenceOf} — so the read-only
+ * tick gains no new import direction (it already imports from this module).
+ */
+export const UNSEALED_KINDS: ReadonlySet<BuiltKind> = new Set<BuiltKind>([
+  BuiltKind.Park,
+  BuiltKind.RewildedLand,
+]);
+
+/** True iff `kind` is a depaved green (parcel-covered but unsealed — soil heals). */
+export const isUnsealed = (k: number): boolean => UNSEALED_KINDS.has(k as BuiltKind);
+
 /** Ecology runs once every ECO_CADENCE sim ticks (main.ts gates `tick % ECO_CADENCE`). */
 export const ECO_CADENCE = 10;
 /** Influence scatter radius: a built tile affects the (2*RADIUS+1)² box around it. */
@@ -61,6 +76,11 @@ export const INFLUENCE: ReadonlyMap<BuiltKind, KindInfluence> = new Map<BuiltKin
   [BuiltKind.QuietStreet, { soil: 1, flora: 1, fauna: 1, fragmenting: false }],
   [BuiltKind.Promenade, { soil: 1, flora: 1, fauna: 1, fragmenting: false }],
   [BuiltKind.BikePath, { soil: 1, flora: 1, fauna: 1, fragmenting: false }],
+  // Rezoning greens — depaved, soil-healing land. Soil must stay < 6 (the
+  // CommunityGarden-strongest ceiling, pinned by influence.test.ts); RewildedLand
+  // is the stronger soil (still < garden). Magnitudes placeholder; signs the contract.
+  [BuiltKind.Park, { soil: 2, flora: 2, fauna: 1, fragmenting: false }],
+  [BuiltKind.RewildedLand, { soil: 3, flora: 2, fauna: 2, fragmenting: false }],
   // Suppressors
   [BuiltKind.RoadHighway, { soil: -5, flora: -4, fauna: -3, fragmenting: true }],
   [BuiltKind.RoadAvenue, { soil: -3, flora: -2, fauna: -2, fragmenting: true }],

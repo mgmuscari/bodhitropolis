@@ -20,7 +20,7 @@
 
 import { GameMap, Water } from '../engine/map';
 import { isTransportKind } from '../engine/fabric';
-import { influenceOf, RADIUS } from './influence';
+import { influenceOf, isUnsealed, RADIUS } from './influence';
 
 const BASE_RECOVERY = 1; // soil heals toward 255 each tick on open land
 const PAVED_CAP = 40; // soil ceiling on sealed tiles (paved / built / water)
@@ -103,8 +103,15 @@ export function ecologyTick(map: GameMap): void {
   }
 
   // --- Soil: recover toward health, plus influence; sealed tiles cap at PAVED_CAP.
+  // A parcel-covered tile is sealed UNLESS it holds a depaved green (Park /
+  // RewildedLand) — the rezoning payoff: a converted park has parcel != 0 but its
+  // soil must heal past the cap, so isUnsealed exempts it. Reads kind only; the
+  // write set (the 3 ecology layers) is unchanged, so layer isolation holds.
   for (let i = 0; i < n; i++) {
-    const sealed = water[i] !== Water.None || isTransportKind(built[i]!) || parcel[i] !== 0;
+    const sealed =
+      water[i] !== Water.None ||
+      isTransportKind(built[i]!) ||
+      (parcel[i] !== 0 && !isUnsealed(built[i]!));
     let v = clampByte(soil[i]! + BASE_RECOVERY + next.soilInf[i]!);
     if (sealed && v > PAVED_CAP) v = PAVED_CAP;
     next.soil[i] = v;
