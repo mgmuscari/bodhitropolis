@@ -18,7 +18,8 @@ import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
-import { createAmbientState, stepAmbient, ingestTrips } from './ui/ambientContent';
+import { createAmbientState, stepAmbient, ingestTrips, setParkedAnchors } from './ui/ambientContent';
+import { parkingLots, parkingStalls, lotOccupancy } from './ui/parkingContent';
 import { attachInput } from './ui/input';
 import { statLines, eraHeadline, challengeText, ecologyStatLine } from './ui/openingContent';
 import { overlayTint, legendLine, type OverlayView } from './ui/ecoOverlayContent';
@@ -117,6 +118,20 @@ export function main(): void {
   const ambientState = createAmbientState();
   const ambientRng = createRng(seed).fork('ambient');
   let lastAmbient = performance.now();
+
+  // The occupied parked-car stalls (matching what the renderer draws) that last-mile
+  // pedestrians walk to/from. Recomputed at startup and on each civic tick so it tracks
+  // the slowly-changing built layer as zones grow/decline.
+  const refreshParkedAnchors = (): void => {
+    const anchors: Array<{ x: number; y: number }> = [];
+    for (const lot of parkingLots(world.map)) {
+      const occ = lotOccupancy(world.map, lot);
+      const stalls = parkingStalls(lot);
+      for (let i = 0; i < occ; i++) anchors.push(stalls[i]!);
+    }
+    setParkedAnchors(ambientState, anchors);
+  };
+  refreshParkedAnchors();
 
   // Dev / live-pass affordance: a small global to drive the camera and inspect live
   // state from outside the input layer (e.g. screenshot tooling that needs to focus a
@@ -482,6 +497,7 @@ export function main(): void {
       const wb = wellbeingNow();
       pulseDock.set(pulseLine(wb, prevWellbeing));
       prevWellbeing = wb;
+      refreshParkedAnchors(); // density may have shifted → re-anchor the last-mile peds
     }
   });
   let last = performance.now();

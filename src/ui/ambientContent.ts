@@ -20,6 +20,7 @@
 
 import type { GameMap } from '../engine/map';
 import { BuiltKind, isRoadKind } from '../engine/fabric';
+import { ZoneType, zoneTypeOf } from '../engine/zone';
 import type { Rng } from '../engine/rng';
 
 /** Maximum elapsed time honoured in a single stepAmbient call, mirroring
@@ -43,6 +44,15 @@ const SAMPLES_PER_SUBSTEP = 8;
 // Float tiles travelled per 50ms substep. Cars are quicker than pedestrians.
 const CAR_SPEED = 0.12;
 const PED_SPEED = 0.05;
+
+/** Chebyshev radius searched around a parked car for the building a last-mile ped walks
+ *  to/from. Lots sit next to the demand they serve, so this stays small. */
+const LASTMILE_RADIUS = 4;
+
+/** Per-substep probability of spawning one last-mile pedestrian (when anchors exist). A
+ *  walker lives ~the few seconds it takes to cross LASTMILE_RADIUS tiles at PED_SPEED, so
+ *  a modest rate keeps a steady, non-crowding trickle to/from the parked cars. */
+const LASTMILE_SPAWN_CHANCE = 0.3;
 
 /** How strongly a car prefers to continue straight through a junction vs. turn (the
  *  weight of the straight-ahead option against each side option). High enough that
@@ -109,6 +119,11 @@ export interface Mover {
   path?: readonly number[];
   /** Cursor into `path`: the index of the NEXT tile to commit to. */
   leg?: number;
+  /** Straight-line walk target (float world coords) — set for LAST-MILE pedestrians who
+   *  walk between a parked car and a nearby building. A ped with `walkTo` lerps straight
+   *  toward it (ignoring the road/ped grid, so it can cross a lot or road), despawns on
+   *  arrival, and is exempt from the ped-substrate despawn. */
+  walkTo?: { x: number; y: number };
 }
 
 export type Car = Mover;
@@ -134,10 +149,25 @@ export interface AmbientState {
   birds: Flock[];
   /** Leftover sub-substep time carried between stepAmbient calls. */
   accMs: number;
+  /** Parked-car positions (float world coords) the last-mile pedestrians walk to/from —
+   *  the occupied stalls the renderer draws (see parkingContent). Renderer-side, set by
+   *  the host via setParkedAnchors; never part of the world hash. Undefined/empty ⇒ no
+   *  last-mile peds (and zero rng drawn for them, so determinism is unchanged). */
+  parkedAnchors?: ReadonlyArray<{ x: number; y: number }>;
 }
 
 export function createAmbientState(): AmbientState {
   return { cars: [], peds: [], birds: [], accMs: 0 };
+}
+
+/** Publish the occupied parked-car stalls (float world coords) that last-mile pedestrians
+ *  walk to/from. The host (main.ts) computes these from the parking lots + occupancy so
+ *  the walkers line up with the parked cars the renderer draws. */
+export function setParkedAnchors(
+  state: AmbientState,
+  anchors: ReadonlyArray<{ x: number; y: number }>,
+): void {
+  state.parkedAnchors = anchors;
 }
 
 // --- Pure decision helpers (unit-test seams) -----------------------------
@@ -478,6 +508,42 @@ function advanceMover(
   return true;
 }
 
+/** Advance one last-mile pedestrian straight toward its `walkTo` target by `speed`,
+ *  off-grid (it may cross a lot or road). Returns false on arrival so the caller despawns
+ *  it. Direction is normalized with sqrt (no trig — allowlist-safe); `dir` is set to the
+ *  dominant cardinal so any heading-based draw stays sane. */
+function advanceWalk(p: Mover, speed: number): boolean {
+  const dx = p.walkTo!.x - p.x;
+  const dy = p.walkTo!.y - p.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist <= speed) return false; // arrived → despawn
+  p.x += (dx / dist) * speed;
+  p.y += (dy / dist) * speed;
+  p.dir = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 1 : 3) : dy >= 0 ? 2 : 0;
+  return true;
+}
+
+/** The nearest demand tile (R/C/I/Civic via zoneTypeOf — a place a person walks to/from)
+ *  within LASTMILE_RADIUS of (cx, cy), by Manhattan distance; null if none. */
+function nearestDemandTile(map: GameMap, cx: number, cy: number): { x: number; y: number } | null {
+  let bx = -1;
+  let by = -1;
+  let bestD = 1e9;
+  for (let y = cy - LASTMILE_RADIUS; y <= cy + LASTMILE_RADIUS; y++) {
+    for (let x = cx - LASTMILE_RADIUS; x <= cx + LASTMILE_RADIUS; x++) {
+      if (!map.inBounds(x, y)) continue;
+      if (zoneTypeOf(map.built[map.idx(x, y)]!) === ZoneType.None) continue;
+      const d = Math.abs(x - cx) + Math.abs(y - cy);
+      if (d < bestD) {
+        bestD = d;
+        bx = x;
+        by = y;
+      }
+    }
+  }
+  return bx < 0 ? null : { x: bx, y: by };
+}
+
 /** Advance one flock by one boids substep (cohesion + alignment + separation). */
 function advanceFlock(f: Flock): void {
   const n = f.birds.length;
@@ -584,6 +650,27 @@ function spawnPeds(state: AmbientState, map: GameMap, rng: Rng): void {
   }
 }
 
+/** Spawn last-mile pedestrians who walk between a parked car and a nearby building. Picks
+ *  a random occupied stall (a parkedAnchor), finds the nearest demand tile, and adds one
+ *  walker — half walking FROM the car to the building, half TO the car (so the lot reads
+ *  as actively used). No-op (and zero rng) when no anchors exist, preserving determinism
+ *  for worlds that never publish them. */
+function spawnLastMilePeds(state: AmbientState, map: GameMap, rng: Rng): void {
+  const anchors = state.parkedAnchors;
+  if (!anchors || anchors.length === 0) return; // checked BEFORE any draw → rng untouched
+  if (state.peds.length >= PED_CAP) return;
+  if (!rng.chance(LASTMILE_SPAWN_CHANCE)) return;
+  const a = anchors[rng.nextInt(anchors.length)]!;
+  const b = nearestDemandTile(map, Math.round(a.x), Math.round(a.y));
+  if (!b) return;
+  const fromCar = rng.chance(0.5);
+  const car = { x: a.x, y: a.y };
+  const door = { x: b.x + 0.5, y: b.y + 0.5 };
+  const start = fromCar ? car : door;
+  const end = fromCar ? door : car;
+  state.peds.push({ x: start.x, y: start.y, dir: 0, tx: start.x, ty: start.y, walkTo: end });
+}
+
 function spawnFlocks(state: AmbientState, map: GameMap, rng: Rng): void {
   for (let s = 0; s < SAMPLES_PER_SUBSTEP; s++) {
     if (state.birds.length >= FLOCK_CAP) return;
@@ -606,9 +693,11 @@ function spawnFlocks(state: AmbientState, map: GameMap, rng: Rng): void {
 // --- The substep + the public stepper ------------------------------------
 
 function substep(state: AmbientState, map: GameMap, rng: Rng): void {
-  // 1. Despawn anything whose substrate vanished (read-only self-healing).
+  // 1. Despawn anything whose substrate vanished (read-only self-healing). Last-mile
+  //    walkers (walkTo set) are exempt — they cross lots/roads off-grid and self-despawn
+  //    on arrival, so the substrate test would wrongly kill them mid-walk.
   state.cars = state.cars.filter((c) => !carOffNetwork(map, c));
-  state.peds = state.peds.filter((p) => !pedOffNetwork(map, p));
+  state.peds = state.peds.filter((p) => p.walkTo !== undefined || !pedOffNetwork(map, p));
   for (const f of state.birds) {
     const t = flockTile(map, f);
     if (!birdSpawnAt(map, t.x, t.y)) f.birds.pop();
@@ -617,7 +706,9 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
 
   // 2. Spawn peds/flocks map-wide up to the caps. Cars are NOT spawned here — they are
   //    the sim's O-D trips, ingested via ingestTrips on the traffic cadence (cars=trips).
+  //    Last-mile walkers spawn from the published parked-car anchors (no-op without them).
   spawnPeds(state, map, rng);
+  spawnLastMilePeds(state, map, rng);
   spawnFlocks(state, map, rng);
 
   // 3. Move. A trip-car follows its committed path (pathStep) and despawns on arrival;
@@ -634,7 +725,9 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     ),
   );
   state.peds = state.peds.filter((p) =>
-    advanceMover(p, PED_SPEED, map, (x, y, fromDir) => nextPedStep(map, x, y, fromDir, rng)),
+    p.walkTo !== undefined
+      ? advanceWalk(p, PED_SPEED)
+      : advanceMover(p, PED_SPEED, map, (x, y, fromDir) => nextPedStep(map, x, y, fromDir, rng)),
   );
   for (const f of state.birds) advanceFlock(f);
 }
