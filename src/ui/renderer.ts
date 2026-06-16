@@ -43,7 +43,7 @@ const W = 8;
 
 // Muted-but-distinct paints for parked cars, so rows of cars read against the dark
 // parking pavement. Picked deterministically per (lot, stall) — no rng.
-const PARKED_CAR_COLORS = ['#a8483c', '#3f6e86', '#cfc8b4', '#5a7d4e', '#9a8466', '#46424e'] as const;
+const CAR_COLORS = ['#a8483c', '#3f6e86', '#cfc8b4', '#5a7d4e', '#9a8466', '#46424e'] as const;
 
 // How many tiles a power-line wire segment spans from a pole. Matches the pole
 // spacing in decoration.ts so each pole's wire reaches the next pole, reading as a
@@ -617,23 +617,21 @@ export class Renderer {
     const onScreen = (sx: number, sy: number): boolean =>
       sx > -ts && sx < w + ts && sy > -ts && sy < h + ts;
 
-    // Cars. A MOVING car is a small dark rect drawn to the right of its heading (laneOffset)
-    // so opposing traffic rides opposite sides of a road. A PARKED car sits on its stall
-    // (no lane offset) in a muted-but-distinct colour per stall so the filled lots read
-    // against the dark pavement — these are the same trip-cars, now stored in the lot.
+    // Cars carry their own colour (c.tint), shown the same moving and parked. A MOVING car
+    // is drawn to the right of its heading (laneOffset) so opposing traffic rides opposite
+    // sides of a road; a PARKED car sits centred on its stall. Same trip-car, same colour.
     const carSize = Math.max(2, ts * 0.34);
     const parkedSize = Math.max(2, ts * 0.3);
     for (const c of ambient.cars) {
+      ctx.fillStyle = CAR_COLORS[(c.tint ?? 0) % CAR_COLORS.length]!;
       if (c.parked) {
         const { sx, sy } = camera.worldToScreen(c.x + 0.5, c.y + 0.5);
         if (!onScreen(sx, sy)) continue;
-        ctx.fillStyle = PARKED_CAR_COLORS[(c.lotIdx! * 3 + c.stallIdx!) % PARKED_CAR_COLORS.length]!;
         ctx.fillRect(Math.floor(sx - parkedSize / 2), Math.floor(sy - parkedSize / 2), parkedSize, parkedSize);
       } else {
         const lane = laneOffset(c.dir);
         const { sx, sy } = camera.worldToScreen(c.x + 0.5 + lane.dx, c.y + 0.5 + lane.dy);
         if (!onScreen(sx, sy)) continue;
-        ctx.fillStyle = '#19151f';
         ctx.fillRect(sx - carSize / 2, sy - carSize / 2, carSize, carSize);
       }
     }
