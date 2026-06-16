@@ -41,13 +41,16 @@ const TRUST_DECAY = 1; // trust lost per tick without one (slow)
 export const TRUST_FLOOR = 40;
 const RECENT_WINDOW = 100; // a repair counts as "recent" within this many ticks
 
-// Gathering places: a belonging bonus when ≥1 sits inside the neighborhood.
+// Gathering places: a belonging bonus when ≥1 sits inside the neighborhood. Park
+// is a gathering place (a green commons where the neighborhood meets), so a
+// gathering→Park rezone keeps the bonus — RewildedLand stays OUT (wild, not social).
 const GATHERING_KINDS = new Set<number>([
   BuiltKind.Bazaar,
   BuiltKind.MakerSpace,
   BuiltKind.HealingCommons,
   BuiltKind.CommunityGarden,
   BuiltKind.Civic,
+  BuiltKind.Park,
 ]);
 
 const DIRS: ReadonlyArray<readonly [number, number]> = [

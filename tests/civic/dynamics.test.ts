@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { GameMap } from '../../src/engine/map';
-import { ParcelStore, BuiltKind, placeParcel, placeTransport } from '../../src/engine/fabric';
+import { ParcelStore, BuiltKind, placeParcel, placeTransport, convertParcel } from '../../src/engine/fabric';
 import { computeNeighborhoods } from '../../src/civic/neighborhoods';
 import { createCivicState, SEED_VOICE } from '../../src/civic/state';
 import { civicTick, TRUST_FLOOR, type CivicCaps } from '../../src/civic/dynamics';
@@ -40,6 +40,42 @@ describe('civicTick: belonging', () => {
     const before = civic.getValues(1).belonging;
     civicTick(map, parcels, partition, civic, NO_CAPS, 10);
     expect(civic.getValues(1).belonging).toBeLessThan(before); // Moses isolation, mechanical
+  });
+});
+
+describe('civicTick: gathering places (Park is one, RewildedLand is not)', () => {
+  it('a Park gives the gathering belonging bonus; RewildedLand does not', () => {
+    const park = oneParcel(BuiltKind.Park, 10); // gathering, low cond, eco 0
+    const pPart = computeNeighborhoods(park.map);
+    const pCivic = createCivicState(pPart);
+    const pBefore = pCivic.getValues(1).belonging;
+    civicTick(park.map, park.parcels, pPart, pCivic, NO_CAPS, 10);
+    expect(pCivic.getValues(1).belonging).toBeGreaterThan(pBefore); // Park is a gathering place
+
+    const wild = oneParcel(BuiltKind.RewildedLand, 10); // wild, not social
+    const wPart = computeNeighborhoods(wild.map);
+    const wCivic = createCivicState(wPart);
+    const wBefore = wCivic.getValues(1).belonging;
+    civicTick(wild.map, wild.parcels, wPart, wCivic, NO_CAPS, 10);
+    expect(wCivic.getValues(1).belonging).toBe(wBefore); // no gathering bonus — flat
+  });
+
+  it('a CommunityGarden→Park rezone is belonging-neutral (gathering bonus preserved)', () => {
+    // Hold condition at 255 so convertParcel's condition reset is a no-op and the
+    // test isolates the gathering bonus: both are gathering kinds, so belonging must
+    // land identically (Park ∈ GATHERING_KINDS, exactly like the CommunityGarden).
+    const garden = oneParcel(BuiltKind.CommunityGarden, 255);
+    const gPart = computeNeighborhoods(garden.map);
+    const gCivic = createCivicState(gPart);
+    civicTick(garden.map, garden.parcels, gPart, gCivic, NO_CAPS, 10);
+    const gardenBelonging = gCivic.getValues(1).belonging;
+
+    const park = oneParcel(BuiltKind.CommunityGarden, 255);
+    expect(convertParcel(park.map, park.parcels, 2, 2, BuiltKind.Park)).toBe(true);
+    const pPart = computeNeighborhoods(park.map);
+    const pCivic = createCivicState(pPart);
+    civicTick(park.map, park.parcels, pPart, pCivic, NO_CAPS, 10);
+    expect(pCivic.getValues(1).belonging).toBe(gardenBelonging); // gathering preserved → neutral
   });
 });
 
