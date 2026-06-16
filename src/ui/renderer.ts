@@ -704,6 +704,7 @@ export class Renderer {
     ctx.fillStyle = '#efe6d2';
     const pedSize = Math.max(1, ts * 0.16);
     for (const p of ambient.peds) {
+      if (p.phase === 'inside') continue; // the citizen is inside the building, not on the street
       let ox = 0.5;
       let oy = 0.5;
       if (isRoadKind(world.map.built[world.map.idx(Math.round(p.x), Math.round(p.y))]!)) {
