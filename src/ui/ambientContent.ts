@@ -54,6 +54,11 @@ const CAR_MAX_WEIGHT = 3;
  *  ~1/10. Live-pass tunable. Peds keep uniform choice (weight 1). */
 const CAR_STRAIGHT_WEIGHT = 8;
 
+/** How many recently-visited tiles a car remembers for loop avoidance. Big enough to
+ *  span the perimeter of a small block (a 2x2 ring is 4, a 3x3 ring is 8), so a car
+ *  that has been all the way round is boxed in and despawns rather than circling. */
+const RECENT_CAP = 8;
+
 /** Minimum faunaPresence (0..255) for a bird flock to consider a tile. */
 const FAUNA_THRESHOLD = 96;
 
@@ -97,6 +102,10 @@ export interface Mover {
   /** Committed target tile (integer tile coords) — the end of the current leg. */
   tx: number;
   ty: number;
+  /** Recently-visited tile indices (bounded, oldest-first) for loop avoidance. A car
+   *  prefers a neighbour NOT in this list; if boxed in (all options recent) it
+   *  despawns instead of circling. Lazily created on first recommit. */
+  recent?: number[];
 }
 
 export type Car = Mover;
@@ -269,9 +278,15 @@ export function birdSpawnAt(map: GameMap, x: number, y: number): boolean {
  *  current heading (the direction opposite the U-turn): with N ways open, the
  *  straight option weighs `straightWeight` against 1 for each turn. Cars pass a high
  *  weight so they run a road block and cross junctions instead of looping small
- *  blocks (Maddy playtest); peds keep the uniform default. Determinism note: the
- *  single-option and uniform paths consume the rng exactly as before, so junction-
- *  free maps (e.g. the spawn-ratio characterization) are byte-identical. */
+ *  blocks (Maddy playtest); peds keep the uniform default.
+ *
+ *  `recent` (tile indices recently occupied) drives loop avoidance: options leading to
+ *  a recently-visited tile are dropped UNLESS that would leave nothing, in which case
+ *  the mover is boxed in by its own path and the step returns -1 (the caller despawns
+ *  it rather than letting it circle). A dead-end U-turn is still taken (it is the
+ *  `options.length === 0` path, before avoidance). Determinism note: the dead-end and
+ *  single-fresh-option paths consume the rng exactly as before, so junction-free maps
+ *  are byte-identical when `recent` never prunes. */
 function pickStep(
   map: GameMap,
   x: number,
@@ -280,6 +295,7 @@ function pickStep(
   rng: Rng,
   passable: (nx: number, ny: number) => boolean,
   straightWeight = 1,
+  recent?: readonly number[],
 ): number {
   const options: number[] = [];
   let uTurn = -1;
@@ -295,23 +311,31 @@ function pickStep(
     options.push(d);
   }
   if (options.length === 0) return uTurn; // dead-end (or -1 if truly isolated)
+  // Loop avoidance: prefer options that do not revisit a recent tile. If every option
+  // is recent, the mover is boxed in by its own path → -1 (caller despawns it).
+  let pool = options;
+  if (recent && recent.length > 0) {
+    const fresh = options.filter((d) => !recent.includes(map.idx(x + DIR_DX[d]!, y + DIR_DY[d]!)));
+    if (fresh.length === 0) return -1;
+    pool = fresh;
+  }
   // Uniform choice when there's nothing to bias toward: a single option, no weight,
   // or no incoming heading (fromDir < 0, i.e. spawn) — at spawn there is no "straight"
   // to prefer, and keeping the uniform draw makes spawn rng-identical to before.
-  if (options.length === 1 || straightWeight <= 1 || fromDir < 0) {
-    return options[rng.nextInt(options.length)]!;
+  if (pool.length === 1 || straightWeight <= 1 || fromDir < 0) {
+    return pool[rng.nextInt(pool.length)]!;
   }
   // Weighted junction choice: the straight-ahead direction (opposite the U-turn)
   // outweighs each turn by `straightWeight`, so traffic flows through the corridor.
   const straight = opposite(fromDir);
   let total = 0;
-  for (const d of options) total += d === straight ? straightWeight : 1;
+  for (const d of pool) total += d === straight ? straightWeight : 1;
   let r = rng.nextInt(total);
-  for (const d of options) {
+  for (const d of pool) {
     r -= d === straight ? straightWeight : 1;
     if (r < 0) return d;
   }
-  return options[options.length - 1]!; // unreachable: r < total
+  return pool[pool.length - 1]!; // unreachable: r < total
 }
 
 /** Routing on a divided multi-lane road's outer lane: travel the one-way `dir`; turn
@@ -354,14 +378,22 @@ function carPassable(map: GameMap, x: number, y: number): boolean {
  * the one-way `freewayStep` (independent of `fromDir`, including spawn); otherwise it
  * is the general straight-biased junction pick over `carPassable` neighbours (never a
  * median), excluding the U-turn `fromDir` unless it is the only connected road
- * (dead-end). -1 if (x, y) has no road neighbour at all. Deterministic given `rng`.
+ * (dead-end), and avoiding tiles in `recent` (loop avoidance — returns -1 if boxed in
+ * by its own path). -1 if (x, y) has no road neighbour at all. Deterministic given `rng`.
  */
-export function nextRoadStep(map: GameMap, x: number, y: number, fromDir: number, rng: Rng): number {
+export function nextRoadStep(
+  map: GameMap,
+  x: number,
+  y: number,
+  fromDir: number,
+  rng: Rng,
+  recent?: readonly number[],
+): number {
   const lane = freewayLane(map, x, y);
   if (lane && lane.role === 'outer') {
-    return freewayStep(map, x, y, lane, rng);
+    return freewayStep(map, x, y, lane, rng); // one-way: cannot loop, no avoidance needed
   }
-  return pickStep(map, x, y, fromDir, rng, (nx, ny) => carPassable(map, nx, ny), CAR_STRAIGHT_WEIGHT);
+  return pickStep(map, x, y, fromDir, rng, (nx, ny) => carPassable(map, nx, ny), CAR_STRAIGHT_WEIGHT, recent);
 }
 
 /** The pedestrian motion seam: the same junction rule over ped substrate. */
@@ -401,20 +433,27 @@ function flockTile(map: GameMap, f: Flock): { x: number; y: number } {
 // --- Motion --------------------------------------------------------------
 
 /** Advance one grid-following mover by `speed`, recommitting at the target tile.
- *  The map/rng are captured by `pickNext` (the per-kind junction seam). */
+ *  `map`/`rng` are captured by `pickNext` (the per-kind junction seam); the mover's
+ *  bounded `recent` history is updated on arrival and passed to `pickNext` for loop
+ *  avoidance. Returns false when the mover is boxed in / isolated (pickNext < 0) so the
+ *  caller despawns it instead of leaving it frozen or circling; true otherwise. */
 function advanceMover(
   m: Mover,
   speed: number,
-  pickNext: (x: number, y: number, fromDir: number) => number,
-): void {
+  map: GameMap,
+  pickNext: (x: number, y: number, fromDir: number, recent: readonly number[]) => number,
+): boolean {
   const dist = Math.abs(m.tx - m.x) + Math.abs(m.ty - m.y);
   if (dist <= speed) {
-    // Arrive at the target tile centre and recommit to the next leg.
+    // Arrive at the target tile centre, record it, and recommit to the next leg.
     m.x = m.tx;
     m.y = m.ty;
+    const recent = (m.recent ??= []);
+    recent.push(map.idx(m.tx, m.ty));
+    if (recent.length > RECENT_CAP) recent.shift();
     const fromDir = opposite(m.dir);
-    const nd = pickNext(m.tx, m.ty, fromDir);
-    if (nd < 0) return; // isolated tile — stay put (despawn handles off-network)
+    const nd = pickNext(m.tx, m.ty, fromDir, recent);
+    if (nd < 0) return false; // isolated, or boxed in by its own path → despawn
     m.dir = nd;
     m.tx = m.x + DIR_DX[nd]!;
     m.ty = m.y + DIR_DY[nd]!;
@@ -422,6 +461,7 @@ function advanceMover(
     m.x += DIR_DX[m.dir]! * speed;
     m.y += DIR_DY[m.dir]! * speed;
   }
+  return true;
 }
 
 /** Advance one flock by one boids substep (cohesion + alignment + separation). */
@@ -537,13 +577,14 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   spawnPeds(state, map, rng);
   spawnFlocks(state, map, rng);
 
-  // 3. Move. Cars/peds follow the grid; flocks flock.
-  for (const c of state.cars) {
-    advanceMover(c, CAR_SPEED, (x, y, fromDir) => nextRoadStep(map, x, y, fromDir, rng));
-  }
-  for (const p of state.peds) {
-    advanceMover(p, PED_SPEED, (x, y, fromDir) => nextPedStep(map, x, y, fromDir, rng));
-  }
+  // 3. Move. Cars/peds follow the grid; flocks flock. A mover boxed in by its own
+  //    recent path (or isolated) despawns here rather than circling/freezing.
+  state.cars = state.cars.filter((c) =>
+    advanceMover(c, CAR_SPEED, map, (x, y, fromDir, recent) => nextRoadStep(map, x, y, fromDir, rng, recent)),
+  );
+  state.peds = state.peds.filter((p) =>
+    advanceMover(p, PED_SPEED, map, (x, y, fromDir) => nextPedStep(map, x, y, fromDir, rng)),
+  );
   for (const f of state.birds) advanceFlock(f);
 }
 
