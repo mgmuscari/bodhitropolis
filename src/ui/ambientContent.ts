@@ -1088,6 +1088,42 @@ function depositVisit(
   depositHealth(state, homeTile, visitValue(map.built[map.idx(plot.x, plot.y)]!) - penalty);
 }
 
+/** A walk citizen whose trip can't complete (its destination is unreachable, OR the way home is
+ *  blocked too) isn't annihilated in the field: the household persists, so the citizen RESPAWNS at
+ *  home — snapped to a walkable spot beside its home plot, trip state cleared so it rejoins the
+ *  neighbourhood — and the home takes the FAILED_TRIP_PENALTY for the wasted trip. A bound or
+ *  homeless ped (no `homeTile`) has nowhere to respawn, so it despawns (its car releases on its own
+ *  timeout). Returns true if it respawned (keep the sprite), false if it should despawn. */
+function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
+  if (p.homeTile === undefined) return false;
+  depositHealth(state, p.homeTile, -FAILED_TRIP_PENALTY);
+  const hx = p.homeTile % map.width;
+  const hy = (p.homeTile - hx) / map.width;
+  let sx = hx;
+  let sy = hy;
+  for (let d = 0; d < 4; d++) {
+    const nx = hx + DIR_DX[d]!;
+    const ny = hy + DIR_DY[d]!;
+    if (isWalkable(map, nx, ny)) {
+      sx = nx; // stand just outside the home plot (the plot tile itself isn't walkable)
+      sy = ny;
+      break;
+    }
+  }
+  p.x = sx;
+  p.y = sy;
+  p.tx = sx;
+  p.ty = sy;
+  p.walkTo = undefined;
+  p.phase = undefined;
+  p.building = undefined;
+  p.carId = undefined;
+  p.fuel = undefined;
+  p.recent = undefined;
+  p.roadSteps = undefined;
+  return true;
+}
+
 function spawnFlocks(state: AmbientState, map: GameMap, rng: Rng): void {
   for (let s = 0; s < SAMPLES_PER_SUBSTEP; s++) {
     if (state.birds.length >= FLOCK_CAP) return;
@@ -1196,8 +1232,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
           depositHealth(state, p.homeTile, -GIVE_UP_PENALTY);
           return true;
         }
-        if (p.homeTile !== undefined) depositHealth(state, p.homeTile, -FAILED_TRIP_PENALTY);
-        return false; // couldn't even get home (or a bound/homeless ped) → a lost resident
+        return respawnAtHome(state, p, map); // couldn't even get home → respawn there (or despawn if homeless)
       }
       const moving = advanceMover(p, PED_SPEED, map, (x, y, _fromDir, recent) =>
         nextStepToward(map, x, y, tgtx, tgty, recent),
@@ -1206,10 +1241,10 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       // advanceMover stopped: arrived (within a tile of the target) or boxed in.
       const arrived = Math.abs(Math.round(p.x) - tgtx) + Math.abs(Math.round(p.y) - tgty) <= 1;
       if (!arrived) {
-        // pathing went nowhere (e.g. dead-ended at a freeway) — the citizen gives up; their home
-        // loses wellbeing for the lost trip. (A bound car releases on its safety timeout.)
-        if (p.homeTile !== undefined) depositHealth(state, p.homeTile, -FAILED_TRIP_PENALTY);
-        return false;
+        // pathing went nowhere (e.g. boxed in, or dead-ended at a freeway) — the citizen gives up.
+        // A homed citizen respawns at home (the household persists) and home loses wellbeing for the
+        // lost trip; a bound/homeless ped despawns (a bound car releases on its safety timeout).
+        return respawnAtHome(state, p, map);
       }
       if (p.phase === 'to-building') {
         p.phase = 'inside';
