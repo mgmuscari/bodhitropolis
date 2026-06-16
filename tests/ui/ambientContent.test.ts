@@ -643,6 +643,7 @@ describe('ambient stream isolation (AC#7 pin b)', () => {
         tech: createTechState(TECH_TREE),
         civic: createCivicState(partition),
         partition,
+        seed: 'iso',
       };
       const state = createAmbientState();
       const arng = ambientFork('iso');

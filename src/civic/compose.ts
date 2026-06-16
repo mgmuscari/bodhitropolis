@@ -5,25 +5,32 @@
 // `deps` for rendering — the cadence logic and the eco/civic caches live here,
 // not in the shell, so the composite is headless-testable (N-tick double-run).
 //
-// Pure module: no DOM, no rng, no transcendental Math (the architecture guard
-// scans src/civic). Sanctioned dependency direction: civic → engine, civic →
-// ecology (ecologyTick + ecologyReport), civic → tech (accrue). NO worldgen edge
-// — `world` is typed STRUCTURALLY as {map, parcels}, so civic flood-fills the
-// engine GameMap and never reaches into worldgen fields (the guard asserts both
-// the no-worldgen and the no-reverse-import directions).
+// Headless + transcendental-Math-free (the architecture guard scans src/civic). The
+// traffic/growth layers are the FIRST sim layers needing randomness, so this orchestrator
+// uses the SEEDED rng (createRng/fork — integer sfc32, allowed by the guard), forked
+// per-tick-stamped so each tick's stream is independent of every other and of draw count.
+// Sanctioned dependency direction: civic → engine, ecology, tech, traffic (the composite
+// wires them; traffic never imports back). NO worldgen edge — `world` is typed
+// STRUCTURALLY as {map, parcels}.
 
 import type { GameMap } from '../engine/map';
 import type { ParcelStore } from '../engine/fabric';
+import { createRng } from '../engine/rng';
 import { accrue } from '../tech/effort';
 import type { TechState } from '../tech/state';
 import { ECO_CADENCE } from '../ecology/influence';
 import { ecologyTick } from '../ecology/tick';
 import { ecologyReport } from '../ecology/report';
+import { decayTraffic } from '../traffic/density';
+import { generateTraffic } from '../traffic/generate';
+import type { Trip } from '../traffic/trip';
 import { computeNeighborhoods, type NeighborhoodMap } from './neighborhoods';
 import type { CivicState } from './state';
 import { civicTick, type CivicCaps } from './dynamics';
 import { civicReport } from './report';
 
+/** Traffic (decay + origin→destination generation) runs every TRAFFIC_CADENCE ticks. */
+export const TRAFFIC_CADENCE = 10;
 /** Civic dynamics run once every CIVIC_CADENCE sim ticks (the slowest cadence). */
 export const CIVIC_CADENCE = 50;
 
@@ -45,12 +52,18 @@ export interface SimDeps {
   tech: TechState;
   civic: CivicState;
   partition: NeighborhoodMap;
+  /** World seed — the root for the per-tick traffic/growth rng forks (determinism). */
+  seed: string;
   ecoMeans?: { soil: number; flora: number; fauna: number };
   civicMeans?: { belonging: number; voice: number; trust: number };
+  /** This cadence's found O-D trips — published for the renderer (cars ARE trips).
+   *  Renderer-facing output, not part of the world hash (the laid `map.traffic` is). */
+  trips?: Trip[];
 }
 
 /** What fired this tick — for the shell's dirty-marking. */
 export interface SimTickResult {
+  trafficTicked: boolean;
   ecoTicked: boolean;
   civicTicked: boolean;
   /** Effort accrued this tick (always ≥ 1). */
@@ -80,7 +93,18 @@ export function simTick(deps: SimDeps, tick: number): SimTickResult {
     1,
   );
 
-  // 2. Ecology cadence → tick + recompute means.
+  // 2. Traffic cadence → decay the field, then generate this cadence's O-D trips
+  //    (lay density along found paths, publish the trips). First rng in the sim:
+  //    a fresh per-tick-stamped fork keeps the N-tick double-run byte-identical.
+  let trafficTicked = false;
+  if (tick > 0 && tick % TRAFFIC_CADENCE === 0) {
+    const trafficRng = createRng(deps.seed).fork(`traffic:${tick}`);
+    decayTraffic(deps.world.map);
+    deps.trips = generateTraffic(deps.world.map, deps.world.parcels, trafficRng);
+    trafficTicked = true;
+  }
+
+  // 3. Ecology cadence → tick + recompute means.
   let ecoTicked = false;
   if (tick > 0 && tick % ECO_CADENCE === 0) {
     ecologyTick(deps.world.map);
@@ -89,7 +113,7 @@ export function simTick(deps: SimDeps, tick: number): SimTickResult {
     ecoTicked = true;
   }
 
-  // 3. Civic cadence → partition refresh, remap, dynamics, recompute means.
+  // 4. Civic cadence → partition refresh, remap, dynamics, recompute means.
   let civicTicked = false;
   if (tick > 0 && tick % CIVIC_CADENCE === 0) {
     const newPartition = computeNeighborhoods(deps.world.map);
@@ -110,5 +134,5 @@ export function simTick(deps: SimDeps, tick: number): SimTickResult {
     civicTicked = true;
   }
 
-  return { ecoTicked, civicTicked, effortGained };
+  return { trafficTicked, ecoTicked, civicTicked, effortGained };
 }

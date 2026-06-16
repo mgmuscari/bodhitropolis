@@ -37,6 +37,11 @@ const ecologyDir = path.join(root, 'src/ecology');
 // flag) — ecology never imports civic, so there is no cycle (asserted below).
 // Auto-covers every future civic file — see the behavioral probe test below.
 const civicDir = path.join(root, 'src/civic');
+// src/traffic is scanned fail-closed: the traffic-density field ops and the O-D
+// trip pathfinder are deterministic functions of (map, rng) and must stay headless
+// (no DOM) and transcendental-free. Traffic imports only engine; it must not import
+// civic/ecology/worldgen/ui (it is upstream of growth, sibling to ecology/civic).
+const trafficDir = path.join(root, 'src/traffic');
 
 // DOM globals that must never appear in headless layers.
 const FORBIDDEN_DOM = /\b(window|document|HTMLCanvasElement|requestAnimationFrame|navigator|localStorage)\b/;
@@ -75,6 +80,7 @@ const techFiles = tsFiles(techDir);
 const toolsFiles = tsFiles(toolsDir);
 const ecologyFiles = tsFiles(ecologyDir);
 const civicFiles = tsFiles(civicDir);
+const trafficFiles = tsFiles(trafficDir);
 
 // Pure-ui allowlist: ui modules that carry NO DOM and NO transcendental Math, so
 // they can be headless-tested like the engine/worldgen layers. The src/ui dir as
@@ -112,6 +118,7 @@ describe('architecture guard: headless + deterministic', () => {
     ...toolsFiles,
     ...ecologyFiles,
     ...civicFiles,
+    ...trafficFiles,
   ]) {
     const rel = path.relative(root, file);
     it(`${rel} is DOM-free, ui-free, and transcendental-Math-free`, () => {
@@ -264,6 +271,36 @@ describe('architecture guard: civic isolation (civic writes only CivicState)', (
     expect(ECOLOGY_IMPORT.test("import { ecologyReport } from '../ecology/report'")).toBe(true);
     expect(ECOLOGY_IMPORT.test("import { GameMap } from '../engine/map'")).toBe(false);
   });
+});
+
+describe('architecture guard: src/traffic scanned fail-closed', () => {
+  it('scans src/traffic and finds at least one file', () => {
+    expect(trafficFiles.length).toBeGreaterThan(0);
+  });
+
+  it('discovers and flags a synthetic transcendental violation dropped into src/traffic', () => {
+    const probe = path.join(trafficDir, '__guard_probe__.ts');
+    fs.writeFileSync(probe, 'export const x = Math.random();\n');
+    try {
+      const discovered = tsFiles(trafficDir);
+      expect(discovered, 'scan did not discover the probe file').toContain(probe);
+      const code = stripComments(fs.readFileSync(probe, 'utf8'));
+      expect(FORBIDDEN_MATH.test(code), 'scan did not flag the transcendental token').toBe(true);
+    } finally {
+      fs.unlinkSync(probe);
+    }
+  });
+
+  // Traffic is sibling to ecology/civic and upstream of growth; it imports only engine.
+  for (const file of trafficFiles) {
+    const rel = path.relative(root, file);
+    it(`${rel} (traffic) does not import from civic/ecology/worldgen`, () => {
+      const code = stripComments(fs.readFileSync(file, 'utf8'));
+      expect(CIVIC_IMPORT.test(code), `${rel} imports from civic`).toBe(false);
+      expect(ECOLOGY_IMPORT.test(code), `${rel} imports from ecology`).toBe(false);
+      expect(WORLDGEN_IMPORT.test(code), `${rel} imports from worldgen`).toBe(false);
+    });
+  }
 });
 
 describe('architecture guard: pure-ui allowlist', () => {

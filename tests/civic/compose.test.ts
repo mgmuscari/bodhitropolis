@@ -28,6 +28,7 @@ function makeDeps(): SimDeps {
     tech: createTechState(TECH_TREE),
     civic: createCivicState(partition),
     partition,
+    seed: 'compose-test',
   };
 }
 
@@ -111,6 +112,39 @@ describe('simTick: TechState integration guard (delta accounting)', () => {
       }
     }
     expect(deps.tech.effort).toBe(expected);
+  });
+});
+
+describe('simTick: traffic fires at the cadence (rng enters the sim)', () => {
+  function connectedCity(): SimDeps {
+    const map = new GameMap(20, 8);
+    const parcels = new ParcelStore();
+    placeParcel(map, parcels, { x: 2, y: 3, width: 1, height: 1, kind: BuiltKind.CommercialStrip, density: 3 });
+    for (let x = 2; x <= 14; x++) placeTransport(map, x, 4, BuiltKind.RoadStreet);
+    placeParcel(map, parcels, { x: 14, y: 3, width: 1, height: 1, kind: BuiltKind.Industrial, density: 3 });
+    const partition = computeNeighborhoods(map);
+    return {
+      world: { map, parcels },
+      tech: createTechState(TECH_TREE),
+      civic: createCivicState(partition),
+      partition,
+      seed: 'traffic-fire',
+    };
+  }
+
+  it('lays traffic density + publishes trips through simTick, deterministically', () => {
+    const drive = (d: SimDeps): void => {
+      for (let t = 1; t <= 30; t++) simTick(d, t);
+    };
+    const a = connectedCity();
+    drive(a);
+    const b = connectedCity();
+    drive(b);
+    let total = 0;
+    for (let i = 0; i < a.world.map.traffic.length; i++) total += a.world.map.traffic[i]!;
+    expect(total).toBeGreaterThan(0); // generateTraffic fired through the sim wiring
+    expect((a.trips ?? []).length).toBeGreaterThan(0); // trips published for the renderer
+    expect(a.world.map.snapshot()).toBe(b.world.map.snapshot()); // deterministic incl. traffic
   });
 });
 
