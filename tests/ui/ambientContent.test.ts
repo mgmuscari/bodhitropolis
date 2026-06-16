@@ -853,3 +853,63 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     expect(tints.size).toBeGreaterThan(1); // not all the same colour
   });
 });
+
+describe('building health from citizen trips (plot-use wellbeing carried home)', () => {
+  // A home fronting the origin road, a road to a destination plot by the path end; the
+  // citizen drives there, visits, returns, and deposits the plot's wellbeing at home.
+  function citizenTrip(destKind: number): { map: GameMap; path: number[]; home: number } {
+    const map = new GameMap(20, 10);
+    for (let x = 2; x <= 8; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadStreet;
+    map.built[map.idx(2, 3)] = BuiltKind.HouseSingle; // home, fronts the origin road (2,4)
+    map.built[map.idx(8, 3)] = destKind; // destination plot, by the path end (8,4)
+    const path: number[] = [];
+    for (let x = 2; x <= 8; x++) path.push(map.idx(x, 4));
+    return { map, path, home: map.idx(2, 3) };
+  }
+
+  function runUntilDeposit(map: GameMap, path: number[], home: number, state: ReturnType<typeof createAmbientState>): boolean {
+    const rng = ambientFork('health');
+    ingestTrips(state, [{ path }], map);
+    for (let i = 0; i < 800; i++) {
+      stepAmbient(state, map, rng, 50);
+      if ((state.buildingHealth.get(home) ?? 0) !== 0) return true;
+    }
+    return false;
+  }
+
+  it('tags a residential-origin trip with its home; deposits POSITIVE health for a commercial visit', () => {
+    const { map, path, home } = citizenTrip(BuiltKind.CommercialStrip);
+    const state = createAmbientState();
+    ingestTrips(state, [{ path }], map);
+    expect(state.cars[0]!.homeTile).toBe(home); // tagged as a citizen of that home
+    expect(runUntilDeposit(map, path, home, createAmbientState())).toBe(true);
+  });
+
+  it('deposits NEGATIVE health for an industrial visit', () => {
+    const { map, path, home } = citizenTrip(BuiltKind.Industrial);
+    const state = createAmbientState();
+    expect(runUntilDeposit(map, path, home, state)).toBe(true);
+    expect(state.buildingHealth.get(home)!).toBeLessThan(0);
+  });
+
+  it('a non-residential (freight) origin deposits no building health', () => {
+    const { map, path } = citizenTrip(BuiltKind.CommercialStrip);
+    map.built[map.idx(2, 3)] = BuiltKind.Offices; // origin is commercial now, not a home
+    const state = createAmbientState();
+    const rng = ambientFork('freight');
+    ingestTrips(state, [{ path }], map);
+    expect(state.cars[0]!.homeTile).toBeUndefined(); // freight — no home
+    for (let i = 0; i < 500; i++) stepAmbient(state, map, rng, 50);
+    expect(state.buildingHealth.size).toBe(0);
+  });
+
+  it('health eases back toward neutral after the visit (decay)', () => {
+    const { map, path, home } = citizenTrip(BuiltKind.HealingCommons);
+    const state = createAmbientState();
+    expect(runUntilDeposit(map, path, home, state)).toBe(true);
+    const peak = Math.abs(state.buildingHealth.get(home)!);
+    const rng = ambientFork('decay');
+    for (let i = 0; i < 400; i++) stepAmbient(state, map, rng, 50);
+    expect(Math.abs(state.buildingHealth.get(home) ?? 0)).toBeLessThan(peak);
+  });
+});

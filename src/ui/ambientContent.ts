@@ -21,6 +21,7 @@
 import type { GameMap } from '../engine/map';
 import { BuiltKind, isRoadKind } from '../engine/fabric';
 import { ZoneType, zoneTypeOf } from '../engine/zone';
+import { visitValue } from '../citizens/plots';
 import type { Rng } from '../engine/rng';
 
 /** Maximum elapsed time honoured in a single stepAmbient call, mirroring
@@ -61,6 +62,12 @@ const CURB_RADIUS = 10;
 /** Safety cap (substeps) on how long a parked car waits for its pedestrian before leaving
  *  anyway — normally the returning ped releases it sooner. ~30s at 50ms/substep. */
 const PARK_MAX_WAIT = 600;
+
+/** Bounds + decay for the live per-building HEALTH signal: each completed citizen visit
+ *  deposits the destination plot's visitValue at the citizen's home, and health eases back
+ *  toward neutral (0) so it reflects RECENT trips, not all-time. Live, not hashed. */
+const HEALTH_MAX = 120;
+const HEALTH_DECAY = 0.1;
 
 /** Substeps a pedestrian spends INSIDE its destination building before walking back to the
  *  car: a base plus a seeded spread so visitors don't all return together. ~3–13s. */
@@ -158,6 +165,10 @@ export interface Mover {
   stallIdx?: number;
   /** Stable id assigned when a car parks, so its pedestrian can find its way back to it. */
   id?: number;
+  /** The citizen's HOME building tile (a residential neighbour of the trip origin), set when
+   *  a trip leaves a residential plot. The destination's visit wellbeing is deposited here on
+   *  return. Undefined ⇒ a non-residential (freight) trip — no home, no health deposit. */
+  homeTile?: number;
   /** For a street-parked car: the direction (0=N/1=E/2=S/3=W) toward its curb (the adjacent
    *  non-road tile), so the renderer draws it hugging the kerb instead of in the lane. */
   curbDir?: number;
@@ -213,10 +224,14 @@ export interface AmbientState {
   parkingLots?: ReadonlyArray<ParkingLotInfo>;
   /** Monotonic counter for parked-car ids (so a pedestrian can rebind to its own car). */
   nextCarId?: number;
+  /** Live per-building HEALTH, keyed by home building tile index: the running sum of what
+   *  its citizens bring home from their trips (decayed toward neutral). Renderer-side, never
+   *  hashed — it reads the deterministic world but is a live overlay quantity. */
+  buildingHealth: Map<number, number>;
 }
 
 export function createAmbientState(): AmbientState {
-  return { cars: [], peds: [], birds: [], accMs: 0 };
+  return { cars: [], peds: [], birds: [], accMs: 0, buildingHealth: new Map() };
 }
 
 /** Publish the parking lots that store moving cars. The host (main.ts) computes these from
@@ -677,7 +692,20 @@ export function ingestTrips(
     // Colour bound to the car: a spread hash of (origin, next) so neighbouring trips differ.
     // imul/xor are integer-exact (allowlist-safe); the renderer maps it mod its palette.
     const tint = (Math.imul(p0 ^ p1, 0x9e3779b1) >>> 0) % 0x10000;
-    state.cars.push({ x: x0, y: y0, dir, tx: x1, ty: y1, path: trip.path, leg: 2, tint });
+    // A trip that leaves a residential plot is a CITIZEN: tag its home so the destination's
+    // visit wellbeing is deposited there on return. Non-residential origins are freight.
+    const home = residentialHome(map, p0);
+    state.cars.push({
+      x: x0,
+      y: y0,
+      dir,
+      tx: x1,
+      ty: y1,
+      path: trip.path,
+      leg: 2,
+      tint,
+      homeTile: home >= 0 ? home : undefined,
+    });
     moving++;
   }
 }
@@ -806,7 +834,13 @@ function tryPark(state: AmbientState, c: Car, map: GameMap): boolean {
   c.leg = undefined;
   c.dwell = PARK_MAX_WAIT;
   c.id = state.nextCarId = (state.nextCarId ?? 0) + 1;
-  if (building) spawnBoundPed(state, c, building);
+  if (building) {
+    // The citizen reached its destination plot → carry that plot's wellbeing home now. The
+    // bound ped below is the VISIBLE visit; the deposit is not gated on it spawning (the ped
+    // cap must never silently starve the health signal).
+    if (c.homeTile !== undefined) depositVisit(state, c.homeTile, building, map);
+    spawnBoundPed(state, c, building);
+  }
   return true;
 }
 
@@ -831,6 +865,31 @@ function spawnBoundPed(state: AmbientState, c: Car, building: { x: number; y: nu
 /** Find a (parked) car by its id, so a returning pedestrian can rebind to it. */
 function findCar(state: AmbientState, id: number): Car | undefined {
   return state.cars.find((c) => c.id === id);
+}
+
+/** The residential building tile 4-adjacent to a trip's origin road (its home), or -1 if the
+ *  origin doesn't front a home — i.e. a non-residential (freight) trip. */
+function residentialHome(map: GameMap, roadIdx: number): number {
+  const x = roadIdx % map.width;
+  const y = (roadIdx - x) / map.width;
+  for (let d = 0; d < 4; d++) {
+    const nx = x + DIR_DX[d]!;
+    const ny = y + DIR_DY[d]!;
+    if (!map.inBounds(nx, ny)) continue;
+    const t = map.idx(nx, ny);
+    if (zoneTypeOf(map.built[t]!) === ZoneType.Residential) return t;
+  }
+  return -1;
+}
+
+/** Deposit the wellbeing a citizen carries home from visiting `plot` into its home building's
+ *  health (clamped). Called when a bound pedestrian returns to its car — the visit is done. */
+function depositVisit(state: AmbientState, homeTile: number, plot: { x: number; y: number }, map: GameMap): void {
+  const v = visitValue(map.built[map.idx(plot.x, plot.y)]!);
+  if (v === 0) return;
+  const cur = state.buildingHealth.get(homeTile) ?? 0;
+  const next = Math.max(-HEALTH_MAX, Math.min(HEALTH_MAX, cur + v));
+  state.buildingHealth.set(homeTile, next);
 }
 
 function spawnFlocks(state: AmbientState, map: GameMap, rng: Rng): void {
@@ -912,7 +971,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       }
       if (p.phase === 'to-car') {
         const car = findCar(state, p.carId!);
-        if (car) car.dwell = 0; // got back in → release the car to leave
+        if (car) car.dwell = 0; // got back in → release the car to leave (deposit was on arrival)
         return false;
       }
       return false; // legacy unbound walk-ped → despawn on arrival
@@ -920,6 +979,15 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     return advanceMover(p, PED_SPEED, map, (x, y, fromDir) => nextPedStep(map, x, y, fromDir, rng));
   });
   for (const f of state.birds) advanceFlock(f);
+
+  // 4. Building health eases toward neutral so it tracks RECENT citizen visits, not all-time.
+  if (state.buildingHealth.size > 0) {
+    for (const [k, v] of [...state.buildingHealth]) {
+      const nv = v > 0 ? v - HEALTH_DECAY : v + HEALTH_DECAY;
+      if (Math.abs(nv) < HEALTH_DECAY) state.buildingHealth.delete(k);
+      else state.buildingHealth.set(k, nv);
+    }
+  }
 }
 
 /**
