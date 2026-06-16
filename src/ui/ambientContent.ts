@@ -157,6 +157,79 @@ export function isCarRoad(kind: number): boolean {
   return isRoadKind(kind);
 }
 
+/** A lane within a divided multi-lane road (a widened avenue/freeway: parallel rows
+ *  of the SAME road kind). An `outer` lane is one-way (right-hand traffic) with its
+ *  `dir` heading and `outward` road edge; the `median` is the interior of a 3+-wide
+ *  road and carries no traffic. */
+export type FreewayLane =
+  | { role: 'outer'; dir: number; outward: number }
+  | { role: 'median' };
+
+/** Per-direction cap when measuring a same-kind run: widths are 2–3, so a short cap
+ *  ranks the two axes (the shorter run is the road's width) without scanning a whole
+ *  freeway's length, and classifies end tiles the same as mid tiles. */
+const LANE_SCAN_CAP = 3;
+
+/** Length of the same-kind run from (x, y) in direction (dx, dy), exclusive of the
+ *  origin, capped at LANE_SCAN_CAP. */
+function sameRun(map: GameMap, x: number, y: number, k: number, dx: number, dy: number): number {
+  let n = 0;
+  for (let i = 1; i <= LANE_SCAN_CAP; i++) {
+    const nx = x + dx * i;
+    const ny = y + dy * i;
+    if (!map.inBounds(nx, ny) || map.built[map.idx(nx, ny)] !== k) break;
+    n++;
+  }
+  return n;
+}
+
+/**
+ * Classify a road tile's place in a divided multi-lane road, or `null` if it is not a
+ * clean multi-lane lane — a 1-wide road or a junction where the two same-kind bands are
+ * equal (a square crossing). Those fall back to general straight-biased routing, so a
+ * car CAN turn there: that is exactly "turns only at a true junction". Read purely from
+ * same-kind neighbours (read-only, no rng):
+ *   1. Measure the same-kind run length along each axis (capped). The shorter run is the
+ *      road's WIDTH axis; the longer is its LENGTH. This ranks correctly at lane ends
+ *      and mid-lane alike (an end tile still has the full width band).
+ *   2. On the width axis: same-kind road on BOTH sides → `median` (interior of a 3+-wide
+ *      road, no traffic). Same-kind on one side only → `outer`: the bare side is the road
+ *      `outward` edge (kerb), and the one-way `dir` is the heading whose right-hand side
+ *      is that edge (right-hand traffic). So a horizontal freeway's north lane runs west
+ *      and its south lane runs east; `laneOffset(dir)` then nudges each carriageway to
+ *      its own kerb. Neither side same → 1-wide road → `null`.
+ */
+export function freewayLane(map: GameMap, x: number, y: number): FreewayLane | null {
+  const k = map.built[map.idx(x, y)]!;
+  if (!isCarRoad(k)) return null;
+  const same = (d: number): boolean => {
+    const nx = x + DIR_DX[d]!;
+    const ny = y + DIR_DY[d]!;
+    return map.inBounds(nx, ny) && map.built[map.idx(nx, ny)] === k;
+  };
+  const vert = 1 + sameRun(map, x, y, k, 0, -1) + sameRun(map, x, y, k, 0, 1);
+  const horiz = 1 + sameRun(map, x, y, k, -1, 0) + sameRun(map, x, y, k, 1, 0);
+  if (horiz > vert) {
+    // Horizontal road — width is the N–S axis.
+    const n = same(0); // North neighbour same-kind?
+    const s = same(2); // South neighbour same-kind?
+    if (n && s) return { role: 'median' };
+    if (s && !n) return { role: 'outer', dir: 3, outward: 0 }; // north lane → West
+    if (n && !s) return { role: 'outer', dir: 1, outward: 2 }; // south lane → East
+    return null;
+  }
+  if (vert > horiz) {
+    // Vertical road — width is the E–W axis.
+    const e = same(1); // East neighbour same-kind?
+    const w = same(3); // West neighbour same-kind?
+    if (e && w) return { role: 'median' };
+    if (e && !w) return { role: 'outer', dir: 2, outward: 3 }; // west lane → South
+    if (w && !e) return { role: 'outer', dir: 0, outward: 1 }; // east lane → North
+    return null;
+  }
+  return null; // equal bands — a square crossing → general routing (a true junction)
+}
+
 /**
  * Pedestrian SUBSTRATE at (x, y): a quiet street, promenade, or parklet tile, OR any
  * tile orthogonally adjacent to a community garden, park, or rewilded land. Peds
@@ -241,13 +314,44 @@ function pickStep(
   return options[options.length - 1]!; // unreachable: r < total
 }
 
+/** Routing on a divided multi-lane road's outer lane: travel the one-way `dir`; turn
+ *  off ONLY where a cross-road meets the outward edge (a true junction); never weave
+ *  across to the median/opposite carriageway and never reverse. */
+function freewayStep(
+  map: GameMap,
+  x: number,
+  y: number,
+  lane: { dir: number; outward: number },
+  rng: Rng,
+): number {
+  const ax = x + DIR_DX[lane.dir]!;
+  const ay = y + DIR_DY[lane.dir]!;
+  const aheadRoad = map.inBounds(ax, ay) && isCarRoad(map.built[map.idx(ax, ay)]!);
+  const ox = x + DIR_DX[lane.outward]!;
+  const oy = y + DIR_DY[lane.outward]!;
+  const exitRoad = map.inBounds(ox, oy) && isCarRoad(map.built[map.idx(ox, oy)]!);
+  if (aheadRoad && exitRoad) {
+    // True junction: mostly stay on the freeway, occasionally take the ramp.
+    return rng.nextInt(CAR_STRAIGHT_WEIGHT + 1) === 0 ? lane.outward : lane.dir;
+  }
+  if (aheadRoad) return lane.dir; // open freeway — straight, no turns, no weaving
+  if (exitRoad) return lane.outward; // freeway ended at a ramp — exit
+  return lane.dir; // ran out of road — continue off-network, despawn next step
+}
+
 /**
  * The car motion seam: from road tile (x, y), the chosen connected isRoadKind
- * neighbour direction (0..3), excluding the U-turn `fromDir` unless it is the only
- * connected road (dead-end). -1 if (x, y) has no road neighbour at all. Deterministic
- * given `rng`.
+ * neighbour direction (0..3). On a divided multi-lane road's outer lane the choice is
+ * the one-way `freewayStep` (independent of `fromDir`, including spawn); otherwise it
+ * is the general straight-biased junction pick, excluding the U-turn `fromDir` unless
+ * it is the only connected road (dead-end). -1 if (x, y) has no road neighbour at all.
+ * Deterministic given `rng`.
  */
 export function nextRoadStep(map: GameMap, x: number, y: number, fromDir: number, rng: Rng): number {
+  const lane = freewayLane(map, x, y);
+  if (lane && lane.role === 'outer') {
+    return freewayStep(map, x, y, lane, rng);
+  }
   return pickStep(
     map,
     x,
@@ -376,6 +480,8 @@ function spawnCars(state: AmbientState, map: GameMap, rng: Rng): void {
     const { x, y } = sampleTile(map, rng);
     const weight = carWeightForRoad(map.built[map.idx(x, y)]!);
     if (weight === 0) continue;
+    const lane = freewayLane(map, x, y);
+    if (lane && lane.role === 'median') continue; // the median carries no traffic
     if (!rng.chance(weight / CAR_MAX_WEIGHT)) continue;
     const dir = nextRoadStep(map, x, y, -1, rng);
     if (dir < 0) continue; // isolated road tile — no leg to commit to
