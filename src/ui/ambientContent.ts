@@ -65,6 +65,21 @@ const DIR_DX = [0, 1, 0, -1] as const;
 const DIR_DY = [-1, 0, 1, 0] as const;
 const opposite = (d: number): number => (d + 2) % 4;
 
+/** Lane half-width in tile units: how far a car is drawn off its tile centre, to the
+ *  RIGHT of its heading, so opposing flows ride opposite sides of a road. Cosmetic —
+ *  read only by the renderer's sprite draw; live-pass tuned. */
+const LANE = 0.22;
+
+/** The lane seam (pure, `dir`-only): a car's draw-time offset from its tile centre,
+ *  perpendicular to and on the RIGHT of its heading (right-hand traffic). Screen
+ *  coords are y-down, so "right" is the heading rotated 90° clockwise: (dx,dy) →
+ *  (-dy, dx). On any vertical/horizontal road the two travel directions are therefore
+ *  drawn on opposite sides — bidirectional flow, visibly separated (Maddy playtest).
+ *  0=N→east side, 1=E→south side, 2=S→west side, 3=W→north side. */
+export function laneOffset(dir: number): { dx: number; dy: number } {
+  return { dx: -DIR_DY[dir]! * LANE, dy: DIR_DX[dir]! * LANE };
+}
+
 /** A grid-following sprite: float world position + heading + committed target tile. */
 export interface Mover {
   /** Float world position in tile units. */
