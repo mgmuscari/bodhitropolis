@@ -14,7 +14,7 @@ import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
-import { laneOffset } from './ambientContent';
+import { laneOffset, curbParkOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
 
 /** A previewed tile for the hover/drag overlay: world coords + validity tint. */
@@ -630,10 +630,11 @@ export class Renderer {
         if (!onScreen(sx, sy)) continue;
         ctx.fillRect(Math.floor(sx - parkedSize / 2), Math.floor(sy - parkedSize / 2), parkedSize, parkedSize);
       } else {
-        // Moving OR street-parked: pulled to the curb (right of heading). Parked cars are
-        // drawn at the smaller parked size so they read as stopped, not in traffic.
-        const lane = laneOffset(c.dir);
-        const { sx, sy } = camera.worldToScreen(c.x + 0.5 + lane.dx, c.y + 0.5 + lane.dy);
+        // A street-parked car hugs its recorded curb side (off the lane); a moving car rides
+        // its lane (right of heading). Parked cars draw at the smaller parked size.
+        const off =
+          c.parked && c.curbDir !== undefined ? curbParkOffset(c.curbDir) : laneOffset(c.dir);
+        const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
         if (!onScreen(sx, sy)) continue;
         const size = c.parked ? parkedSize : carSize;
         ctx.fillRect(Math.floor(sx - size / 2), Math.floor(sy - size / 2), size, size);

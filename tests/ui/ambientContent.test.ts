@@ -17,6 +17,7 @@ import {
   stepAmbient,
   ingestTrips,
   setParkingLots,
+  curbParkOffset,
   carWeightForRoad,
   isCarRoad,
   isPedSubstrate,
@@ -736,6 +737,37 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     // the ped returns and releases the car, which then leaves
     for (let i = 0; i < 500 && state.cars.some((c) => c.id === id); i++) stepAmbient(state, map, rng, 50);
     expect(state.cars.some((c) => c.id === id)).toBe(false);
+  });
+
+  it('curbParkOffset pushes a street-parked car off the lane centre, toward the curb', () => {
+    const north = curbParkOffset(0); // 0=N
+    expect(north.dx).toBe(0);
+    expect(north.dy).toBeLessThan(0); // north is -y
+    const east = curbParkOffset(1); // 1=E
+    expect(east.dy).toBe(0);
+    expect(east.dx).toBeGreaterThan(0);
+    // bigger than the in-lane laneOffset, so a parked car clears the lane and hugs the edge
+    expect(Math.abs(north.dy)).toBeGreaterThan(Math.abs(laneOffset(1).dy));
+    expect(Math.abs(north.dy)).toBeLessThan(0.5); // but stays within its tile
+  });
+
+  it('a street-parked car records the curb side (toward a non-road neighbour, not the lane)', () => {
+    const map = new GameMap(16, 10); // a 1-wide street with grass on both sides
+    for (let x = 2; x <= 8; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    const state = createAmbientState();
+    const path: number[] = [];
+    for (let x = 2; x <= 6; x++) path.push(map.idx(x, 5));
+    ingestTrips(state, [{ path }], map); // no lots → street-park
+    const rng = ambientFork('curbdir');
+    const car = state.cars[0]!;
+    for (let i = 0; i < 120 && !car.parked; i++) stepAmbient(state, map, rng, 50);
+    expect(car.parked).toBe(true);
+    expect(car.lotIdx).toBeUndefined();
+    expect(car.curbDir).toBeDefined(); // it recorded which way the curb is
+    const dx = [0, 1, 0, -1][car.curbDir!]!;
+    const dy = [-1, 0, 1, 0][car.curbDir!]!;
+    const k = map.built[map.idx(Math.round(car.x) + dx, Math.round(car.y) + dy)];
+    expect(k).not.toBe(BuiltKind.RoadStreet); // curb points off the road, not down the lane
   });
 
   it('crowding: a second car to the same destination parks at a different (farther) curb', () => {
