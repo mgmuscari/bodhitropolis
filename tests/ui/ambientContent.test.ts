@@ -734,4 +734,32 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     for (let i = 0; i < 60 && state.peds.length > 0; i++) stepAmbient(state, map, rng, 50);
     expect(state.peds.length).toBe(0); // walked the one tile and despawned on arrival
   });
+
+  it('each car carries a stable colour tint, kept while moving and after parking', () => {
+    const { map, path } = roadWithLot();
+    const state = createAmbientState();
+    setParkingLots(state, lotInfo(map));
+    ingestTrips(state, [{ path }], map);
+    const car = state.cars[0]!;
+    expect(typeof car.tint).toBe('number'); // a colour is bound to the car at spawn
+    const spawnTint = car.tint;
+    const rng = ambientFork('tint');
+    for (let i = 0; i < 120 && !car.parked; i++) stepAmbient(state, map, rng, 50);
+    expect(car.parked).toBe(true);
+    expect(car.tint).toBe(spawnTint); // same car, same colour — moving → parked
+  });
+
+  it('gives cars from different trips different tints (spread, not all one colour)', () => {
+    const map = new GameMap(20, 12);
+    for (let x = 1; x <= 18; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    const state = createAmbientState();
+    const trips = [
+      { path: [map.idx(1, 5), map.idx(2, 5), map.idx(3, 5)] },
+      { path: [map.idx(10, 5), map.idx(11, 5), map.idx(12, 5)] },
+      { path: [map.idx(15, 5), map.idx(16, 5), map.idx(17, 5)] },
+    ];
+    ingestTrips(state, trips, map);
+    const tints = new Set(state.cars.map((c) => c.tint));
+    expect(tints.size).toBeGreaterThan(1); // not all the same colour
+  });
 });

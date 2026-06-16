@@ -134,6 +134,10 @@ export interface Mover {
   dwell?: number;
   lotIdx?: number;
   stallIdx?: number;
+  /** A colour tag bound to the car at spawn (a non-negative int the renderer maps into its
+   *  palette mod its length). Stays with the car for its whole life, so it shows the same
+   *  colour moving on the road and parked in a lot. */
+  tint?: number;
 }
 
 export type Car = Mover;
@@ -634,7 +638,10 @@ export function ingestTrips(
     const x1 = p1 % map.width;
     const y1 = (p1 - x1) / map.width;
     const dir = x1 > x0 ? 1 : x1 < x0 ? 3 : y1 > y0 ? 2 : 0;
-    state.cars.push({ x: x0, y: y0, dir, tx: x1, ty: y1, path: trip.path, leg: 2 });
+    // Colour bound to the car: a spread hash of (origin, next) so neighbouring trips differ.
+    // imul/xor are integer-exact (allowlist-safe); the renderer maps it mod its palette.
+    const tint = (Math.imul(p0 ^ p1, 0x9e3779b1) >>> 0) % 0x10000;
+    state.cars.push({ x: x0, y: y0, dir, tx: x1, ty: y1, path: trip.path, leg: 2, tint });
     moving++;
   }
 }
