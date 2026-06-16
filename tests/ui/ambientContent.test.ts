@@ -894,12 +894,37 @@ describe('building health from citizen trips (plot-use wellbeing carried home)',
     return false;
   }
 
-  it('tags a residential-origin trip with its home; deposits POSITIVE health for a commercial visit', () => {
-    const { map, path, home } = citizenTrip(BuiltKind.CommercialStrip);
+  it('a short residential trip WALKS (ped tagged with home) and deposits POSITIVE health for a commercial visit', () => {
+    const { map, path, home } = citizenTrip(BuiltKind.CommercialStrip); // 7-tile path ≤ WALK_RANGE
+    const probe = createAmbientState();
+    ingestTrips(probe, [{ path }], map);
+    expect(probe.cars.length).toBe(0); // short → no car
+    const ped = probe.peds.find((p) => p.homeTile === home);
+    expect(ped).toBeDefined(); // a walking citizen tagged with its home
+    expect(ped!.phase).toBe('to-building');
     const state = createAmbientState();
-    ingestTrips(state, [{ path }], map);
-    expect(state.cars[0]!.homeTile).toBe(home); // tagged as a citizen of that home
-    expect(runUntilDeposit(map, path, home, createAmbientState())).toBe(true);
+    expect(runUntilDeposit(map, path, home, state)).toBe(true);
+    expect(state.buildingHealth.get(home)!).toBeGreaterThan(0); // commercial visit, walked home
+  });
+
+  it('mode choice: a long residential trip DRIVES (car), a short one WALKS (ped)', () => {
+    const short = citizenTrip(BuiltKind.CommercialStrip); // 7-tile path
+    const s = createAmbientState();
+    ingestTrips(s, [{ path: short.path }], short.map);
+    expect(s.cars.length).toBe(0);
+    expect(s.peds.length).toBe(1);
+
+    const map = new GameMap(40, 10); // a long corridor: 19-tile path > WALK_RANGE
+    for (let x = 2; x <= 20; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadStreet;
+    map.built[map.idx(2, 3)] = BuiltKind.HouseSingle;
+    map.built[map.idx(20, 3)] = BuiltKind.CommercialStrip;
+    const longPath: number[] = [];
+    for (let x = 2; x <= 20; x++) longPath.push(map.idx(x, 4));
+    const l = createAmbientState();
+    ingestTrips(l, [{ path: longPath }], map);
+    expect(l.peds.length).toBe(0);
+    expect(l.cars.length).toBe(1);
+    expect(l.cars[0]!.homeTile).toBe(map.idx(2, 3)); // long trip drives, still a tagged citizen
   });
 
   it('deposits NEGATIVE health for an industrial visit', () => {

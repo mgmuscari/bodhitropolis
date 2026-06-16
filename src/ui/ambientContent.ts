@@ -69,6 +69,11 @@ const PARK_MAX_WAIT = 600;
 const HEALTH_MAX = 120;
 const HEALTH_DECAY = 0.1;
 
+/** Transport-MODE threshold: a citizen trip whose committed path is at most this many tiles
+ *  is walked (a pedestrian routes the whole way); longer trips drive. So as destinations come
+ *  closer / streets calm, citizens shift out of cars — the heart of the congestion→bloom loop. */
+const WALK_RANGE = 10;
+
 /** Substeps a pedestrian spends INSIDE its destination building before walking back to the
  *  car: a base plus a seeded spread so visitors don't all return together. ~3–13s. */
 const INSIDE_DWELL_MIN = 60;
@@ -176,12 +181,12 @@ export interface Mover {
    *  palette mod its length). Stays with the car for its whole life, so it shows the same
    *  colour moving on the road and parked in a lot. */
   tint?: number;
-  /** A pedestrian bound to a parked car (`carId` = that car's `id`): it walks the car→building
-   *  leg, dwells INSIDE, then walks back to the SAME car and releases it. `phase` tracks the
-   *  leg; `building` is the destination (also the wellbeing target); `dwellInside` counts the
-   *  time spent in the building. */
+  /** A pedestrian on a citizen trip. A DRIVE trip's last-mile ped is bound to a parked car
+   *  (`carId`) and returns to it ('to-car'); a WALK trip's ped has no car and returns home
+   *  ('to-home'), depositing the visit at `homeTile` on arrival. `phase` tracks the leg;
+   *  `building` is the destination plot (the wellbeing source); `dwellInside` times the visit. */
   carId?: number;
-  phase?: 'to-building' | 'inside' | 'to-car';
+  phase?: 'to-building' | 'inside' | 'to-car' | 'to-home';
   building?: { x: number; y: number };
   dwellInside?: number;
 }
@@ -708,8 +713,7 @@ export function ingestTrips(
   let moving = 0; // parked cars are stored, not traffic — cap only the moving ones
   for (const c of state.cars) if (!c.parked) moving++;
   for (const trip of trips) {
-    if (moving >= CAR_CAP) break;
-    if (trip.path.length < 2) continue; // need at least one leg to drive
+    if (trip.path.length < 2) continue; // need at least one leg to travel
     const p0 = trip.path[0]!;
     const p1 = trip.path[1]!;
     const x0 = p0 % map.width;
@@ -717,12 +721,39 @@ export function ingestTrips(
     const x1 = p1 % map.width;
     const y1 = (p1 - x1) / map.width;
     const dir = x1 > x0 ? 1 : x1 < x0 ? 3 : y1 > y0 ? 2 : 0;
+    // A trip that leaves a residential plot is a CITIZEN (others are freight). Tag its home so
+    // the destination's wellbeing is deposited there.
+    const home = residentialHome(map, p0);
+
+    // MODE CHOICE: a citizen on a SHORT trip walks the whole way (a pedestrian routes it);
+    // longer citizen trips and all freight drive. As destinations come closer / streets calm,
+    // more trips fall under WALK_RANGE → people shift out of cars.
+    if (home >= 0 && trip.path.length <= WALK_RANGE) {
+      if (state.peds.length >= PED_CAP) continue; // walkers are full this cadence
+      const destPlot = zonedNeighbor(map, trip.path[trip.path.length - 1]!);
+      if (destPlot >= 0) {
+        const dpx = destPlot % map.width;
+        const dpy = (destPlot - dpx) / map.width;
+        state.peds.push({
+          x: x0,
+          y: y0,
+          dir,
+          tx: x0,
+          ty: y0,
+          walkTo: { x: dpx, y: dpy },
+          phase: 'to-building',
+          homeTile: home,
+          building: { x: dpx, y: dpy },
+        });
+        continue; // walked — no car
+      }
+      // no destination plot to aim at → fall through and drive
+    }
+
+    if (moving >= CAR_CAP) continue;
     // Colour bound to the car: a spread hash of (origin, next) so neighbouring trips differ.
     // imul/xor are integer-exact (allowlist-safe); the renderer maps it mod its palette.
     const tint = (Math.imul(p0 ^ p1, 0x9e3779b1) >>> 0) % 0x10000;
-    // A trip that leaves a residential plot is a CITIZEN: tag its home so the destination's
-    // visit wellbeing is deposited there on return. Non-residential origins are freight.
-    const home = residentialHome(map, p0);
     state.cars.push({
       x: x0,
       y: y0,
@@ -914,6 +945,21 @@ function residentialHome(map: GameMap, roadIdx: number): number {
   return -1;
 }
 
+/** Any zoned (R/C/I/Civic) building tile 4-adjacent to a road — the destination PLOT a trip's
+ *  end road fronts, or -1 if none. Used to aim a walking citizen at the plot it's visiting. */
+function zonedNeighbor(map: GameMap, roadIdx: number): number {
+  const x = roadIdx % map.width;
+  const y = (roadIdx - x) / map.width;
+  for (let d = 0; d < 4; d++) {
+    const nx = x + DIR_DX[d]!;
+    const ny = y + DIR_DY[d]!;
+    if (!map.inBounds(nx, ny)) continue;
+    const t = map.idx(nx, ny);
+    if (zoneTypeOf(map.built[t]!) !== ZoneType.None) return t;
+  }
+  return -1;
+}
+
 /** Deposit the wellbeing a citizen carries home from visiting `plot` into its home building's
  *  health (clamped). Called when a bound pedestrian returns to its car — the visit is done. */
 function depositVisit(state: AmbientState, homeTile: number, plot: { x: number; y: number }, map: GameMap): void {
@@ -989,11 +1035,19 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     if (p.phase === 'inside') {
       p.dwellInside! -= 1;
       if (p.dwellInside! > 0) return true;
-      const car = findCar(state, p.carId!);
-      if (!car) return false; // its car already left → the ped vanishes too
-      p.phase = 'to-car';
-      p.walkTo = { x: car.x, y: car.y };
-      p.tx = Math.round(p.x); // recommit the Manhattan route from here toward the car
+      if (p.carId !== undefined) {
+        const car = findCar(state, p.carId);
+        if (!car) return false; // its car already left → the ped vanishes too
+        p.phase = 'to-car';
+        p.walkTo = { x: car.x, y: car.y };
+      } else {
+        // A WALK citizen heads back to its own home, carrying the visit's wellbeing.
+        const hx = p.homeTile! % map.width;
+        const hy = (p.homeTile! - hx) / map.width;
+        p.phase = 'to-home';
+        p.walkTo = { x: hx, y: hy };
+      }
+      p.tx = Math.round(p.x); // recommit the Manhattan route from here toward the destination
       p.ty = Math.round(p.y);
       p.recent = undefined;
       return true;
@@ -1016,6 +1070,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       if (p.phase === 'to-car') {
         const car = findCar(state, p.carId!);
         if (car) car.dwell = 0; // got back in → release the car to leave (deposit was on arrival)
+        return false;
+      }
+      if (p.phase === 'to-home') {
+        // Walked home → deposit the visit's wellbeing at this building (the citizen carried it).
+        if (p.homeTile !== undefined && p.building) depositVisit(state, p.homeTile, p.building, map);
         return false;
       }
       return false; // unbound routed ped → despawn on arrival
