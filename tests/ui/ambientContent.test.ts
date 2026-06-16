@@ -15,6 +15,7 @@ import {
   createAmbientState,
   stepAmbient,
   ingestTrips,
+  setParkedAnchors,
   carWeightForRoad,
   isCarRoad,
   isPedSubstrate,
@@ -617,5 +618,78 @@ describe('ambient stream isolation (AC#7 pin b)', () => {
       return hashWorld(world);
     };
     expect(runSim(true)).toBe(runSim(false));
+  });
+});
+
+describe('last-mile pedestrians (walk to/from parked cars)', () => {
+  // A lone parking lot with a house two tiles south — neither tile is ped substrate,
+  // so the ONLY peds that can appear are the last-mile walkers anchored to the lot.
+  function lotAndBuilding(): GameMap {
+    const map = new GameMap(16, 16);
+    map.built[map.idx(5, 5)] = BuiltKind.ParkingLot;
+    map.built[map.idx(5, 7)] = BuiltKind.HouseSingle;
+    return map;
+  }
+
+  it('with no parked-car anchors, no last-mile peds appear (rng untouched)', () => {
+    const map = lotAndBuilding();
+    const state = createAmbientState();
+    const rng = ambientFork('none');
+    for (let i = 0; i < 100; i++) stepAmbient(state, map, rng, 50);
+    expect(state.peds.length).toBe(0); // no anchors set → spawnLastMilePeds is a no-op
+  });
+
+  it('spawns peds that walk between a parked car and a nearby building', () => {
+    const map = lotAndBuilding();
+    const state = createAmbientState();
+    setParkedAnchors(state, [{ x: 5.5, y: 5.5 }]); // the lot's parked-car stall
+    const rng = ambientFork('lastmile');
+    let sawWalker = false;
+    for (let i = 0; i < 300; i++) {
+      stepAmbient(state, map, rng, 50);
+      for (const p of state.peds) {
+        expect(p.walkTo).toBeDefined(); // every ped here is a last-mile walker
+        // stays within the lot↔building corridor (origin (5,5) ± a couple tiles)
+        expect(Math.abs(p.x - 5)).toBeLessThanOrEqual(5);
+        expect(p.y).toBeGreaterThanOrEqual(4);
+        expect(p.y).toBeLessThanOrEqual(8);
+        sawWalker = true;
+      }
+    }
+    expect(sawWalker).toBe(true);
+  });
+
+  it('a walk-ped is exempt from the ped-substrate despawn and moves toward its target', () => {
+    const map = new GameMap(16, 16); // all empty: nothing is ped substrate
+    const state = createAmbientState();
+    state.peds.push({ x: 3, y: 3, dir: 0, tx: 3, ty: 3, walkTo: { x: 8, y: 3 } });
+    const rng = ambientFork('walk');
+    stepAmbient(state, map, rng, 50);
+    expect(state.peds.length).toBe(1); // survived despite (3,3) not being substrate
+    expect(state.peds[0]!.x).toBeGreaterThan(3); // advanced toward (8,3)
+  });
+
+  it('a walk-ped despawns once it reaches its target', () => {
+    const map = new GameMap(16, 16);
+    const state = createAmbientState();
+    state.peds.push({ x: 3, y: 3, dir: 0, tx: 3, ty: 3, walkTo: { x: 4, y: 3 } });
+    const rng = ambientFork('arrive');
+    for (let i = 0; i < 60 && state.peds.length > 0; i++) stepAmbient(state, map, rng, 50);
+    expect(state.peds.length).toBe(0); // walked the one tile and despawned on arrival
+  });
+
+  it('last-mile spawning is deterministic for the same seed + anchors', () => {
+    const map = lotAndBuilding();
+    const a = createAmbientState();
+    const b = createAmbientState();
+    setParkedAnchors(a, [{ x: 5.5, y: 5.5 }]);
+    setParkedAnchors(b, [{ x: 5.5, y: 5.5 }]);
+    const ra = ambientFork('det');
+    const rb = ambientFork('det');
+    for (let i = 0; i < 120; i++) {
+      stepAmbient(a, map, ra, 50);
+      stepAmbient(b, map, rb, 50);
+    }
+    expect(a.peds).toEqual(b.peds);
   });
 });
