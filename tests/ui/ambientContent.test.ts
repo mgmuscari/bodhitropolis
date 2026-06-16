@@ -395,6 +395,48 @@ describe('freewayLane (divided multi-lane roads — outer one-way, middle median
     for (let x = 0; x < 20; x++) m.built[m.idx(x, 6)] = BuiltKind.RoadStreet;
     expect(freewayLane(m, 10, 6)).toBeNull();
   });
+
+  it('never treats 1-wide STREETS as divided lanes, even at a staggered junction', () => {
+    // Maddy's degenerate case (real tiles 52,112 / 52,113): a vertical street with an
+    // east arm one row, a street block the next row (off-by-one). The band heuristic
+    // would read these single-lane junction tiles as OPPOSING divided lanes (one South,
+    // one North) and oscillate. Streets are 1-wide by construction — only widened
+    // avenues/highways are divided — so a street is never a lane.
+    const m = new GameMap(12, 12);
+    for (let y = 3; y <= 6; y++) m.built[m.idx(5, y)] = BuiltKind.RoadStreet; // vertical column
+    m.built[m.idx(6, 4)] = BuiltKind.RoadStreet; // east arm at y4
+    m.built[m.idx(7, 4)] = BuiltKind.RoadStreet;
+    m.built[m.idx(4, 5)] = BuiltKind.RoadStreet; // west block at y5/y6 (off-by-one)
+    m.built[m.idx(3, 5)] = BuiltKind.RoadStreet;
+    m.built[m.idx(4, 6)] = BuiltKind.RoadStreet;
+    m.built[m.idx(3, 6)] = BuiltKind.RoadStreet;
+    expect(freewayLane(m, 5, 4)).toBeNull();
+    expect(freewayLane(m, 5, 5)).toBeNull();
+  });
+
+  it('a car at a staggered street junction does not oscillate between two tiles', () => {
+    const m = new GameMap(12, 12);
+    for (let y = 3; y <= 6; y++) m.built[m.idx(5, y)] = BuiltKind.RoadStreet;
+    m.built[m.idx(6, 4)] = BuiltKind.RoadStreet;
+    m.built[m.idx(7, 4)] = BuiltKind.RoadStreet;
+    m.built[m.idx(4, 5)] = BuiltKind.RoadStreet;
+    m.built[m.idx(3, 5)] = BuiltKind.RoadStreet;
+    m.built[m.idx(4, 6)] = BuiltKind.RoadStreet;
+    m.built[m.idx(3, 6)] = BuiltKind.RoadStreet;
+    const state = createAmbientState();
+    const car = { x: 5, y: 4, dir: 2, tx: 5, ty: 5 }; // heading South toward (5,5)
+    state.cars.push(car);
+    const rng = ambientFork('stagger');
+    const visited = new Set<string>();
+    let steps = 0;
+    while (state.cars.includes(car) && steps < 400) {
+      visited.add(`${Math.round(car.x)},${Math.round(car.y)}`);
+      stepAmbient(state, m, rng, 50);
+      steps++;
+    }
+    expect(visited.size).toBeGreaterThan(2); // escaped the 2-tile pair — not a forever bounce
+    expect(steps).toBeLessThan(400); // and eventually left/despawned
+  });
 });
 
 describe('freeway routing (outer one-way, no weaving, turn only at a true junction)', () => {

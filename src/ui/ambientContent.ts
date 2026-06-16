@@ -210,7 +210,11 @@ function sameRun(map: GameMap, x: number, y: number, k: number, dx: number, dy: 
  */
 export function freewayLane(map: GameMap, x: number, y: number): FreewayLane | null {
   const k = map.built[map.idx(x, y)]!;
-  if (!isCarRoad(k)) return null;
+  // Only worldgen-WIDENED roads are divided: avenues are 2-wide, highways 3-wide.
+  // Streets are 1-wide by construction, so a same-kind street neighbour is a junction
+  // arm, never a parallel lane — classifying a street as a lane misreads a staggered
+  // street junction as two OPPOSING one-way tiles that oscillate (Maddy degenerate).
+  if (k !== BuiltKind.RoadAvenue && k !== BuiltKind.RoadHighway) return null;
   const same = (d: number): boolean => {
     const nx = x + DIR_DX[d]!;
     const ny = y + DIR_DY[d]!;
