@@ -20,6 +20,7 @@ import {
   birdSpawnAt,
   nextRoadStep,
   laneOffset,
+  freewayLane,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -287,6 +288,100 @@ describe('car routing prefers straight — runs a road block, does not loop (Mad
     const rng = ambientFork('lbend');
     for (let i = 0; i < 20; i++) {
       expect(nextRoadStep(map, 6, 5, 3, rng)).toBe(0); // came from West → turns North
+    }
+  });
+});
+
+// A 3-wide horizontal freeway: rows 5,6,7 all RoadHighway across the map.
+function freewayH(): GameMap {
+  const m = new GameMap(20, 14);
+  for (let x = 0; x < 20; x++) {
+    m.built[m.idx(x, 5)] = BuiltKind.RoadHighway;
+    m.built[m.idx(x, 6)] = BuiltKind.RoadHighway;
+    m.built[m.idx(x, 7)] = BuiltKind.RoadHighway;
+  }
+  return m;
+}
+
+describe('freewayLane (divided multi-lane roads — outer one-way, middle median)', () => {
+  // Maddy playtest: "each tile is bidirectional in the length of the freeway. the two
+  // outer tiles should be unidirectional, and turns should only be possible at a true
+  // junction." A widened road is a divided highway: two one-way outer carriageways
+  // (right-hand traffic) and a median (no traffic) in the middle of a 3+-wide road.
+  it('classifies the two outer lanes one-way (opposite) and the middle as median', () => {
+    const m = freewayH();
+    // outward edge is the non-road side; dir is the right-hand-traffic heading.
+    expect(freewayLane(m, 10, 5)).toEqual({ role: 'outer', dir: 3, outward: 0 }); // north lane → West
+    expect(freewayLane(m, 10, 6)).toEqual({ role: 'median' });
+    expect(freewayLane(m, 10, 7)).toEqual({ role: 'outer', dir: 1, outward: 2 }); // south lane → East
+  });
+
+  it('classifies a vertical freeway: west lane south, east lane north', () => {
+    const m = new GameMap(14, 20);
+    for (let y = 0; y < 20; y++) {
+      m.built[m.idx(5, y)] = BuiltKind.RoadHighway;
+      m.built[m.idx(6, y)] = BuiltKind.RoadHighway;
+      m.built[m.idx(7, y)] = BuiltKind.RoadHighway;
+    }
+    expect(freewayLane(m, 5, 10)).toEqual({ role: 'outer', dir: 2, outward: 3 }); // west lane → South
+    expect(freewayLane(m, 6, 10)).toEqual({ role: 'median' });
+    expect(freewayLane(m, 7, 10)).toEqual({ role: 'outer', dir: 0, outward: 1 }); // east lane → North
+  });
+
+  it('splits a 2-wide avenue into two opposite one-way lanes (no median)', () => {
+    const m = new GameMap(20, 14);
+    for (let x = 0; x < 20; x++) {
+      m.built[m.idx(x, 6)] = BuiltKind.RoadAvenue;
+      m.built[m.idx(x, 7)] = BuiltKind.RoadAvenue;
+    }
+    expect(freewayLane(m, 10, 6)).toEqual({ role: 'outer', dir: 3, outward: 0 }); // north → West
+    expect(freewayLane(m, 10, 7)).toEqual({ role: 'outer', dir: 1, outward: 2 }); // south → East
+  });
+
+  it('returns null for a 1-wide road (general routing applies)', () => {
+    const m = new GameMap(20, 14);
+    for (let x = 0; x < 20; x++) m.built[m.idx(x, 6)] = BuiltKind.RoadStreet;
+    expect(freewayLane(m, 10, 6)).toBeNull();
+  });
+});
+
+describe('freeway routing (outer one-way, no weaving, turn only at a true junction)', () => {
+  it('an outer-lane car always travels its one-way dir — never weaves or reverses, even at spawn', () => {
+    const m = freewayH();
+    const rng = ambientFork('fw-route');
+    for (const fromDir of [-1, 0, 1, 2, 3]) {
+      expect(nextRoadStep(m, 10, 7, fromDir, rng)).toBe(1); // south lane → East, always
+      expect(nextRoadStep(m, 10, 5, fromDir, rng)).toBe(3); // north lane → West, always
+    }
+  });
+
+  it('turns off only where a cross-road meets the outer edge (true junction)', () => {
+    const m = freewayH();
+    m.built[m.idx(10, 8)] = BuiltKind.RoadStreet; // off-ramp touching the south edge
+    const rng = ambientFork('fw-exit');
+    const counts = { east: 0, ramp: 0, other: 0 };
+    for (let i = 0; i < 600; i++) {
+      const d = nextRoadStep(m, 10, 7, 3, rng); // on the south lane, came from west
+      if (d === 1) counts.east++;
+      else if (d === 2) counts.ramp++; // ramp = South (the outward edge)
+      else counts.other++;
+    }
+    expect(counts.other).toBe(0); // never the median (North) or a reversal (West)
+    expect(counts.ramp).toBeGreaterThan(0); // exits DO happen at the junction
+    expect(counts.east).toBeGreaterThan(counts.ramp); // but mostly stays on the freeway
+  });
+
+  it('never spawns or routes a car onto the median; each lane is unidirectional', () => {
+    const m = freewayH();
+    const state = createAmbientState();
+    const rng = ambientFork('fw-spawn');
+    for (let i = 0; i < 300; i++) stepAmbient(state, m, rng, 50);
+    expect(state.cars.length).toBeGreaterThan(0);
+    for (const c of state.cars) {
+      const row = Math.round(c.y);
+      expect(row).not.toBe(6); // never on the median row
+      if (row === 5) expect(c.dir).toBe(3); // north lane westbound
+      if (row === 7) expect(c.dir).toBe(1); // south lane eastbound
     }
   });
 });
