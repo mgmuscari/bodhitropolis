@@ -603,12 +603,12 @@ export class Renderer {
    */
   renderFrame(world: WorldState, camera: Camera, ambient: AmbientState): void {
     this.composite(world, camera);
-    this.drawSprites(camera, ambient);
+    this.drawSprites(world, camera, ambient);
   }
 
-  /** Draw the ambient sprites (cars / pedestrians / bird flocks) at the DPR transform,
-   *  culled to the viewport. Cosmetic shell — live-pass tuned. */
-  private drawSprites(camera: Camera, ambient: AmbientState): void {
+  /** Draw the ambient sprites (cars / pedestrians / bird flocks) + the live building-health
+   *  glow at the DPR transform, culled to the viewport. Cosmetic shell — live-pass tuned. */
+  private drawSprites(world: WorldState, camera: Camera, ambient: AmbientState): void {
     const ctx = this.ctx;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     const ts = camera.tileSize;
@@ -616,6 +616,24 @@ export class Renderer {
     const h = this.cssHeight;
     const onScreen = (sx: number, sy: number): boolean =>
       sx > -ts && sx < w + ts && sy > -ts && sy < h + ts;
+
+    // Building health: a bright corner PIP on each home its citizens' trips have marked —
+    // green when thriving, red when suffering, growing with magnitude. A distinct badge (not
+    // a tile tint) so it reads against any building colour. The visible output of the
+    // citizen-transit-health loop; live per-frame, so it lives here, not in the cached base.
+    const mapW = world.map.width;
+    for (const [tile, health] of ambient.buildingHealth) {
+      const hx = tile % mapW;
+      const hy = (tile - hx) / mapW;
+      const { sx, sy } = camera.worldToScreen(hx + 0.5, hy + 0.5);
+      if (!onScreen(sx, sy)) continue;
+      const mag = Math.min(1, Math.abs(health) / 18);
+      const pip = ts * (0.2 + 0.18 * mag); // bigger badge = stronger health
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = health >= 0 ? '#4ee06a' : '#ff4636';
+      ctx.fillRect(Math.floor(sx - ts * 0.4), Math.floor(sy - ts * 0.4), pip, pip); // top-left corner
+    }
+    ctx.globalAlpha = 1;
 
     // Cars carry their own colour (c.tint), shown the same moving and parked. A MOVING car
     // is drawn to the right of its heading (laneOffset) so opposing traffic rides opposite
