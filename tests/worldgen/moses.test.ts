@@ -21,6 +21,7 @@ import {
   era5Disinvestment,
   mosesCenturyStage,
   placeParkingField,
+  promoteDenseStreets,
   DEFAULT_MOSES_PARAMS,
   type MosesParams,
   type MosesState,
@@ -65,39 +66,44 @@ function aliveKindCount(world: WorldState, kind: number): number {
   return c;
 }
 
-// All road tiles, and the size of the connected component reachable from the
-// first one (4-connected over road kinds).
+// Road-tile connectivity over the DRIVABLE graph. Parking lots are CONNECTORS — cars
+// cut through them — so a dense street that paved over into parking still bridges the
+// network. We BFS over road-OR-parking tiles but COUNT road tiles per component, so
+// `largestComponent === total` means every road tile is mutually reachable (possibly
+// via a parking bridge). Isolated destination-parking islands (era-2 fringe fields)
+// hold zero road tiles, so they correctly don't count as fragmentation.
 function roadNetwork(map: GameMap): { total: number; largestComponent: number } {
   const { width, height } = map;
   const isRoad = (i: number) => isRoadKind(map.built[i]!);
-  const all: number[] = [];
-  for (let i = 0; i < width * height; i++) if (isRoad(i)) all.push(i);
-  if (all.length === 0) return { total: 0, largestComponent: 0 };
+  const drivable = (i: number) => isRoad(i) || map.built[i] === BuiltKind.ParkingLot;
+  let total = 0;
+  for (let i = 0; i < width * height; i++) if (isRoad(i)) total++;
+  if (total === 0) return { total: 0, largestComponent: 0 };
   const seen = new Uint8Array(width * height);
   let largest = 0;
-  for (const start of all) {
-    if (seen[start]) continue;
-    let size = 0;
-    const queue = [start];
-    seen[start] = 1;
+  for (let s = 0; s < width * height; s++) {
+    if (seen[s] || !drivable(s)) continue;
+    let roadCount = 0;
+    const queue = [s];
+    seen[s] = 1;
     let head = 0;
     while (head < queue.length) {
       const i = queue[head++]!;
-      size++;
+      if (isRoad(i)) roadCount++;
       const x = i % width;
       const y = (i - x) / width;
       for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]] as const) {
         if (!map.inBounds(nx, ny)) continue;
         const ni = map.idx(nx, ny);
-        if (!seen[ni] && isRoad(ni)) {
+        if (!seen[ni] && drivable(ni)) {
           seen[ni] = 1;
           queue.push(ni);
         }
       }
     }
-    if (size > largest) largest = size;
+    if (roadCount > largest) largest = roadCount;
   }
-  return { total: all.length, largestComponent: largest };
+  return { total, largestComponent: largest };
 }
 
 // Connected components of Rail tiles (4-connected), each as a list of [x, y].
@@ -355,6 +361,46 @@ describe('placeParkingField (all-or-nothing, unit)', () => {
     const n = placeParkingField(map, parcels, createRng('pf'), 2, 2, 2, 2);
     expect(n).toBe(0);
     expect(countBuilt(map, BuiltKind.ParkingLot)).toBe(0);
+  });
+});
+
+describe('promoteDenseStreets (concrete accumulates → parking)', () => {
+  it('promotes a 2x2 RoadStreet block to a ParkingLot parcel', () => {
+    const map = new GameMap(12, 12);
+    const parcels = new ParcelStore();
+    for (const [x, y] of [[4, 4], [5, 4], [4, 5], [5, 5]] as const) {
+      map.built[map.idx(x, y)] = BuiltKind.RoadStreet;
+    }
+    const n = promoteDenseStreets(map, parcels, createRng('ap'));
+    expect(n).toBe(1);
+    for (const [x, y] of [[4, 4], [5, 4], [4, 5], [5, 5]] as const) {
+      expect(map.built[map.idx(x, y)]).toBe(BuiltKind.ParkingLot);
+    }
+    expect(checkParcelAgreement(map, parcels)).toEqual([]); // built+parcel layers agree
+  });
+
+  it('leaves a 1-wide street grid untouched (no 2x2 block forms)', () => {
+    const map = new GameMap(12, 12);
+    const parcels = new ParcelStore();
+    for (let x = 0; x < 12; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet; // horizontal
+    for (let y = 0; y < 12; y++) map.built[map.idx(6, y)] = BuiltKind.RoadStreet; // vertical cross
+    const n = promoteDenseStreets(map, parcels, createRng('ap'));
+    expect(n).toBe(0);
+    expect(countBuilt(map, BuiltKind.ParkingLot)).toBe(0);
+  });
+
+  it('keeps the drivable network connected: a paved-over through-block still bridges', () => {
+    // A 1-wide street corridor with a 2x2 bulge in the middle; promoting the bulge to
+    // parking must not split the corridor (parking is a connector).
+    const map = new GameMap(16, 8);
+    for (let x = 0; x < 16; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadStreet; // corridor
+    map.built[map.idx(7, 3)] = BuiltKind.RoadStreet; // the bulge: (7,3),(8,3),(7,4),(8,4) = 2x2
+    map.built[map.idx(8, 3)] = BuiltKind.RoadStreet;
+    const parcels = new ParcelStore();
+    promoteDenseStreets(map, parcels, createRng('ap'));
+    const net = roadNetwork(map);
+    expect(net.largestComponent).toBe(net.total); // still one connected drivable network
+    expect(countBuilt(map, BuiltKind.ParkingLot)).toBe(4); // the bulge paved over
   });
 });
 
