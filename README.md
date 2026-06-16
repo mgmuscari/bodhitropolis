@@ -53,6 +53,15 @@ Code is split into three layers with a strict, test-enforced purity rule
   dock. Pure presentation/keying (`renderKey.ts`, `toolbarContent.ts`,
   `techContent.ts`, `openingContent.ts`) is allowlisted and headless-tested;
   only the DOM shells and `src/main.ts` touch the DOM.
+- **`src/citizens/` + `src/ui/ambientContent.ts`** — the **live agent layer**
+  (see [The living city](#the-living-city)): persistent citizens, cars,
+  pedestrians, and bird flocks, plus live per-tile/per-building signals (building
+  health, desire-path wear, water-runoff pollution). It **reads** the
+  deterministic world but writes **only its own** (renderer-side) state and is
+  stepped on a wall-clock and drawn per frame — so it never touches the world
+  hash and the determinism gate still holds. The pure parts (`citizens/census.ts`,
+  `citizens/plots.ts`, `ambientContent.ts`) are allowlisted/headless-tested
+  (DOM-free, no transcendental Math).
 
 **Determinism is load-bearing.** `engine` and `worldgen` use only integer math
 and exactly-rounded float ops (`+ - * / sqrt`, `Math.imul/floor`) — no
@@ -324,6 +333,48 @@ formula, so older saves and tests stay valid.)
 As with effort and ecology, every **rate, threshold, seed, and weight here is
 placeholder civic** — the tested contract is the directional invariants (and the
 trust floor), never the balance, which a tuning pass will set.
+
+### The living city
+
+The cars and pedestrians are not set dressing — they are the **transportation
+simulation**, and the city's health emerges from how its people move. This is a
+**live agent layer** (`src/citizens/`, `src/ui/ambientContent.ts`) that *reads*
+the deterministic world but owns its own state and is rendered per frame; it
+**never writes the world hash**, so the determinism gate (and "same seed → same
+world") is untouched. The mechanic it models is the game's spine: a car-choked,
+blighted century is healed back into a walkable one.
+
+- **Citizens** — each residential building houses citizens by density. A citizen
+  makes trips to nearby plots (commerce, industry, civic) and runs a small state
+  machine: home → travel → at the plot → home.
+- **Mode choice** — a short trip is **walked**; a long one **drives**. A
+  pedestrian routes a **Manhattan walk** along walkable tiles (never diagonally,
+  never through a building), preferring **promenades, then calm streets, then a
+  local street by inverse traffic density, then open ground**, and shunning
+  stroads. **Freeways are impassable on foot** (a cross-freeway trip drives
+  instead, and a walk that dead-ends there makes the citizen give up — docking
+  its home's wellbeing). Drivers **park** in a lot stall or, failing that, at the
+  kerb, then a pedestrian walks the last leg in; cars run **twice as fast on a
+  freeway** and never park on one.
+- **Building health** — a citizen carries home the **wellbeing of the plot it
+  visited** (industry harms, commerce/civic help, the new-urbanist tech-tree
+  builds help most and hand back a status buff), minus the toll of a long
+  road-walk. It accrues into a live per-home health shown as a green/red pip.
+- **Desire paths & runoff** — pedestrians trample wild-green ground into brown
+  **desire paths** that gather trash (and regrow when foot traffic reroutes onto
+  a path you build), and the impassable **water** collects runoff pollution from
+  the urban ground around it.
+- **A blighted start** — `seedBlight` derives all of the above from the
+  worldgen world at load: the city begins with trampled paths, polluted
+  shorelines, and homes whose wellbeing is **precomputed** from the plots around
+  them — a century of car-culture already in the ground, for you to heal.
+
+The intended arc — the **congestion→bloom loop** — is that peeling back road
+culture (street → quiet street → bike path → promenade, and transit) shifts
+citizens out of cars into walking, which drops pollution and lifts health until
+the city blooms: mostly promenade, roads kept only for freight, emergency, and
+construction. (Building health is currently a live signal the *player* closes the
+loop on; wiring it back into deterministic growth/decline is future work.)
 
 ## Methodology
 
