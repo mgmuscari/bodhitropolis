@@ -339,28 +339,29 @@ function freewayStep(
   return lane.dir; // ran out of road — continue off-network, despawn next step
 }
 
+/** Car traversability for general (non-lane) routing: a car-road tile that is NOT a
+ *  divided road's median. Cars neither spawn on, weave onto, nor turn (at a junction)
+ *  onto a median — so the median stays a true no-traffic gap. */
+function carPassable(map: GameMap, x: number, y: number): boolean {
+  if (!isCarRoad(map.built[map.idx(x, y)]!)) return false;
+  const lane = freewayLane(map, x, y);
+  return lane === null || lane.role !== 'median';
+}
+
 /**
  * The car motion seam: from road tile (x, y), the chosen connected isRoadKind
  * neighbour direction (0..3). On a divided multi-lane road's outer lane the choice is
  * the one-way `freewayStep` (independent of `fromDir`, including spawn); otherwise it
- * is the general straight-biased junction pick, excluding the U-turn `fromDir` unless
- * it is the only connected road (dead-end). -1 if (x, y) has no road neighbour at all.
- * Deterministic given `rng`.
+ * is the general straight-biased junction pick over `carPassable` neighbours (never a
+ * median), excluding the U-turn `fromDir` unless it is the only connected road
+ * (dead-end). -1 if (x, y) has no road neighbour at all. Deterministic given `rng`.
  */
 export function nextRoadStep(map: GameMap, x: number, y: number, fromDir: number, rng: Rng): number {
   const lane = freewayLane(map, x, y);
   if (lane && lane.role === 'outer') {
     return freewayStep(map, x, y, lane, rng);
   }
-  return pickStep(
-    map,
-    x,
-    y,
-    fromDir,
-    rng,
-    (nx, ny) => isCarRoad(map.built[map.idx(nx, ny)]!),
-    CAR_STRAIGHT_WEIGHT,
-  );
+  return pickStep(map, x, y, fromDir, rng, (nx, ny) => carPassable(map, nx, ny), CAR_STRAIGHT_WEIGHT);
 }
 
 /** The pedestrian motion seam: the same junction rule over ped substrate. */
