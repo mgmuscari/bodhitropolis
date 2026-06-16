@@ -112,6 +112,18 @@ export function laneOffset(dir: number): { dx: number; dy: number } {
   return { dx: -DIR_DY[dir]! * LANE, dy: DIR_DX[dir]! * LANE };
 }
 
+/** How far a street-parked car is drawn toward its curb (the adjacent non-road tile). Larger
+ *  than LANE so the car clears the lane centre and hugs the kerb instead of sitting in the
+ *  middle of the road — but < 0.5 so it stays within its own tile. */
+const CURB = 0.32;
+
+/** A street-parked car's draw-time offset from its tile centre, straight toward its recorded
+ *  curb side (curbDir, 0=N/1=E/2=S/3=W) so it parks against the building/grass edge rather
+ *  than on the lane. Cosmetic — read only by the renderer. */
+export function curbParkOffset(curbDir: number): { dx: number; dy: number } {
+  return { dx: DIR_DX[curbDir]! * CURB, dy: DIR_DY[curbDir]! * CURB };
+}
+
 /** A grid-following sprite: float world position + heading + committed target tile. */
 export interface Mover {
   /** Float world position in tile units. */
@@ -146,6 +158,9 @@ export interface Mover {
   stallIdx?: number;
   /** Stable id assigned when a car parks, so its pedestrian can find its way back to it. */
   id?: number;
+  /** For a street-parked car: the direction (0=N/1=E/2=S/3=W) toward its curb (the adjacent
+   *  non-road tile), so the renderer draws it hugging the kerb instead of in the lane. */
+  curbDir?: number;
   /** A colour tag bound to the car at spawn (a non-negative int the renderer maps into its
    *  palette mod its length). Stays with the car for its whole life, so it shows the same
    *  colour moving on the road and parked in a lot. */
@@ -774,6 +789,17 @@ function tryPark(state: AmbientState, c: Car, map: GameMap): boolean {
     c.stallIdx = undefined;
     c.x = curb.x;
     c.y = curb.y;
+    // Record which side the kerb is on (first non-road neighbour) so the renderer draws the
+    // car pulled over to it, not sitting on the lane centre of a 1-wide street.
+    c.curbDir = undefined;
+    for (let d = 0; d < 4; d++) {
+      const nx = curb.x + DIR_DX[d]!;
+      const ny = curb.y + DIR_DY[d]!;
+      if (!map.inBounds(nx, ny) || !carTraversable(map.built[map.idx(nx, ny)]!)) {
+        c.curbDir = d;
+        break;
+      }
+    }
   }
   c.parked = true;
   c.path = undefined;
