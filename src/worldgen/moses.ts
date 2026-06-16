@@ -404,6 +404,47 @@ export function placeParkingField(
   return placed;
 }
 
+/**
+ * Autopromote accumulated concrete: a 2×2 block of RoadStreet becomes a ParkingLot
+ * parcel. Only DENSE packing forms a 2×2 of street (a 1-wide grid never does), so this
+ * targets the over-paved blobs — a century of paving and demolished lots settling into
+ * the parking lots cars cut through (Maddy vision). Greedy, row-major, non-overlapping
+ * (a promoted tile is no longer street), deterministic in `rng`. Streets carry no
+ * parcel, so clearing `built` then `placeParcel` keeps `checkParcelAgreement` clean;
+ * street and parking are both paved (ecology footprint unchanged) and parking is a
+ * road CONNECTOR (cars cut through), so converting a through-block never severs the
+ * drivable network. Returns the number of 2×2 lots promoted.
+ */
+export function promoteDenseStreets(map: GameMap, parcels: ParcelStore, rng: Rng): number {
+  const isStreet = (x: number, y: number): boolean =>
+    map.inBounds(x, y) && map.built[map.idx(x, y)] === BuiltKind.RoadStreet;
+  let promoted = 0;
+  for (let y = 0; y + 1 < map.height; y++) {
+    for (let x = 0; x + 1 < map.width; x++) {
+      if (!isStreet(x, y) || !isStreet(x + 1, y) || !isStreet(x, y + 1) || !isStreet(x + 1, y + 1)) continue;
+      // Clear the four street tiles (roads carry no parcel) and stamp a 2×2 ParkingLot.
+      for (let dy = 0; dy < 2; dy++) {
+        for (let dx = 0; dx < 2; dx++) map.built[map.idx(x + dx, y + dy)] = 0;
+      }
+      const condition = 60 + rng.nextInt(60); // vacant-lot grade, matching era-2 fields
+      if (
+        placeParcel(map, parcels, {
+          x,
+          y,
+          width: 2,
+          height: 2,
+          kind: BuiltKind.ParkingLot,
+          density: 1,
+          condition,
+        }) !== -1
+      ) {
+        promoted++;
+      }
+    }
+  }
+  return promoted;
+}
+
 /** Minimum value of `field` over a w×h footprint anchored at (ax, ay). */
 function footprintMin(map: GameMap, field: Int32Array, ax: number, ay: number, w: number, h: number): number {
   let lo = Infinity;
@@ -1263,6 +1304,12 @@ export function era5Disinvestment(world: WorldState, rng: Rng, p: MosesParams, s
     }
     craters += lots;
   }
+
+  // A century of accumulated concrete settles into parking: dense 2×2 street blocks
+  // become parking lots cars cut through. Counted into `craters` so the chronicle
+  // balance (alive = standing − abandoned + craters) stays exact; forked rng leaves
+  // era-5's decay/crater streams intact.
+  craters += promoteDenseStreets(map, parcels, rng.fork('autopark'));
 
   world.log.push(
     `era5: disinvestment — ${decayed} decayed, ${abandoned} abandoned, ${craters} craters (of ${state.preEra5Alive} standing)`,
