@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Camera, BASE_TILE } from '../../src/ui/camera';
+import { Camera, BASE_TILE, MIN_ZOOM, MAX_ZOOM } from '../../src/ui/camera';
 
 function makeCamera(overrides: Partial<ConstructorParameters<typeof Camera>[0]> = {}) {
   return new Camera({
@@ -136,5 +136,44 @@ describe('Camera visibleTileRange', () => {
     expect(r.x1).toBeLessThanOrEqual(127);
     expect(r.y1).toBeLessThanOrEqual(127);
     expect(r.x1).toBeGreaterThan(r.x0);
+  });
+});
+
+describe('Camera centerOn (zoom-to-location API)', () => {
+  it('puts the target world tile at the viewport centre (interior, unclamped)', () => {
+    const cam = makeCamera({ x: 0, y: 0, zoom: 2 });
+    cam.centerOn(64, 64);
+    const c = cam.screenToWorld(cam.viewportWidth / 2, cam.viewportHeight / 2);
+    expect(c.wx).toBeCloseTo(64, 6);
+    expect(c.wy).toBeCloseTo(64, 6);
+  });
+
+  it('sets zoom when given, rounded and clamped to [MIN_ZOOM, MAX_ZOOM]', () => {
+    const cam = makeCamera();
+    cam.centerOn(64, 64, 4);
+    expect(cam.zoom).toBe(4);
+    cam.centerOn(64, 64, 9);
+    expect(cam.zoom).toBe(MAX_ZOOM);
+    cam.centerOn(64, 64, 0);
+    expect(cam.zoom).toBe(MIN_ZOOM);
+    cam.centerOn(64, 64, 2.6);
+    expect(cam.zoom).toBe(3);
+  });
+
+  it('leaves zoom unchanged when omitted', () => {
+    const cam = makeCamera({ zoom: 3 });
+    cam.centerOn(64, 64);
+    expect(cam.zoom).toBe(3);
+  });
+
+  it('clamps the view to the map at the corners', () => {
+    const cam = makeCamera({ zoom: 2 });
+    cam.centerOn(0, 0);
+    expect(cam.x).toBe(0);
+    expect(cam.y).toBe(0);
+    cam.centerOn(1e6, 1e6);
+    const ts = cam.tileSize;
+    expect(cam.x).toBeCloseTo(cam.mapWidth - cam.viewportWidth / ts, 6);
+    expect(cam.y).toBeCloseTo(cam.mapHeight - cam.viewportHeight / ts, 6);
   });
 });
