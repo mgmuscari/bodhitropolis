@@ -68,7 +68,7 @@ export function main(): void {
   // cadence; this shell reads `deps.partition` to resolve a repair's tile.
   const partition = computeNeighborhoods(world.map);
   const civic = createCivicState(partition);
-  const deps: SimDeps = { world, tech, civic, partition };
+  const deps: SimDeps = { world, tech, civic, partition, seed };
 
   // The latest sim tick, captured for the repair-forwarding hook (which fires
   // from pointer events, outside the sim loop).
