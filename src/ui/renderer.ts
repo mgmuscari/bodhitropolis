@@ -627,12 +627,13 @@ export class Renderer {
       ctx.fillRect(sx - pedSize / 2, sy - pedSize / 2, pedSize, pedSize);
     }
 
-    // Bird flocks: tiny dot clusters (each boid drawn at its float position).
+    // Bird flocks: tiny dot clusters. Centre on the tile (+0.5) for the same
+    // grid convention as cars/peds (boids spawn clustered on the tile corner).
     ctx.fillStyle = '#2b2433';
     const birdSize = Math.max(1, ts * 0.1);
     for (const f of ambient.birds) {
       for (const b of f.birds) {
-        const { sx, sy } = camera.worldToScreen(b.x, b.y);
+        const { sx, sy } = camera.worldToScreen(b.x + 0.5, b.y + 0.5);
         if (!onScreen(sx, sy)) continue;
         ctx.fillRect(sx - birdSize / 2, sy - birdSize / 2, birdSize, birdSize);
       }
