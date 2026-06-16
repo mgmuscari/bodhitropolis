@@ -49,10 +49,14 @@ const PED_SPEED = 0.05;
  *  to/from. Lots sit next to the demand they serve, so this stays small. */
 const LASTMILE_RADIUS = 4;
 
-/** Per-substep probability of spawning one last-mile pedestrian (when anchors exist). A
- *  walker lives ~the few seconds it takes to cross LASTMILE_RADIUS tiles at PED_SPEED, so
- *  a modest rate keeps a steady, non-crowding trickle to/from the parked cars. */
-const LASTMILE_SPAWN_CHANCE = 0.3;
+/** How close (tile radius) a parking lot's centre must be to a trip-car's destination for
+ *  the car to pull in and park. Lots sit by the zones they serve, so this stays modest. */
+const PARK_RADIUS = 6;
+
+/** Substeps a car stays parked before leaving: a base plus a seeded spread so arrivals
+ *  don't all depart together. At 50ms/substep this is ~5–20s of dwell. */
+const PARK_DWELL_MIN = 100;
+const PARK_DWELL_SPAN = 300;
 
 /** How strongly a car prefers to continue straight through a junction vs. turn (the
  *  weight of the straight-ahead option against each side option). High enough that
@@ -124,6 +128,12 @@ export interface Mover {
    *  toward it (ignoring the road/ped grid, so it can cross a lot or road), despawns on
    *  arrival, and is exempt from the ped-substrate despawn. */
   walkTo?: { x: number; y: number };
+  /** A car that has finished its trip and is STORED in a parking lot stall. It sits for
+   *  `dwell` substeps (occupying lots[lotIdx].stalls[stallIdx]) then leaves (despawns). */
+  parked?: boolean;
+  dwell?: number;
+  lotIdx?: number;
+  stallIdx?: number;
 }
 
 export type Car = Mover;
@@ -142,6 +152,15 @@ export interface Flock {
   birds: Bird[];
 }
 
+/** A parking lot the ambient layer can store cars in: its centre (for the nearest-lot
+ *  search when a trip-car arrives) and its stall centres (float world coords, capacity =
+ *  stalls.length). Occupancy is dynamic — derived from the parked cars, not stored here. */
+export interface ParkingLotInfo {
+  cx: number;
+  cy: number;
+  stalls: ReadonlyArray<{ x: number; y: number }>;
+}
+
 /** The full ambient sprite state — renderer-side only, never part of the world. */
 export interface AmbientState {
   cars: Car[];
@@ -149,25 +168,21 @@ export interface AmbientState {
   birds: Flock[];
   /** Leftover sub-substep time carried between stepAmbient calls. */
   accMs: number;
-  /** Parked-car positions (float world coords) the last-mile pedestrians walk to/from —
-   *  the occupied stalls the renderer draws (see parkingContent). Renderer-side, set by
-   *  the host via setParkedAnchors; never part of the world hash. Undefined/empty ⇒ no
-   *  last-mile peds (and zero rng drawn for them, so determinism is unchanged). */
-  parkedAnchors?: ReadonlyArray<{ x: number; y: number }>;
+  /** The parking lots that STORE the moving cars: a trip-car parks in the nearest one on
+   *  arrival, dwells, then leaves (cars=trips, lots=storage). Renderer-side, set by the
+   *  host via setParkingLots; never part of the world hash. Undefined/empty ⇒ trip-cars
+   *  despawn at their destination (and zero rng drawn for parking, so determinism holds). */
+  parkingLots?: ReadonlyArray<ParkingLotInfo>;
 }
 
 export function createAmbientState(): AmbientState {
   return { cars: [], peds: [], birds: [], accMs: 0 };
 }
 
-/** Publish the occupied parked-car stalls (float world coords) that last-mile pedestrians
- *  walk to/from. The host (main.ts) computes these from the parking lots + occupancy so
- *  the walkers line up with the parked cars the renderer draws. */
-export function setParkedAnchors(
-  state: AmbientState,
-  anchors: ReadonlyArray<{ x: number; y: number }>,
-): void {
-  state.parkedAnchors = anchors;
+/** Publish the parking lots that store moving cars. The host (main.ts) computes these from
+ *  the map's ParkingLot components (centre + stall grid) so parked cars land on the stalls. */
+export function setParkingLots(state: AmbientState, lots: ReadonlyArray<ParkingLotInfo>): void {
+  state.parkingLots = lots;
 }
 
 // --- Pure decision helpers (unit-test seams) -----------------------------
@@ -607,8 +622,10 @@ export function ingestTrips(
   trips: ReadonlyArray<{ path: readonly number[] }>,
   map: GameMap,
 ): void {
+  let moving = 0; // parked cars are stored, not traffic — cap only the moving ones
+  for (const c of state.cars) if (!c.parked) moving++;
   for (const trip of trips) {
-    if (state.cars.length >= CAR_CAP) break;
+    if (moving >= CAR_CAP) break;
     if (trip.path.length < 2) continue; // need at least one leg to drive
     const p0 = trip.path[0]!;
     const p1 = trip.path[1]!;
@@ -618,6 +635,7 @@ export function ingestTrips(
     const y1 = (p1 - x1) / map.width;
     const dir = x1 > x0 ? 1 : x1 < x0 ? 3 : y1 > y0 ? 2 : 0;
     state.cars.push({ x: x0, y: y0, dir, tx: x1, ty: y1, path: trip.path, leg: 2 });
+    moving++;
   }
 }
 
@@ -650,22 +668,67 @@ function spawnPeds(state: AmbientState, map: GameMap, rng: Rng): void {
   }
 }
 
-/** Spawn last-mile pedestrians who walk between a parked car and a nearby building. Picks
- *  a random occupied stall (a parkedAnchor), finds the nearest demand tile, and adds one
- *  walker — half walking FROM the car to the building, half TO the car (so the lot reads
- *  as actively used). No-op (and zero rng) when no anchors exist, preserving determinism
- *  for worlds that never publish them. */
-function spawnLastMilePeds(state: AmbientState, map: GameMap, rng: Rng): void {
-  const anchors = state.parkedAnchors;
-  if (!anchors || anchors.length === 0) return; // checked BEFORE any draw → rng untouched
+/** Park a trip-car that has reached the end of its path: pull into the nearest lot (within
+ *  PARK_RADIUS) that has a free stall, snap onto the stall, and dwell. Returns true if the
+ *  car parked (it stays, now stored), false if no lot/stall was available (it despawns).
+ *  The lot is storage for the moving cars — occupancy is just the parked cars sitting in it.
+ *  No lots ⇒ returns false before drawing any rng (determinism for lot-less worlds). */
+function tryPark(state: AmbientState, c: Car, map: GameMap, rng: Rng): boolean {
+  const lots = state.parkingLots;
+  if (!lots || lots.length === 0) return false;
+  // Nearest lot whose centre is within PARK_RADIUS of the car's arrival tile.
+  let best = -1;
+  let bestD = PARK_RADIUS * PARK_RADIUS;
+  for (let i = 0; i < lots.length; i++) {
+    const dx = lots[i]!.cx - c.x;
+    const dy = lots[i]!.cy - c.y;
+    const d = dx * dx + dy * dy;
+    if (d <= bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  if (best < 0) return false; // no lot near the destination → despawn
+  // First stall not already taken by another parked car in this lot (dynamic occupancy).
+  const lot = lots[best]!;
+  let stall = -1;
+  for (let s = 0; s < lot.stalls.length; s++) {
+    let taken = false;
+    for (const o of state.cars) {
+      if (o.parked && o.lotIdx === best && o.stallIdx === s) {
+        taken = true;
+        break;
+      }
+    }
+    if (!taken) {
+      stall = s;
+      break;
+    }
+  }
+  if (stall < 0) return false; // lot full → despawn
+  const pos = lot.stalls[stall]!;
+  c.parked = true;
+  c.lotIdx = best;
+  c.stallIdx = stall;
+  c.path = undefined;
+  c.leg = undefined;
+  c.x = pos.x - 0.5; // store tile-corner; the renderer draws the centre (+0.5) on the stall
+  c.y = pos.y - 0.5;
+  c.dwell = PARK_DWELL_MIN + rng.nextInt(PARK_DWELL_SPAN);
+  spawnParkPed(state, map, c, rng); // a person gets out / arrives at the car
+  return true;
+}
+
+/** On a car parking, add one last-mile pedestrian between the car and the nearest building
+ *  — half walking FROM the car to the building (got out), half TO the car (came to meet it)
+ *  — so the lots read as actively used. No building nearby ⇒ no ped. */
+function spawnParkPed(state: AmbientState, map: GameMap, c: Car, rng: Rng): void {
   if (state.peds.length >= PED_CAP) return;
-  if (!rng.chance(LASTMILE_SPAWN_CHANCE)) return;
-  const a = anchors[rng.nextInt(anchors.length)]!;
-  const b = nearestDemandTile(map, Math.round(a.x), Math.round(a.y));
+  const b = nearestDemandTile(map, Math.round(c.x), Math.round(c.y));
   if (!b) return;
   const fromCar = rng.chance(0.5);
-  const car = { x: a.x, y: a.y };
-  const door = { x: b.x + 0.5, y: b.y + 0.5 };
+  const car = { x: c.x, y: c.y };
+  const door = { x: b.x, y: b.y };
   const start = fromCar ? car : door;
   const end = fromCar ? door : car;
   state.peds.push({ x: start.x, y: start.y, dir: 0, tx: start.x, ty: start.y, walkTo: end });
@@ -706,24 +769,27 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
 
   // 2. Spawn peds/flocks map-wide up to the caps. Cars are NOT spawned here — they are
   //    the sim's O-D trips, ingested via ingestTrips on the traffic cadence (cars=trips).
-  //    Last-mile walkers spawn from the published parked-car anchors (no-op without them).
+  //    Last-mile walkers spawn on a car PARKING (see tryPark → spawnParkPed), not here.
   spawnPeds(state, map, rng);
-  spawnLastMilePeds(state, map, rng);
   spawnFlocks(state, map, rng);
 
-  // 3. Move. A trip-car follows its committed path (pathStep) and despawns on arrival;
-  //    a path-less car (a test fixture) falls back to the grid wander. Peds wander on
-  //    substrate; flocks flock.
-  state.cars = state.cars.filter((c) =>
-    advanceMover(
-      c,
-      CAR_SPEED,
-      map,
-      c.path !== undefined
-        ? (x, y) => pathStep(map, c, x, y)
-        : (x, y, fromDir, recent) => nextRoadStep(map, x, y, fromDir, rng, recent),
-    ),
-  );
+  // 3. Move. A parked car counts down its dwell and then leaves (the lot is storage). A
+  //    moving trip-car follows its path and, on arrival, parks in the nearest lot — or
+  //    despawns if none is near. A path-less car (a test fixture) falls back to the grid
+  //    wander. Peds wander on substrate (last-mile walkers lerp straight); flocks flock.
+  state.cars = state.cars.filter((c) => {
+    if (c.parked) {
+      c.dwell! -= 1;
+      return c.dwell! > 0;
+    }
+    if (c.path !== undefined) {
+      const alive = advanceMover(c, CAR_SPEED, map, (x, y) => pathStep(map, c, x, y));
+      return alive ? true : tryPark(state, c, map, rng);
+    }
+    return advanceMover(c, CAR_SPEED, map, (x, y, fromDir, recent) =>
+      nextRoadStep(map, x, y, fromDir, rng, recent),
+    );
+  });
   state.peds = state.peds.filter((p) =>
     p.walkTo !== undefined
       ? advanceWalk(p, PED_SPEED)
