@@ -16,7 +16,6 @@ import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 import { laneOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
-import { parkingLots, parkingStalls, lotOccupancy } from './parkingContent';
 
 /** A previewed tile for the hover/drag overlay: world coords + validity tint. */
 export interface PreviewTile {
@@ -553,23 +552,8 @@ export class Renderer {
       }
     }
 
-    // Parked cars: the over-paved city's lots, visibly filling. Each ParkingLot
-    // component stalls up to LOT_CAPACITY in a 3x3 grid; lotOccupancy reads how full it
-    // is from local demand. Static → part of the cached base (no flicker, no per-frame
-    // cost), culled to the visible range. Muted-but-distinct paint per stall so the rows
-    // of cars read against the dark pavement (deterministic by lot+stall, no rng).
-    const parkedSize = Math.max(2, ts * 0.3);
-    for (const lot of parkingLots(map)) {
-      if (lot.x1 < range.x0 || lot.x0 > range.x1 || lot.y1 < range.y0 || lot.y0 > range.y1) continue;
-      const occ = lotOccupancy(map, lot);
-      if (occ === 0) continue;
-      const stalls = parkingStalls(lot);
-      for (let s = 0; s < occ; s++) {
-        ctx.fillStyle = PARKED_CAR_COLORS[(lot.x0 * 3 + lot.y0 + s) % PARKED_CAR_COLORS.length]!;
-        const { sx, sy } = camera.worldToScreen(stalls[s]!.x, stalls[s]!.y);
-        ctx.fillRect(Math.floor(sx - parkedSize / 2), Math.floor(sy - parkedSize / 2), parkedSize, parkedSize);
-      }
-    }
+    // Parked cars are no longer painted into the static base — they are the trip-cars that
+    // parked (cars=trips, lots=storage), drawn dynamically in drawSprites from ambient.cars.
   }
 
   /**
@@ -633,15 +617,25 @@ export class Renderer {
     const onScreen = (sx: number, sy: number): boolean =>
       sx > -ts && sx < w + ts && sy > -ts && sy < h + ts;
 
-    // Cars: small dark rects, drawn to the right of their heading (laneOffset) so
-    // opposing traffic rides opposite sides of a vertical/horizontal road block.
-    ctx.fillStyle = '#19151f';
+    // Cars. A MOVING car is a small dark rect drawn to the right of its heading (laneOffset)
+    // so opposing traffic rides opposite sides of a road. A PARKED car sits on its stall
+    // (no lane offset) in a muted-but-distinct colour per stall so the filled lots read
+    // against the dark pavement — these are the same trip-cars, now stored in the lot.
     const carSize = Math.max(2, ts * 0.34);
+    const parkedSize = Math.max(2, ts * 0.3);
     for (const c of ambient.cars) {
-      const lane = laneOffset(c.dir);
-      const { sx, sy } = camera.worldToScreen(c.x + 0.5 + lane.dx, c.y + 0.5 + lane.dy);
-      if (!onScreen(sx, sy)) continue;
-      ctx.fillRect(sx - carSize / 2, sy - carSize / 2, carSize, carSize);
+      if (c.parked) {
+        const { sx, sy } = camera.worldToScreen(c.x + 0.5, c.y + 0.5);
+        if (!onScreen(sx, sy)) continue;
+        ctx.fillStyle = PARKED_CAR_COLORS[(c.lotIdx! * 3 + c.stallIdx!) % PARKED_CAR_COLORS.length]!;
+        ctx.fillRect(Math.floor(sx - parkedSize / 2), Math.floor(sy - parkedSize / 2), parkedSize, parkedSize);
+      } else {
+        const lane = laneOffset(c.dir);
+        const { sx, sy } = camera.worldToScreen(c.x + 0.5 + lane.dx, c.y + 0.5 + lane.dy);
+        if (!onScreen(sx, sy)) continue;
+        ctx.fillStyle = '#19151f';
+        ctx.fillRect(sx - carSize / 2, sy - carSize / 2, carSize, carSize);
+      }
     }
 
     // Pedestrians: small warm dots.

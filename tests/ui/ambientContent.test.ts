@@ -11,11 +11,12 @@ import { createCivicState } from '../../src/civic/state';
 import { createTechState } from '../../src/tech/state';
 import { TECH_TREE } from '../../src/tech/tree';
 import { simTick, type SimDeps } from '../../src/civic/compose';
+import { parkingLots, parkingStalls } from '../../src/ui/parkingContent';
 import {
   createAmbientState,
   stepAmbient,
   ingestTrips,
-  setParkedAnchors,
+  setParkingLots,
   carWeightForRoad,
   isCarRoad,
   isPedSubstrate,
@@ -621,42 +622,98 @@ describe('ambient stream isolation (AC#7 pin b)', () => {
   });
 });
 
-describe('last-mile pedestrians (walk to/from parked cars)', () => {
-  // A lone parking lot with a house two tiles south — neither tile is ped substrate,
-  // so the ONLY peds that can appear are the last-mile walkers anchored to the lot.
-  function lotAndBuilding(): GameMap {
-    const map = new GameMap(16, 16);
-    map.built[map.idx(5, 5)] = BuiltKind.ParkingLot;
-    map.built[map.idx(5, 7)] = BuiltKind.HouseSingle;
-    return map;
+describe('cars park in lots (the lot is storage for the moving cars)', () => {
+  // A short road ending next to a 2x2 parking lot, with a house by the lot so a parked
+  // car's occupant has somewhere to walk. The trip path runs the road to its end (8,5),
+  // one tile from the lot at (9..10, 5..6).
+  function roadWithLot(): { map: GameMap; path: number[] } {
+    const map = new GameMap(20, 12);
+    for (let x = 2; x <= 8; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    for (let y = 5; y <= 6; y++) for (let x = 9; x <= 10; x++) map.built[map.idx(x, y)] = BuiltKind.ParkingLot;
+    map.built[map.idx(9, 7)] = BuiltKind.HouseSingle; // demand → a last-mile ped on park
+    const path: number[] = [];
+    for (let x = 2; x <= 8; x++) path.push(map.idx(x, 5));
+    return { map, path };
   }
 
-  it('with no parked-car anchors, no last-mile peds appear (rng untouched)', () => {
-    const map = lotAndBuilding();
+  const lotInfo = (map: GameMap) =>
+    parkingLots(map).map((l) => ({
+      cx: (l.x0 + l.x1) / 2,
+      cy: (l.y0 + l.y1) / 2,
+      stalls: parkingStalls(l),
+    }));
+
+  it('a trip-car parks in the nearby lot at the end of its trip, then leaves after dwelling', () => {
+    const { map, path } = roadWithLot();
     const state = createAmbientState();
-    const rng = ambientFork('none');
-    for (let i = 0; i < 100; i++) stepAmbient(state, map, rng, 50);
-    expect(state.peds.length).toBe(0); // no anchors set → spawnLastMilePeds is a no-op
+    setParkingLots(state, lotInfo(map));
+    ingestTrips(state, [{ path }], map);
+    const rng = ambientFork('park');
+    let parked = false;
+    for (let i = 0; i < 120 && !parked; i++) {
+      stepAmbient(state, map, rng, 50);
+      parked = state.cars.some((c) => c.parked);
+    }
+    expect(parked).toBe(true); // drove to the end and pulled into the lot
+    expect(state.cars.find((c) => c.parked)!.dwell).toBeGreaterThan(0);
+    // dwell out — the car leaves the lot (storage frees up)
+    for (let i = 0; i < 500 && state.cars.length > 0; i++) stepAmbient(state, map, rng, 50);
+    expect(state.cars.length).toBe(0);
   });
 
-  it('spawns peds that walk between a parked car and a nearby building', () => {
-    const map = lotAndBuilding();
+  it('with no lots published, a trip-car despawns at its destination (never parks)', () => {
+    const { map, path } = roadWithLot(); // lots NOT published to the ambient state
     const state = createAmbientState();
-    setParkedAnchors(state, [{ x: 5.5, y: 5.5 }]); // the lot's parked-car stall
-    const rng = ambientFork('lastmile');
-    let sawWalker = false;
-    for (let i = 0; i < 300; i++) {
+    ingestTrips(state, [{ path }], map);
+    const rng = ambientFork('nolot');
+    for (let i = 0; i < 120 && state.cars.length > 0; i++) stepAmbient(state, map, rng, 50);
+    expect(state.cars.length).toBe(0);
+    expect(state.cars.every((c) => !c.parked)).toBe(true);
+  });
+
+  it('a parked car puts a last-mile pedestrian on the street (to/from the car)', () => {
+    const { map, path } = roadWithLot();
+    const state = createAmbientState();
+    setParkingLots(state, lotInfo(map));
+    ingestTrips(state, [{ path }], map);
+    const rng = ambientFork('parkped');
+    for (let i = 0; i < 120 && !state.cars.some((c) => c.parked); i++) stepAmbient(state, map, rng, 50);
+    expect(state.cars.some((c) => c.parked)).toBe(true);
+    expect(state.peds.length).toBeGreaterThanOrEqual(1);
+    expect(state.peds.every((p) => p.walkTo !== undefined)).toBe(true); // last-mile walkers
+  });
+
+  it('respects lot capacity: a 9-stall lot stores at most 9 cars', () => {
+    const { map, path } = roadWithLot();
+    const state = createAmbientState();
+    setParkingLots(state, lotInfo(map));
+    ingestTrips(state, Array.from({ length: 12 }, () => ({ path })), map); // 12 cars, one lot
+    const rng = ambientFork('cap');
+    let maxParked = 0;
+    for (let i = 0; i < 150; i++) {
       stepAmbient(state, map, rng, 50);
-      for (const p of state.peds) {
-        expect(p.walkTo).toBeDefined(); // every ped here is a last-mile walker
-        // stays within the lot↔building corridor (origin (5,5) ± a couple tiles)
-        expect(Math.abs(p.x - 5)).toBeLessThanOrEqual(5);
-        expect(p.y).toBeGreaterThanOrEqual(4);
-        expect(p.y).toBeLessThanOrEqual(8);
-        sawWalker = true;
-      }
+      maxParked = Math.max(maxParked, state.cars.filter((c) => c.parked).length);
     }
-    expect(sawWalker).toBe(true);
+    expect(maxParked).toBeGreaterThan(0);
+    expect(maxParked).toBeLessThanOrEqual(9); // capacity = 9 stalls; the rest despawn
+  });
+
+  it('parking is deterministic for the same seed', () => {
+    const { map, path } = roadWithLot();
+    const a = createAmbientState();
+    const b = createAmbientState();
+    setParkingLots(a, lotInfo(map));
+    setParkingLots(b, lotInfo(map));
+    ingestTrips(a, [{ path }], map);
+    ingestTrips(b, [{ path }], map);
+    const ra = ambientFork('det');
+    const rb = ambientFork('det');
+    for (let i = 0; i < 150; i++) {
+      stepAmbient(a, map, ra, 50);
+      stepAmbient(b, map, rb, 50);
+    }
+    expect(a.cars).toEqual(b.cars);
+    expect(a.peds).toEqual(b.peds);
   });
 
   it('a walk-ped is exempt from the ped-substrate despawn and moves toward its target', () => {
@@ -676,20 +733,5 @@ describe('last-mile pedestrians (walk to/from parked cars)', () => {
     const rng = ambientFork('arrive');
     for (let i = 0; i < 60 && state.peds.length > 0; i++) stepAmbient(state, map, rng, 50);
     expect(state.peds.length).toBe(0); // walked the one tile and despawned on arrival
-  });
-
-  it('last-mile spawning is deterministic for the same seed + anchors', () => {
-    const map = lotAndBuilding();
-    const a = createAmbientState();
-    const b = createAmbientState();
-    setParkedAnchors(a, [{ x: 5.5, y: 5.5 }]);
-    setParkedAnchors(b, [{ x: 5.5, y: 5.5 }]);
-    const ra = ambientFork('det');
-    const rb = ambientFork('det');
-    for (let i = 0; i < 120; i++) {
-      stepAmbient(a, map, ra, 50);
-      stepAmbient(b, map, rb, 50);
-    }
-    expect(a.peds).toEqual(b.peds);
   });
 });
