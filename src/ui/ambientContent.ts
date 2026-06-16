@@ -85,6 +85,17 @@ const ROAD_WALK_PENALTY = 0.04;
  *  pathing dead-ends (e.g. blocked by a freeway) and the citizen gives up: a lost resident. */
 const FAILED_TRIP_PENALTY = 10;
 
+/** A walking citizen's FUEL: the most substeps it will spend on ONE leg before giving up. Budgeted
+ *  per leg from the leg's straight-line distance (so a long but legitimate walk is never cut short)
+ *  plus generous slack for routing detours around plots — only a citizen chasing an UNREACHABLE
+ *  destination, looping without ever closing the distance, burns out. This catches limit cycles
+ *  LONGER than the `recent` window (RECENT_CAP), which `advanceMover`'s box-in check alone misses.
+ *  On burnout mid-trip the citizen turns back home, losing GIVE_UP_PENALTY wellbeing; if even the
+ *  walk home burns out it's a lost resident (FAILED_TRIP_PENALTY). Live-pass tunable. */
+const FUEL_BASE = 120;
+const FUEL_PER_TILE = 40;
+const GIVE_UP_PENALTY = 4;
+
 /** Desire-path WEAR: pedestrians beat a path through WILD-GREEN ground (empty land whose flora
  *  is at least WEAR_FLORA_MIN). Each ped on such a tile adds WEAR_RATE per substep up to
  *  WEAR_MAX; unused wear decays by WEAR_DECAY so a path regrows once foot traffic reroutes
@@ -236,6 +247,11 @@ export interface Mover {
   dwellInside?: number;
   /** Substeps a walking citizen has spent on a road/stroad this trip — taxes the home deposit. */
   roadSteps?: number;
+  /** A walking citizen's remaining FUEL (substeps) for the current leg. Lazily budgeted from the
+   *  leg's start→target distance and re-budgeted (cleared) at each phase change. When it hits zero
+   *  the citizen gives up — turns back home, or dies if the way home is blocked too. Guards against
+   *  oscillation toward an unreachable destination (a limit cycle the `recent` window can't catch). */
+  fuel?: number;
 }
 
 export type Car = Mover;
@@ -1155,11 +1171,34 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       p.tx = Math.round(p.x); // recommit the Manhattan route from here toward the destination
       p.ty = Math.round(p.y);
       p.recent = undefined;
+      p.fuel = undefined; // new leg → re-budget fuel from the new start→target distance
       return true;
     }
     if (p.walkTo !== undefined) {
       const tgtx = Math.round(p.walkTo.x);
       const tgty = Math.round(p.walkTo.y);
+      // FUEL: a citizen that walks too long without arriving (a destination it can never reach, so
+      //   it loops without ever closing the distance) burns out. Budget the leg lazily from its
+      //   start→target distance; spend one unit per substep. On burnout it turns back home (losing
+      //   some wellbeing); if it's ALREADY heading home (or has none), it's a lost resident.
+      p.fuel ??= FUEL_BASE + FUEL_PER_TILE * (Math.abs(Math.round(p.x) - tgtx) + Math.abs(Math.round(p.y) - tgty));
+      if (--p.fuel <= 0) {
+        if (p.carId === undefined && p.phase === 'to-building' && p.homeTile !== undefined) {
+          const hx = p.homeTile % map.width;
+          const hy = (p.homeTile - hx) / map.width;
+          p.phase = 'to-home';
+          p.walkTo = { x: hx, y: hy };
+          p.building = undefined; // never visited the plot → carries no visit value, just the give-up cost
+          p.tx = Math.round(p.x); // recommit the route home from here
+          p.ty = Math.round(p.y);
+          p.recent = undefined;
+          p.fuel = undefined; // re-budget the walk home
+          depositHealth(state, p.homeTile, -GIVE_UP_PENALTY);
+          return true;
+        }
+        if (p.homeTile !== undefined) depositHealth(state, p.homeTile, -FAILED_TRIP_PENALTY);
+        return false; // couldn't even get home (or a bound/homeless ped) → a lost resident
+      }
       const moving = advanceMover(p, PED_SPEED, map, (x, y, _fromDir, recent) =>
         nextStepToward(map, x, y, tgtx, tgty, recent),
       );

@@ -1117,3 +1117,63 @@ describe('failed trips + freeway speed', () => {
     expect(hw.cars[0]!.x).toBeGreaterThan(st.cars[0]!.x); // freeway car got further
   });
 });
+
+describe('pedestrian fuel (give up / die when a destination is unreachable — Maddy playtest)', () => {
+  it('out of fuel mid-trip: a walk citizen turns back home and loses some wellbeing', () => {
+    const map = new GameMap(16, 16); // empty = walkable everywhere
+    map.built[map.idx(2, 8)] = BuiltKind.HouseSingle; // home
+    const state = createAmbientState();
+    state.peds.push({
+      x: 8, y: 8, dir: 0, tx: 8, ty: 8,
+      walkTo: { x: 15, y: 8 }, phase: 'to-building',
+      homeTile: map.idx(2, 8), building: { x: 15, y: 8 },
+      fuel: 1, // burns out on the next substep, before it can reach (15,8)
+    });
+    const rng = ambientFork('fuel-giveup');
+    stepAmbient(state, map, rng, 50);
+    expect(state.peds.length).toBe(1); // still alive — it gave up, it did not die
+    const p = state.peds[0]!;
+    expect(p.phase).toBe('to-home'); // turned back toward home
+    expect(p.walkTo).toEqual({ x: 2, y: 8 }); // heading to its home tile
+    expect(p.building).toBeUndefined(); // never visited the plot → carries no visit wellbeing
+    expect(state.buildingHealth.get(map.idx(2, 8))!).toBeLessThan(0); // home docked for the wasted trip
+  });
+
+  it('out of fuel on the way home: the citizen is lost (dies, home takes the full failed-trip hit)', () => {
+    const map = new GameMap(16, 16);
+    map.built[map.idx(2, 8)] = BuiltKind.HouseSingle;
+    const state = createAmbientState();
+    state.peds.push({
+      x: 12, y: 8, dir: 0, tx: 12, ty: 8,
+      walkTo: { x: 2, y: 8 }, phase: 'to-home',
+      homeTile: map.idx(2, 8),
+      fuel: 1, // can't even make it home
+    });
+    const rng = ambientFork('fuel-die');
+    stepAmbient(state, map, rng, 50);
+    expect(state.peds.length).toBe(0); // a lost resident
+    // ≈-10 is the full FAILED_TRIP_PENALTY (module-private; eased ~0.02 by one health-decay tick),
+    // not the smaller give-up cost — proves this took the DEATH branch, not the turn-back-home one.
+    expect(state.buildingHealth.get(map.idx(2, 8))!).toBeCloseTo(-10, 0);
+  });
+
+  it('an unreachable destination no longer loops forever — the citizen eventually gives up and goes', () => {
+    const map = new GameMap(20, 16); // open ground, with a wall of water the ped can never cross
+    for (let y = 0; y < 16; y++) map.water[map.idx(10, y)] = 1; // impassable column at x=10
+    map.built[map.idx(2, 8)] = BuiltKind.HouseSingle; // home, on the reachable (west) side
+    const state = createAmbientState();
+    state.peds.push({
+      x: 3, y: 8, dir: 0, tx: 3, ty: 8,
+      walkTo: { x: 17, y: 8 }, phase: 'to-building', // east of the water — never reachable on foot
+      homeTile: map.idx(2, 8), building: { x: 17, y: 8 },
+    });
+    const rng = ambientFork('fuel-loop');
+    let alive = 1;
+    for (let i = 0; i < 2500 && state.peds.length > 0; i++) {
+      stepAmbient(state, map, rng, 50);
+      alive = state.peds.length;
+    }
+    expect(alive).toBe(0); // it did not oscillate forever — fuel ran out, it gave up and walked home, despawned
+    expect(state.buildingHealth.get(map.idx(2, 8))!).toBeLessThan(0); // home felt the wasted trip
+  });
+});
