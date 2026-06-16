@@ -1195,3 +1195,48 @@ describe('pedestrian fuel (give up / die when a destination is unreachable — M
     expect(state.buildingHealth.get(map.idx(2, 8))!).toBeLessThan(0); // home felt the wasted trip
   });
 });
+
+describe('terrain-aware ped pathing (lush is dear, the beaten path is cheap — Maddy playtest)', () => {
+  it('routes onto a beaten desire path and shuns lush wild ground at equal distance', () => {
+    const map = new GameMap(16, 16); // empty = walkable everywhere
+    map.floraVitality[map.idx(3, 4)] = 255; // lush wild ground to the NORTH — hard to push through
+    const state = createAmbientState();
+    state.wear.set(map.idx(4, 5), 255); // a beaten desire path to the EAST — easy going
+    // (3,5) -> (6,2): NORTH (3,4) and EAST (4,5) both cut the Manhattan distance equally; cost decides.
+    state.peds.push({ x: 3, y: 5, dir: 0, tx: 3, ty: 5, walkTo: { x: 6, y: 2 } });
+    const rng = ambientFork('beaten');
+    const visited = new Set<string>();
+    for (let i = 0; i < 30; i++) {
+      stepAmbient(state, map, rng, 50);
+      const p = state.peds[0];
+      if (p) visited.add(`${Math.round(p.x)},${Math.round(p.y)}`);
+    }
+    expect(visited.has('4,5')).toBe(true); // took the beaten path east
+    expect(visited.has('3,4')).toBe(false); // avoided the lush wild ground north
+  });
+
+  it('walking a worn desire path saps the wellbeing carried home (vs fresh ground)', () => {
+    const build = (worn: boolean): number => {
+      const map = new GameMap(16, 16);
+      map.built[map.idx(2, 8)] = BuiltKind.HouseSingle; // home
+      map.built[map.idx(13, 8)] = BuiltKind.HealingCommons; // the restorative plot just visited (+6)
+      const state = createAmbientState();
+      if (worn) for (let x = 3; x <= 11; x++) state.wear.set(map.idx(x, 8), 255); // a beaten corridor home
+      state.peds.push({
+        x: 11, y: 8, dir: 0, tx: 11, ty: 8,
+        walkTo: { x: 2, y: 8 }, phase: 'to-home',
+        homeTile: map.idx(2, 8), building: { x: 13, y: 8 },
+      });
+      const rng = ambientFork(worn ? 'worn' : 'fresh');
+      for (let i = 0; i < 600; i++) {
+        stepAmbient(state, map, rng, 50);
+        if (state.peds.length === 0) break; // arrived home + deposited (read before decay erodes it)
+      }
+      return state.buildingHealth.get(map.idx(2, 8)) ?? 0;
+    };
+    const fresh = build(false);
+    const worn = build(true);
+    expect(fresh).toBeGreaterThan(0); // a restorative visit, pleasant walk → positive at home
+    expect(worn).toBeLessThan(fresh); // the SAME visit over a beaten/degraded path brings home less
+  });
+});

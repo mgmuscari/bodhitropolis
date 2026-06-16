@@ -81,6 +81,22 @@ const WALK_RANGE = 10;
  *  nothing. Subtracted from the home deposit on arrival. */
 const ROAD_WALK_PENALTY = 0.04;
 
+/** Terrain-aware foot routing over WILD ground (empty land): lush growth is hard to push through
+ *  (higher cost), a beaten desire path is easy going (lower cost) — so foot traffic self-reinforces
+ *  desire paths over time. PED_GROUND_MIN floors the beaten cost just ABOVE a promenade (0.3) and a
+ *  quiet street (0.5), so a promenade the player lays still wins the route and lures peds off the
+ *  wild. Flora term adds with lushness; wear term subtracts with beaten-ness (both 0..1). */
+const PED_GROUND_BASE = 0.9; // a bare empty tile (no flora, no wear)
+const PED_LUSH = 0.8; // added to ground cost at full floraVitality
+const PED_BEATEN = 0.7; // subtracted from ground cost at full wear
+const PED_GROUND_MIN = 0.4; // floor: a fully-beaten path, still dearer than a promenade
+
+/** A worn desire path is convenient underfoot but DEGRADED (brown, littered): a citizen walking it
+ *  brings home less wellbeing. A wearable tile counts as wellbeing-degrading once its wear reaches
+ *  WORN_DEGRADE_MIN; each such substep taxes the home deposit by WORN_WALK_PENALTY. */
+const WORN_DEGRADE_MIN = 128; // half of WEAR_MAX — clearly a beaten path, not incidental trampling
+const WORN_WALK_PENALTY = 0.04;
+
 /** Wellbeing a home loses when one of its citizens can't reach its destination on foot — the
  *  pathing dead-ends (e.g. blocked by a freeway) and the citizen gives up: a lost resident. */
 const FAILED_TRIP_PENALTY = 10;
@@ -247,6 +263,9 @@ export interface Mover {
   dwellInside?: number;
   /** Substeps a walking citizen has spent on a road/stroad this trip — taxes the home deposit. */
   roadSteps?: number;
+  /** Substeps a walking citizen has spent on a heavily-WORN (degraded) desire path this trip —
+   *  also taxes the home deposit: a beaten path is convenient underfoot but bleak. */
+  wornSteps?: number;
   /** A walking citizen's remaining FUEL (substeps) for the current leg. Lazily budgeted from the
    *  leg's start→target distance and re-budgeted (cleared) at each phase change. When it hits zero
    *  the citizen gives up — turns back home, or dies if the way home is blocked too. Guards against
@@ -679,8 +698,10 @@ function isWalkable(map: GameMap, x: number, y: number): boolean {
 
 /** A pedestrian's PREFERENCE cost for a walkable tile (lower = nicer): promenades best, then
  *  calm streets, then a LOCAL street by inverse traffic density, then open ground, with stroads
- *  (avenues) worst. So peds drift onto promenades and shun busy stroads where the route allows. */
-function pedCost(map: GameMap, x: number, y: number): number {
+ *  (avenues) worst. So peds drift onto promenades and shun busy stroads where the route allows.
+ *  WILD ground (empty land) is terrain-aware via `wear`: lush is dear, a beaten desire path cheap
+ *  (foot traffic self-reinforces paths). */
+function pedCost(map: GameMap, x: number, y: number, wear?: ReadonlyMap<number, number>): number {
   const i = map.idx(x, y);
   const k = map.built[i]!;
   if (k === BuiltKind.Promenade) return 0.3;
@@ -688,7 +709,13 @@ function pedCost(map: GameMap, x: number, y: number): number {
   const trafficLoad = (map.traffic[i]! / 255) * 2; // inverse traffic density: busier → costlier
   if (k === BuiltKind.RoadStreet) return 0.55 + trafficLoad; // a local street
   if (k === BuiltKind.RoadAvenue) return 2.0 + trafficLoad; // a stroad — unpleasant on foot
-  return 0.9; // open ground / parking / transit / greens
+  if (k === BuiltKind.None) {
+    // wild ground: lush growth (high flora) is hard going; a beaten path (high wear) is easy.
+    const flora = map.floraVitality[i]! / 255;
+    const worn = (wear?.get(i) ?? 0) / WEAR_MAX;
+    return Math.max(PED_GROUND_MIN, PED_GROUND_BASE + flora * PED_LUSH - worn * PED_BEATEN);
+  }
+  return 0.9; // parking / transit / built greens
 }
 
 /** Wild-green ground a desire path forms through: ANY empty land (no road/building) that isn't
@@ -711,6 +738,7 @@ function nextStepToward(
   tgtx: number,
   tgty: number,
   recent?: readonly number[],
+  wear?: ReadonlyMap<number, number>,
 ): number {
   if (Math.abs(x - tgtx) + Math.abs(y - tgty) <= 1) return -1; // at / adjacent to the target
   let best = -1;
@@ -721,7 +749,7 @@ function nextStepToward(
     if (!isWalkable(map, nx, ny)) continue;
     if (recent && recent.includes(map.idx(nx, ny))) continue;
     // Distance dominates (still reaches the target); pedCost nudges onto promenades, off stroads.
-    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + pedCost(map, nx, ny);
+    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + pedCost(map, nx, ny, wear);
     if (score < bestScore) {
       bestScore = score;
       best = d;
@@ -1121,6 +1149,7 @@ function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
   p.fuel = undefined;
   p.recent = undefined;
   p.roadSteps = undefined;
+  p.wornSteps = undefined;
   return true;
 }
 
@@ -1235,7 +1264,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         return respawnAtHome(state, p, map); // couldn't even get home → respawn there (or despawn if homeless)
       }
       const moving = advanceMover(p, PED_SPEED, map, (x, y, _fromDir, recent) =>
-        nextStepToward(map, x, y, tgtx, tgty, recent),
+        nextStepToward(map, x, y, tgtx, tgty, recent, state.wear),
       );
       if (moving) return true; // still walking this leg
       // advanceMover stopped: arrived (within a tile of the target) or boxed in.
@@ -1257,9 +1286,12 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         return false;
       }
       if (p.phase === 'to-home') {
-        // Walked home → deposit the visit's wellbeing, less the toll of any road-walking trudge.
+        // Walked home → deposit the visit's wellbeing, less the toll of any road-walking trudge
+        // AND of trudging beaten/degraded desire paths (convenient underfoot, but bleak).
         if (p.homeTile !== undefined && p.building) {
-          const penalty = Math.floor((p.roadSteps ?? 0) * ROAD_WALK_PENALTY);
+          const penalty = Math.floor(
+            (p.roadSteps ?? 0) * ROAD_WALK_PENALTY + (p.wornSteps ?? 0) * WORN_WALK_PENALTY,
+          );
           depositVisit(state, p.homeTile, p.building, map, penalty);
         }
         return false;
@@ -1287,7 +1319,13 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     if (isWearable(map, tx, ty)) {
       const i = map.idx(tx, ty);
       const w = (state.wear.get(i) ?? 0) + WEAR_RATE;
-      state.wear.set(i, w > WEAR_MAX ? WEAR_MAX : w);
+      const capped = w > WEAR_MAX ? WEAR_MAX : w;
+      state.wear.set(i, capped);
+      // A walking citizen crossing a heavily-worn (degraded, littered) path brings home less — the
+      // beaten path is convenient but bleak.
+      if (p.phase !== undefined && p.carId === undefined && capped >= WORN_DEGRADE_MIN) {
+        p.wornSteps = (p.wornSteps ?? 0) + 1;
+      }
     } else if (p.phase !== undefined && p.carId === undefined) {
       // A walking citizen trudging a road/stroad accrues the unpleasant-commute penalty.
       const k = map.built[map.idx(tx, ty)]!;
