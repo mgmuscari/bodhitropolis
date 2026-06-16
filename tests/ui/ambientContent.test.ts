@@ -1038,6 +1038,32 @@ describe('desire-path wear (pedestrians trample wild green into brown + trash)',
     expect(state.wear.get(map.idx(0, 0)) ?? 0).toBe(0); // open wild ground starts clean/green
   });
 
+  it('seedBlight precomputes home wellbeing from nearby plots (good → positive, industry → negative)', () => {
+    const map = new GameMap(24, 16);
+    map.built[map.idx(5, 5)] = BuiltKind.HouseSingle; // a home by a healing commons
+    map.built[map.idx(5, 7)] = BuiltKind.HealingCommons;
+    map.built[map.idx(16, 5)] = BuiltKind.HouseSingle; // a home by heavy industry
+    map.built[map.idx(16, 7)] = BuiltKind.Industrial;
+    const state = createAmbientState();
+    seedBlight(state, map);
+    expect(state.buildingHealth.get(map.idx(5, 5))!).toBeGreaterThan(0); // starts healthy
+    expect(state.buildingHealth.get(map.idx(16, 5))!).toBeLessThan(0); // starts blighted
+  });
+
+  it('a short trip whose route uses a freeway DRIVES (a pedestrian cannot cross a freeway)', () => {
+    const map = new GameMap(16, 8);
+    map.built[map.idx(2, 3)] = BuiltKind.HouseSingle; // home
+    map.built[map.idx(2, 4)] = BuiltKind.RoadStreet; // origin frontage road
+    for (let x = 3; x <= 6; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadHighway; // a freeway in the path
+    map.built[map.idx(7, 4)] = BuiltKind.RoadStreet;
+    map.built[map.idx(7, 3)] = BuiltKind.CommercialStrip; // destination
+    const state = createAmbientState();
+    const path = [2, 3, 4, 5, 6, 7].map((x) => map.idx(x, 4));
+    ingestTrips(state, [{ path }], map);
+    expect(state.peds.length).toBe(0); // short, but the freeway forces it to drive
+    expect(state.cars.length).toBe(1);
+  });
+
   it('coastal water collects runoff pollution from nearby ground; open water stays clean', () => {
     const map = new GameMap(12, 12);
     for (let y = 4; y <= 7; y++) for (let x = 4; x <= 7; x++) map.water[map.idx(x, y)] = 1; // water block

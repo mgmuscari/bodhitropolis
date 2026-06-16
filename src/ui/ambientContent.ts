@@ -809,10 +809,13 @@ export function ingestTrips(
     // the destination's wellbeing is deposited there.
     const home = residentialHome(map, p0);
 
-    // MODE CHOICE: a citizen on a SHORT trip walks the whole way (a pedestrian routes it);
-    // longer citizen trips and all freight drive. As destinations come closer / streets calm,
-    // more trips fall under WALK_RANGE → people shift out of cars.
-    if (home >= 0 && trip.path.length <= WALK_RANGE) {
+    // MODE CHOICE: a citizen on a SHORT trip whose route doesn't need a FREEWAY walks the whole
+    // way (a pedestrian routes it); longer trips, freeway trips, and all freight drive. (A
+    // freeway is impassable on foot, so a cross-freeway trip must drive — otherwise its walker
+    // would dead-end at the freeway edge and vanish.) As destinations come closer / streets
+    // calm, more trips fall under WALK_RANGE → people shift out of cars.
+    const usesFreeway = trip.path.some((t) => map.built[t]! === BuiltKind.RoadHighway);
+    if (home >= 0 && trip.path.length <= WALK_RANGE && !usesFreeway) {
       if (state.peds.length >= PED_CAP) continue; // walkers are full this cadence
       const destPlot = zonedNeighbor(map, trip.path[trip.path.length - 1]!);
       if (destPlot >= 0) {
@@ -1267,11 +1270,31 @@ function urbanNeighbours(map: GameMap, x: number, y: number): number {
  *  by how hemmed-in it is) and the shorelines are already polluted (runoff). Derived from the
  *  worldgen world; the live layers evolve from here as the player heals or neglects the city. */
 export function seedBlight(state: AmbientState, map: GameMap): void {
+  const PLOT_SEED_RADIUS = 5; // how far a home "feels" the plots around it
   for (let y = 0; y < map.height; y++) {
     for (let x = 0; x < map.width; x++) {
-      if (!isWearable(map, x, y)) continue;
-      const urban = urbanNeighbours(map, x, y);
-      if (urban >= 2) state.wear.set(map.idx(x, y), Math.min(WEAR_MAX, urban * 26));
+      const k = map.built[map.idx(x, y)]!;
+      // Trampled urban ground: hemmed-in empty land is already a beaten path.
+      if (k === BuiltKind.None && map.water[map.idx(x, y)] === 0) {
+        const urban = urbanNeighbours(map, x, y);
+        if (urban >= 2) state.wear.set(map.idx(x, y), Math.min(WEAR_MAX, urban * 26));
+        continue;
+      }
+      // Precomputed home wellbeing: a century in this environment, summed from the plots a
+      // home's citizens would visit nearby (industry drags it down, commerce/civic/new-urbanist
+      // lift it) — so homes START with a wellbeing reflecting where they sit, not zero.
+      if (zoneTypeOf(k) === ZoneType.Residential) {
+        let h = 0;
+        for (let dy = -PLOT_SEED_RADIUS; dy <= PLOT_SEED_RADIUS; dy++) {
+          for (let dx = -PLOT_SEED_RADIUS; dx <= PLOT_SEED_RADIUS; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (!map.inBounds(nx, ny)) continue;
+            h += visitValue(map.built[map.idx(nx, ny)]!);
+          }
+        }
+        if (h !== 0) state.buildingHealth.set(map.idx(x, y), Math.max(-HEALTH_MAX, Math.min(HEALTH_MAX, h)));
+      }
     }
   }
   // A century of runoff already in the water — saturate the urban shorelines.
