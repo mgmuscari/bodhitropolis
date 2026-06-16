@@ -582,15 +582,43 @@ function advanceMover(
  *  off-grid (it may cross a lot or road). Returns false on arrival so the caller despawns
  *  it. Direction is normalized with sqrt (no trig — allowlist-safe); `dir` is set to the
  *  dominant cardinal so any heading-based draw stays sane. */
-function advanceWalk(p: Mover, speed: number): boolean {
-  const dx = p.walkTo!.x - p.x;
-  const dy = p.walkTo!.y - p.y;
-  const dist = Math.sqrt(dx * dx + dy * dy);
-  if (dist <= speed) return false; // arrived → despawn
-  p.x += (dx / dist) * speed;
-  p.y += (dy / dist) * speed;
-  p.dir = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 1 : 3) : dy >= 0 ? 2 : 0;
-  return true;
+/** Ped-walkable: any in-bounds, non-water tile that is NOT an occupied R/C/I/Civic plot —
+ *  i.e. roads, transit, PARKING, parks, rewilded greens, empty land all walk; only the actual
+ *  building footprints block. Routed pedestrians step across these (around plots), so they no
+ *  longer cut diagonally through buildings. */
+function isWalkable(map: GameMap, x: number, y: number): boolean {
+  if (!map.inBounds(x, y)) return false;
+  if (map.water[map.idx(x, y)] !== 0) return false; // Water.None === 0
+  return zoneTypeOf(map.built[map.idx(x, y)]!) === ZoneType.None;
+}
+
+/** A routed pedestrian's next grid step (a Manhattan walk): the walkable, non-recent
+ *  4-neighbour that most reduces Manhattan distance to (tgtx, tgty). Returns -1 when within
+ *  one tile of the target (arrived — peds stop at a building's door, not inside it) OR when
+ *  boxed in. Axis-aligned → no diagonals; obeys isWalkable → never through a plot. */
+function nextStepToward(
+  map: GameMap,
+  x: number,
+  y: number,
+  tgtx: number,
+  tgty: number,
+  recent?: readonly number[],
+): number {
+  if (Math.abs(x - tgtx) + Math.abs(y - tgty) <= 1) return -1; // at / adjacent to the target
+  let best = -1;
+  let bestScore = 1e9;
+  for (let d = 0; d < 4; d++) {
+    const nx = x + DIR_DX[d]!;
+    const ny = y + DIR_DY[d]!;
+    if (!isWalkable(map, nx, ny)) continue;
+    if (recent && recent.includes(map.idx(nx, ny))) continue;
+    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty);
+    if (score < bestScore) {
+      bestScore = score;
+      best = d;
+    }
+  }
+  return best;
 }
 
 /** The nearest demand tile (R/C/I/Civic via zoneTypeOf — a place a person walks to/from)
@@ -849,12 +877,16 @@ function tryPark(state: AmbientState, c: Car, map: GameMap): boolean {
  *  releases it. No building nearby ⇒ no ped (the car will leave on its safety timeout). */
 function spawnBoundPed(state: AmbientState, c: Car, building: { x: number; y: number }): void {
   if (state.peds.length >= PED_CAP) return;
+  // Start on the car's TILE (rounded): a lot-parked car sits at a fractional stall position,
+  // but the Manhattan router walks integer tiles, so the ped steps off from the tile centre.
+  const sx = Math.round(c.x);
+  const sy = Math.round(c.y);
   state.peds.push({
-    x: c.x,
-    y: c.y,
+    x: sx,
+    y: sy,
     dir: 0,
-    tx: c.x,
-    ty: c.y,
+    tx: sx,
+    ty: sy,
     walkTo: { x: building.x, y: building.y },
     carId: c.id,
     phase: 'to-building',
@@ -949,9 +981,10 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     );
   });
 
-  // 3b. Move the pedestrians. A BOUND ped (carId set) runs its car→building→inside→car state
-  //     machine; on returning it releases its car (zeroes its dwell). A legacy walk-ped
-  //     (walkTo, no phase) lerps and despawns on arrival. Others wander on ped substrate.
+  // 3b. Move the pedestrians. A walk target (walkTo) is reached by a MANHATTAN walk — an
+  //     axis-aligned, tile-by-tile route over walkable tiles (never diagonally, never through
+  //     a plot). A BOUND ped (carId) runs its car→building→inside→car machine, releasing its
+  //     car on return. Others wander on ped substrate.
   state.peds = state.peds.filter((p) => {
     if (p.phase === 'inside') {
       p.dwellInside! -= 1;
@@ -960,10 +993,21 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       if (!car) return false; // its car already left → the ped vanishes too
       p.phase = 'to-car';
       p.walkTo = { x: car.x, y: car.y };
+      p.tx = Math.round(p.x); // recommit the Manhattan route from here toward the car
+      p.ty = Math.round(p.y);
+      p.recent = undefined;
       return true;
     }
     if (p.walkTo !== undefined) {
-      if (advanceWalk(p, PED_SPEED)) return true; // still walking this leg
+      const tgtx = Math.round(p.walkTo.x);
+      const tgty = Math.round(p.walkTo.y);
+      const moving = advanceMover(p, PED_SPEED, map, (x, y, _fromDir, recent) =>
+        nextStepToward(map, x, y, tgtx, tgty, recent),
+      );
+      if (moving) return true; // still walking this leg
+      // advanceMover stopped: arrived (within a tile of the target) or boxed in.
+      const arrived = Math.abs(Math.round(p.x) - tgtx) + Math.abs(Math.round(p.y) - tgty) <= 1;
+      if (!arrived) return false; // stuck → despawn (a bound car releases on its safety timeout)
       if (p.phase === 'to-building') {
         p.phase = 'inside';
         p.dwellInside = INSIDE_DWELL_MIN + rng.nextInt(INSIDE_DWELL_SPAN);
@@ -974,7 +1018,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         if (car) car.dwell = 0; // got back in → release the car to leave (deposit was on arrival)
         return false;
       }
-      return false; // legacy unbound walk-ped → despawn on arrival
+      return false; // unbound routed ped → despawn on arrival
     }
     return advanceMover(p, PED_SPEED, map, (x, y, fromDir) => nextPedStep(map, x, y, fromDir, rng));
   });

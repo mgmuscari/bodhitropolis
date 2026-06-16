@@ -806,14 +806,31 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     expect(a.peds).toEqual(b.peds);
   });
 
-  it('a walk-ped is exempt from the ped-substrate despawn and moves toward its target', () => {
-    const map = new GameMap(16, 16); // all empty: nothing is ped substrate
+  it('a routed ped is exempt from the ped-substrate despawn and walks the grid toward its target', () => {
+    const map = new GameMap(16, 16); // all empty: walkable everywhere, no ped substrate
     const state = createAmbientState();
     state.peds.push({ x: 3, y: 3, dir: 0, tx: 3, ty: 3, walkTo: { x: 8, y: 3 } });
     const rng = ambientFork('walk');
-    stepAmbient(state, map, rng, 50);
-    expect(state.peds.length).toBe(1); // survived despite (3,3) not being substrate
-    expect(state.peds[0]!.x).toBeGreaterThan(3); // advanced toward (8,3)
+    for (let i = 0; i < 10; i++) stepAmbient(state, map, rng, 50); // grid movers recommit then move
+    expect(state.peds.length).toBe(1); // survived despite (3,3) not being ped substrate
+    expect(state.peds[0]!.x).toBeGreaterThan(3); // walked east toward (8,3)
+    expect(state.peds[0]!.y).toBe(3); // axis-aligned — no diagonal drift off the row
+  });
+
+  it('routes AROUND a building plot instead of cutting through it', () => {
+    const map = new GameMap(16, 16); // empty = walkable everywhere
+    map.built[map.idx(5, 3)] = BuiltKind.CommercialStrip; // a plot blocking the straight line
+    const state = createAmbientState();
+    state.peds.push({ x: 3, y: 3, dir: 0, tx: 3, ty: 3, walkTo: { x: 7, y: 3 } });
+    const rng = ambientFork('around');
+    const visited = new Set<string>();
+    for (let i = 0; i < 200 && state.peds.length > 0; i++) {
+      stepAmbient(state, map, rng, 50);
+      const p = state.peds[0];
+      if (p) visited.add(`${Math.round(p.x)},${Math.round(p.y)}`);
+    }
+    expect(visited.has('5,3')).toBe(false); // never trespassed the building plot
+    expect([...visited].some((k) => Number(k.split(',')[0]!) >= 5)).toBe(true); // got past it (around)
   });
 
   it('a walk-ped despawns once it reaches its target', () => {
