@@ -100,22 +100,36 @@ export function makeTrip(
     if (driveDone(map, cx, cy, source)) {
       return { origin: start, destination: map.idx(cx, cy), path, found: true };
     }
-    // tryGo: a non-reversing adjacent drivable tile, scanning from a random direction.
-    const startDir = rng.nextInt(4);
-    const reverse = lastDir < 0 ? -1 : (lastDir + 2) % 4;
     let moved = false;
-    for (let k = 0; k < 4; k++) {
-      const d = (startDir + k) % 4;
-      if (d === reverse) continue;
-      const nx = cx + DX[d]!;
-      const ny = cy + DY[d]!;
+    // On a FREEWAY, hold a long straight line: keep going in lastDir while it stays drivable,
+    // rather than zig-zagging across the lanes (cars were "doing donuts"). No rng on a straight.
+    if (lastDir >= 0 && map.built[map.idx(cx, cy)] === BuiltKind.RoadHighway) {
+      const nx = cx + DX[lastDir]!;
+      const ny = cy + DY[lastDir]!;
       if (isDrivable(map, nx, ny)) {
         cx = nx;
         cy = ny;
-        lastDir = d;
-        path.push(map.idx(cx, cy));
+        path.push(map.idx(cx, cy)); // lastDir unchanged — straight
         moved = true;
-        break;
+      }
+    }
+    // tryGo: otherwise a non-reversing adjacent drivable tile, scanning from a random direction.
+    if (!moved) {
+      const startDir = rng.nextInt(4);
+      const reverse = lastDir < 0 ? -1 : (lastDir + 2) % 4;
+      for (let k = 0; k < 4; k++) {
+        const d = (startDir + k) % 4;
+        if (d === reverse) continue;
+        const nx = cx + DX[d]!;
+        const ny = cy + DY[d]!;
+        if (isDrivable(map, nx, ny)) {
+          cx = nx;
+          cy = ny;
+          lastDir = d;
+          path.push(map.idx(cx, cy));
+          moved = true;
+          break;
+        }
       }
     }
     if (!moved) break; // dead end

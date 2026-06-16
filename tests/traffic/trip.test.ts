@@ -92,3 +92,32 @@ describe('makeTrip (origin→destination)', () => {
     expect(trip.path.length).toBeLessThanOrEqual(MAX_TRAFFIC_DISTANCE + 1);
   });
 });
+
+describe('freeway pathing bias (long straight movements, no donuts)', () => {
+  it('a trip across a wide freeway holds a long straight run instead of zig-zagging lanes', () => {
+    const map = new GameMap(28, 9);
+    for (let y = 3; y <= 5; y++) for (let x = 2; x <= 20; x++) map.built[map.idx(x, y)] = BuiltKind.RoadHighway; // 3-wide freeway
+    map.built[map.idx(1, 4)] = BuiltKind.HouseSingle; // origin
+    map.built[map.idx(21, 4)] = BuiltKind.CommercialStrip; // destination at the far end
+    const trip = makeTrip(map, 1, 4, 1, 1, ZoneType.Residential, createRng('fw').fork('t'));
+    expect(trip.found).toBe(true);
+    let maxRun = 1;
+    let run = 1;
+    let prevDir = -1;
+    for (let i = 1; i < trip.path.length; i++) {
+      const px = trip.path[i - 1]! % map.width;
+      const py = Math.floor(trip.path[i - 1]! / map.width);
+      const cx = trip.path[i]! % map.width;
+      const cy = Math.floor(trip.path[i]! / map.width);
+      const dir = cx > px ? 1 : cx < px ? 3 : cy > py ? 2 : 0;
+      if (dir === prevDir) {
+        run++;
+        if (run > maxRun) maxRun = run;
+      } else {
+        run = 1;
+      }
+      prevDir = dir;
+    }
+    expect(maxRun).toBeGreaterThanOrEqual(12); // a long straight freeway run, not lane donuts
+  });
+});
