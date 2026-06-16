@@ -81,6 +81,10 @@ const WALK_RANGE = 10;
  *  nothing. Subtracted from the home deposit on arrival. */
 const ROAD_WALK_PENALTY = 0.04;
 
+/** Wellbeing a home loses when one of its citizens can't reach its destination on foot — the
+ *  pathing dead-ends (e.g. blocked by a freeway) and the citizen gives up: a lost resident. */
+const FAILED_TRIP_PENALTY = 10;
+
 /** Desire-path WEAR: pedestrians beat a path through WILD-GREEN ground (empty land whose flora
  *  is at least WEAR_FLORA_MIN). Each ped on such a tile adds WEAR_RATE per substep up to
  *  WEAR_MAX; unused wear decays by WEAR_DECAY so a path regrows once foot traffic reroutes
@@ -1048,9 +1052,16 @@ function zonedNeighbor(map: GameMap, roadIdx: number): number {
   return -1;
 }
 
+/** Add `value` (signed) to a home building's health, clamped. */
+function depositHealth(state: AmbientState, homeTile: number, value: number): void {
+  if (value === 0) return;
+  const cur = state.buildingHealth.get(homeTile) ?? 0;
+  state.buildingHealth.set(homeTile, Math.max(-HEALTH_MAX, Math.min(HEALTH_MAX, cur + value)));
+}
+
 /** Deposit the wellbeing a citizen carries home from visiting `plot` into its home building's
- *  health (clamped), less any `penalty` (e.g. an unpleasant road walk). Called when a citizen
- *  completes its visit (a driver on park-arrival, a walker on getting home). */
+ *  health, less any `penalty` (e.g. an unpleasant road walk). Called when a citizen completes
+ *  its visit (a driver on park-arrival, a walker on getting home). */
 function depositVisit(
   state: AmbientState,
   homeTile: number,
@@ -1058,11 +1069,7 @@ function depositVisit(
   map: GameMap,
   penalty = 0,
 ): void {
-  const v = visitValue(map.built[map.idx(plot.x, plot.y)]!) - penalty;
-  if (v === 0) return;
-  const cur = state.buildingHealth.get(homeTile) ?? 0;
-  const next = Math.max(-HEALTH_MAX, Math.min(HEALTH_MAX, cur + v));
-  state.buildingHealth.set(homeTile, next);
+  depositHealth(state, homeTile, visitValue(map.built[map.idx(plot.x, plot.y)]!) - penalty);
 }
 
 function spawnFlocks(state: AmbientState, map: GameMap, rng: Rng): void {
@@ -1113,11 +1120,14 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       c.dwell! -= 1;
       return c.dwell! > 0;
     }
+    // A freeway moves traffic twice as fast as a surface street.
+    const onFreeway = map.built[map.idx(Math.round(c.x), Math.round(c.y))] === BuiltKind.RoadHighway;
+    const sp = onFreeway ? CAR_SPEED * 2 : CAR_SPEED;
     if (c.path !== undefined) {
-      const alive = advanceMover(c, CAR_SPEED, map, (x, y) => pathStep(map, c, x, y));
+      const alive = advanceMover(c, sp, map, (x, y) => pathStep(map, c, x, y));
       return alive ? true : tryPark(state, c, map);
     }
-    return advanceMover(c, CAR_SPEED, map, (x, y, fromDir, recent) =>
+    return advanceMover(c, sp, map, (x, y, fromDir, recent) =>
       nextRoadStep(map, x, y, fromDir, rng, recent),
     );
   });
@@ -1156,7 +1166,12 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       if (moving) return true; // still walking this leg
       // advanceMover stopped: arrived (within a tile of the target) or boxed in.
       const arrived = Math.abs(Math.round(p.x) - tgtx) + Math.abs(Math.round(p.y) - tgty) <= 1;
-      if (!arrived) return false; // stuck → despawn (a bound car releases on its safety timeout)
+      if (!arrived) {
+        // pathing went nowhere (e.g. dead-ended at a freeway) — the citizen gives up; their home
+        // loses wellbeing for the lost trip. (A bound car releases on its safety timeout.)
+        if (p.homeTile !== undefined) depositHealth(state, p.homeTile, -FAILED_TRIP_PENALTY);
+        return false;
+      }
       if (p.phase === 'to-building') {
         p.phase = 'inside';
         p.dwellInside = INSIDE_DWELL_MIN + rng.nextInt(INSIDE_DWELL_SPAN);
