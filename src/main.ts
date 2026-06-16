@@ -118,6 +118,22 @@ export function main(): void {
   const ambientRng = createRng(seed).fork('ambient');
   let lastAmbient = performance.now();
 
+  // Dev / live-pass affordance: a small global to drive the camera and inspect live
+  // state from outside the input layer (e.g. screenshot tooling that needs to focus a
+  // location). `zoomTo` mirrors the input path — move the camera, then markDirty so
+  // the cached base rebuilds at the new view. `camera`/`world`/`ambient` are exposed
+  // read handles (the running app's actual objects) so a live pass need not rebuild
+  // the world in-page.
+  (window as unknown as Record<string, unknown>).bodhitropolis = {
+    zoomTo: (wx: number, wy: number, zoom?: number): void => {
+      camera.centerOn(wx, wy, zoom);
+      markDirty();
+    },
+    camera,
+    world,
+    ambient: ambientState,
+  };
+
   // Opening challenge overlay. Computed from the same world, mounted over the
   // live map unless `?nointro=1`. The map input stays attached beneath; the
   // overlay captures pointer events until the player dismisses it (Begin /
