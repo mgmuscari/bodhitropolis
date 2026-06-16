@@ -32,8 +32,9 @@ export interface ToolbarDeps {
    * main supplies it in the wiring task.
    */
   getMetaButtons?(): MetaButton[];
-  /** A meta button was clicked: toggle the tech panel / cycle an overlay. Optional (see above). */
-  onMeta?(id: 'tech' | 'eco' | 'civic'): void;
+  /** A meta button was clicked: toggle the tech panel / cycle an overlay / toggle
+   *  ambient life. Optional (see above). */
+  onMeta?(id: MetaButton['id']): void;
 }
 
 export interface ToolbarHandle {
@@ -49,7 +50,7 @@ export interface ToolbarHandle {
 
 const FLASH_CLASS = 'toolbar-tool-flash';
 const FLASH_MS = 1000;
-const META_IDS: ReadonlySet<string> = new Set(['tech', 'eco', 'civic']);
+const META_IDS: ReadonlySet<string> = new Set(['tech', 'eco', 'civic', 'life']);
 
 /**
  * Build and mount the bottom tool dock into `container`. Returns a handle so the
@@ -151,7 +152,7 @@ export function mountToolbar(container: HTMLElement, deps: ToolbarDeps): Toolbar
   meta.addEventListener('click', (e) => {
     const el = (e.target as HTMLElement).closest('[data-meta-id]') as HTMLElement | null;
     const id = el?.dataset.metaId;
-    if (id !== undefined && META_IDS.has(id)) deps.onMeta?.(id as 'tech' | 'eco' | 'civic');
+    if (id !== undefined && META_IDS.has(id)) deps.onMeta?.(id as MetaButton['id']);
   });
 
   render();

@@ -192,9 +192,11 @@ export function main(): void {
       toolbar.refresh();
       snapshotDock(); // selection moved the signature → keep the sim-gated check a no-op
     },
-    getMetaButtons: () => metaButtons(techPanel.isOpen(), activeOverlay && { kind: activeOverlay.kind }),
+    getMetaButtons: () =>
+      metaButtons(techPanel.isOpen(), activeOverlay && { kind: activeOverlay.kind }, ambientOn),
     onMeta: (id) => {
       if (id === 'tech') techPanel.toggle();
+      else if (id === 'life') setAmbient(!ambientOn); // same toggle the L key calls
       else cycleOverlay(id); // 'eco' | 'civic' — the SAME closure the E/C keys call
     },
   });
