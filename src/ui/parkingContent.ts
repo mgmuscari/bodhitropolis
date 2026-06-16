@@ -1,16 +1,15 @@
-// Parked-car visualization (cosmetic, pure, allowlisted): connected ParkingLot
-// components, their capacity-9 stall grid, and how full each reads from local demand.
-// The renderer draws `lotOccupancy` parked cars at the first stalls, so the over-paved
-// city's accumulated parking is visibly USED (stalls fill where buildings cluster).
-// Reads the map only — no DOM, no rng, no transcendental Math; stable per map (a 3x3
-// grid + a building-adjacency count) so parked cars don't flicker.
+// Parking-lot geometry (cosmetic, pure, allowlisted): the connected ParkingLot components
+// and the per-tile stall grid the ambient layer stores parked cars on. Reads the map only —
+// no DOM, no rng, no transcendental Math; stable per map so parked cars don't flicker.
 
 import type { GameMap } from '../engine/map';
 import { BuiltKind } from '../engine/fabric';
-import { ZoneType, zoneTypeOf } from '../engine/zone';
 
-/** A parking lot stalls up to this many cars, laid out as a 3x3 grid. */
-export const LOT_CAPACITY = 9;
+/** Stalls per lot TILE per axis: a STALLS_PER_AXIS×STALLS_PER_AXIS grid in every tile, so
+ *  cars pack cleanly and tile-aligned on lots of ANY size (capacity = this² × tile count).
+ *  A whole-bbox grid only aligned to tile centres when a lot side was 1 or 3 tiles, which
+ *  left 2-wide lots showing offset cars — per-tile placement fixes that. */
+export const STALLS_PER_AXIS = 2;
 
 /** A connected ParkingLot component and its bounding box. */
 export interface Lot {
@@ -60,35 +59,20 @@ export function parkingLots(map: GameMap): Lot[] {
   return lots;
 }
 
-/** Up to LOT_CAPACITY stall centres, a 3x3 grid evenly spaced over the lot's bounding
- *  box, in WORLD tile coordinates (pass straight to camera.worldToScreen). Row-major,
- *  so the first N fill top-left first. */
+/** Stall centres in WORLD tile coordinates (pass straight to camera.worldToScreen): a
+ *  STALLS_PER_AXIS×STALLS_PER_AXIS sub-grid inside EVERY tile of the lot's bounding box,
+ *  each stall at the same fractional offset within its tile so cars pack cleanly and
+ *  tile-aligned regardless of lot size. Row-major over tiles, then over each tile's grid. */
 export function parkingStalls(lot: Lot): Array<{ x: number; y: number }> {
-  const w = lot.x1 - lot.x0 + 1;
-  const h = lot.y1 - lot.y0 + 1;
   const out: Array<{ x: number; y: number }> = [];
-  for (let r = 0; r < 3; r++) {
-    for (let c = 0; c < 3; c++) {
-      out.push({ x: lot.x0 + ((c + 0.5) * w) / 3, y: lot.y0 + ((r + 0.5) * h) / 3 });
+  for (let ty = lot.y0; ty <= lot.y1; ty++) {
+    for (let tx = lot.x0; tx <= lot.x1; tx++) {
+      for (let r = 0; r < STALLS_PER_AXIS; r++) {
+        for (let c = 0; c < STALLS_PER_AXIS; c++) {
+          out.push({ x: tx + (c + 0.5) / STALLS_PER_AXIS, y: ty + (r + 0.5) / STALLS_PER_AXIS });
+        }
+      }
     }
   }
   return out;
-}
-
-/** Radius (Chebyshev) around a lot's bbox over which nearby demand is counted. */
-const DEMAND_RADIUS = 2;
-
-/** How many stalls read as occupied (0..LOT_CAPACITY), from the demand the lot serves:
- *  the count of DEMAND-zone tiles (R/C/I/Civic, via zoneTypeOf — NOT parking/greens/
- *  roads) within DEMAND_RADIUS of the lot's bounding box, capped at capacity. A lot in
- *  a built block fills; an isolated fringe lot stays empty. Stable per map — no flicker. */
-export function lotOccupancy(map: GameMap, lot: Lot): number {
-  let demand = 0;
-  for (let y = lot.y0 - DEMAND_RADIUS; y <= lot.y1 + DEMAND_RADIUS; y++) {
-    for (let x = lot.x0 - DEMAND_RADIUS; x <= lot.x1 + DEMAND_RADIUS; x++) {
-      if (!map.inBounds(x, y)) continue;
-      if (zoneTypeOf(map.built[map.idx(x, y)]!) !== ZoneType.None) demand++;
-    }
-  }
-  return demand > LOT_CAPACITY ? LOT_CAPACITY : demand;
 }

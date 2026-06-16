@@ -683,19 +683,21 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     expect(state.peds.every((p) => p.walkTo !== undefined)).toBe(true); // last-mile walkers
   });
 
-  it('respects lot capacity: a 9-stall lot stores at most 9 cars', () => {
+  it('respects lot capacity: never stores more cars than the lot has stalls', () => {
     const { map, path } = roadWithLot();
+    const lots = lotInfo(map);
+    const capacity = lots[0]!.stalls.length; // per-tile grid → scales with lot size
     const state = createAmbientState();
-    setParkingLots(state, lotInfo(map));
-    ingestTrips(state, Array.from({ length: 12 }, () => ({ path })), map); // 12 cars, one lot
+    setParkingLots(state, lots);
+    ingestTrips(state, Array.from({ length: capacity + 8 }, () => ({ path })), map);
     const rng = ambientFork('cap');
     let maxParked = 0;
-    for (let i = 0; i < 150; i++) {
+    for (let i = 0; i < 200; i++) {
       stepAmbient(state, map, rng, 50);
       maxParked = Math.max(maxParked, state.cars.filter((c) => c.parked).length);
     }
     expect(maxParked).toBeGreaterThan(0);
-    expect(maxParked).toBeLessThanOrEqual(9); // capacity = 9 stalls; the rest despawn
+    expect(maxParked).toBeLessThanOrEqual(capacity); // one car per stall, the rest despawn
   });
 
   it('parking is deterministic for the same seed', () => {
