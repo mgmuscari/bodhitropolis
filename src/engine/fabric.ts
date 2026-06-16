@@ -205,6 +205,15 @@ export class ParcelStore {
   }
 
   /**
+   * Set the parcel kind. {@link convertParcel}-only — an in-place kind swap must
+   * keep the tile `built` layer and this store kind in lockstep, so nothing else
+   * should call this (the inverse risk to setCondition's free use).
+   */
+  setKind(i: number, k: BuiltKind): void {
+    this.kind[i] = k;
+  }
+
+  /**
    * Stable byte encoding of every parcel field, in index order. Equal content
    * yields equal bytes; any field change in any parcel changes them. Folded
    * into {@link hashWorld} so parcel attributes (which live outside the map)
@@ -394,6 +403,73 @@ export function canConvertTransport(map: GameMap, x: number, y: number, to: numb
 export function convertTransport(map: GameMap, x: number, y: number, to: number): boolean {
   if (!canConvertTransport(map, x, y, to)) return false;
   map.built[map.idx(x, y)] = to;
+  return true;
+}
+
+/**
+ * Rezoning targets: the building kinds an existing alive building parcel may be
+ * converted *in place* into. A fixed set (the building analogue of the per-from
+ * {@link TRANSPORT_CONVERSIONS} table) — *any* alive building parcel rezones to
+ * either of these depaved greens.
+ */
+export const REZONE_TARGETS: ReadonlySet<BuiltKind> = new Set<BuiltKind>([
+  BuiltKind.Park,
+  BuiltKind.RewildedLand,
+]);
+
+/**
+ * True iff the tile at (x, y) can be rezoned to `to`: in-bounds; `to` is a
+ * rezone target; the tile holds a BUILDING kind (not transport/empty) carrying a
+ * non-zero parcel id whose store entry is alive; and it is not already `to` (a
+ * same-kind no-op is refused so a repeat convert writes nothing). Clicking any
+ * footprint tile rezones the whole parcel — the conversion resolves via its id.
+ */
+export function canConvertParcel(
+  map: GameMap,
+  store: ParcelStore,
+  x: number,
+  y: number,
+  to: number,
+): boolean {
+  if (!map.inBounds(x, y)) return false;
+  if (!REZONE_TARGETS.has(to as BuiltKind)) return false;
+  const idx = map.idx(x, y);
+  const built = map.built[idx]!;
+  if (!isBuildingKind(built)) return false; // empty / transport tile
+  if (built === to) return false; // same-kind no-op
+  const pid = map.parcel[idx]!;
+  if (pid === 0) return false;
+  const i = pid - 1;
+  if (i < 0 || i >= store.count()) return false;
+  return store.isAlive(i);
+}
+
+/**
+ * Rezone the building parcel under (x, y) to `to`, in place: across the store
+ * entry's existing footprint, write `built = to` (the parcel-id layer is left
+ * UNCHANGED — same id, same footprint), then set the store kind to `to` and reset
+ * condition to 255 (pristine). Returns false (writing nothing) unless
+ * {@link canConvertParcel} holds. Joins the single-writer block beside
+ * {@link convertTransport}: built + store kind move together, so
+ * {@link checkParcelAgreement} stays clean and {@link hashWorld} stays deterministic.
+ */
+export function convertParcel(
+  map: GameMap,
+  store: ParcelStore,
+  x: number,
+  y: number,
+  to: number,
+): boolean {
+  if (!canConvertParcel(map, store, x, y, to)) return false;
+  const i = map.parcel[map.idx(x, y)]! - 1;
+  const p = store.get(i);
+  for (let dy = 0; dy < p.height; dy++) {
+    for (let dx = 0; dx < p.width; dx++) {
+      map.built[map.idx(p.x + dx, p.y + dy)] = to; // parcel layer untouched
+    }
+  }
+  store.setKind(i, to as BuiltKind);
+  store.setCondition(i, 255);
   return true;
 }
 
