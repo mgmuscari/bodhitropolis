@@ -76,6 +76,11 @@ const HEALTH_DECAY = 0.02;
  *  closer / streets calm, citizens shift out of cars — the heart of the congestion→bloom loop. */
 const WALK_RANGE = 10;
 
+/** Wellbeing a walking citizen loses per substep spent trudging along a road/stroad — a long
+ *  road walk brings home less (the unpleasant commute). Promenades/quiet streets/green cost
+ *  nothing. Subtracted from the home deposit on arrival. */
+const ROAD_WALK_PENALTY = 0.04;
+
 /** Desire-path WEAR: pedestrians beat a path through WILD-GREEN ground (empty land whose flora
  *  is at least WEAR_FLORA_MIN). Each ped on such a tile adds WEAR_RATE per substep up to
  *  WEAR_MAX; unused wear decays by WEAR_DECAY so a path regrows once foot traffic reroutes
@@ -225,6 +230,8 @@ export interface Mover {
   phase?: 'to-building' | 'inside' | 'to-car' | 'to-home';
   building?: { x: number; y: number };
   dwellInside?: number;
+  /** Substeps a walking citizen has spent on a road/stroad this trip — taxes the home deposit. */
+  roadSteps?: number;
 }
 
 export type Car = Mover;
@@ -638,14 +645,30 @@ function advanceMover(
   return true;
 }
 
-/** Ped-walkable: any in-bounds, non-water tile that is NOT an occupied R/C/I/Civic plot —
- *  i.e. roads, transit, PARKING, parks, rewilded greens, empty land all walk; only the actual
- *  building footprints block. Routed pedestrians step across these (around plots), so they no
- *  longer cut diagonally through buildings. */
+/** Ped-walkable: any in-bounds, non-water tile that is NOT an occupied R/C/I/Civic plot and NOT
+ *  a FREEWAY (RoadHighway) — local streets, stroads, transit, PARKING, parks, rewilded greens,
+ *  empty land all walk; building footprints + freeways block. Routed pedestrians step across
+ *  the walkable set (around plots), so they no longer cut diagonally through buildings. */
 function isWalkable(map: GameMap, x: number, y: number): boolean {
   if (!map.inBounds(x, y)) return false;
   if (map.water[map.idx(x, y)] !== 0) return false; // Water.None === 0
-  return zoneTypeOf(map.built[map.idx(x, y)]!) === ZoneType.None;
+  const k = map.built[map.idx(x, y)]!;
+  if (k === BuiltKind.RoadHighway) return false; // a pedestrian can't cross a freeway
+  return zoneTypeOf(k) === ZoneType.None;
+}
+
+/** A pedestrian's PREFERENCE cost for a walkable tile (lower = nicer): promenades best, then
+ *  calm streets, then a LOCAL street by inverse traffic density, then open ground, with stroads
+ *  (avenues) worst. So peds drift onto promenades and shun busy stroads where the route allows. */
+function pedCost(map: GameMap, x: number, y: number): number {
+  const i = map.idx(x, y);
+  const k = map.built[i]!;
+  if (k === BuiltKind.Promenade) return 0.3;
+  if (k === BuiltKind.QuietStreet || k === BuiltKind.BikePath) return 0.5;
+  const trafficLoad = (map.traffic[i]! / 255) * 2; // inverse traffic density: busier → costlier
+  if (k === BuiltKind.RoadStreet) return 0.55 + trafficLoad; // a local street
+  if (k === BuiltKind.RoadAvenue) return 2.0 + trafficLoad; // a stroad — unpleasant on foot
+  return 0.9; // open ground / parking / transit / greens
 }
 
 /** Wild-green ground a desire path forms through: ANY empty land (no road/building) that isn't
@@ -677,7 +700,8 @@ function nextStepToward(
     const ny = y + DIR_DY[d]!;
     if (!isWalkable(map, nx, ny)) continue;
     if (recent && recent.includes(map.idx(nx, ny))) continue;
-    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty);
+    // Distance dominates (still reaches the target); pedCost nudges onto promenades, off stroads.
+    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + pedCost(map, nx, ny);
     if (score < bestScore) {
       bestScore = score;
       best = d;
@@ -906,7 +930,8 @@ function findCurbSpot(
         const x = ax + dx;
         const y = ay + dy;
         if (!map.inBounds(x, y)) continue;
-        if (!carTraversable(map.built[map.idx(x, y)]!)) continue;
+        const k = map.built[map.idx(x, y)]!;
+        if (!carTraversable(k) || k === BuiltKind.RoadHighway) continue; // no parking on a freeway
         if (occupied.has(map.idx(x, y))) continue;
         return { x, y };
       }
@@ -1021,9 +1046,16 @@ function zonedNeighbor(map: GameMap, roadIdx: number): number {
 }
 
 /** Deposit the wellbeing a citizen carries home from visiting `plot` into its home building's
- *  health (clamped). Called when a bound pedestrian returns to its car — the visit is done. */
-function depositVisit(state: AmbientState, homeTile: number, plot: { x: number; y: number }, map: GameMap): void {
-  const v = visitValue(map.built[map.idx(plot.x, plot.y)]!);
+ *  health (clamped), less any `penalty` (e.g. an unpleasant road walk). Called when a citizen
+ *  completes its visit (a driver on park-arrival, a walker on getting home). */
+function depositVisit(
+  state: AmbientState,
+  homeTile: number,
+  plot: { x: number; y: number },
+  map: GameMap,
+  penalty = 0,
+): void {
+  const v = visitValue(map.built[map.idx(plot.x, plot.y)]!) - penalty;
   if (v === 0) return;
   const cur = state.buildingHealth.get(homeTile) ?? 0;
   const next = Math.max(-HEALTH_MAX, Math.min(HEALTH_MAX, cur + v));
@@ -1133,8 +1165,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         return false;
       }
       if (p.phase === 'to-home') {
-        // Walked home → deposit the visit's wellbeing at this building (the citizen carried it).
-        if (p.homeTile !== undefined && p.building) depositVisit(state, p.homeTile, p.building, map);
+        // Walked home → deposit the visit's wellbeing, less the toll of any road-walking trudge.
+        if (p.homeTile !== undefined && p.building) {
+          const penalty = Math.floor((p.roadSteps ?? 0) * ROAD_WALK_PENALTY);
+          depositVisit(state, p.homeTile, p.building, map, penalty);
+        }
         return false;
       }
       return false; // unbound routed ped → despawn on arrival
@@ -1157,10 +1192,15 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   for (const p of state.peds) {
     const tx = Math.round(p.x);
     const ty = Math.round(p.y);
-    if (!isWearable(map, tx, ty)) continue;
-    const i = map.idx(tx, ty);
-    const w = (state.wear.get(i) ?? 0) + WEAR_RATE;
-    state.wear.set(i, w > WEAR_MAX ? WEAR_MAX : w);
+    if (isWearable(map, tx, ty)) {
+      const i = map.idx(tx, ty);
+      const w = (state.wear.get(i) ?? 0) + WEAR_RATE;
+      state.wear.set(i, w > WEAR_MAX ? WEAR_MAX : w);
+    } else if (p.phase !== undefined && p.carId === undefined) {
+      // A walking citizen trudging a road/stroad accrues the unpleasant-commute penalty.
+      const k = map.built[map.idx(tx, ty)]!;
+      if (k === BuiltKind.RoadStreet || k === BuiltKind.RoadAvenue) p.roadSteps = (p.roadSteps ?? 0) + 1;
+    }
   }
   if (state.wear.size > 0) {
     for (const [k, v] of [...state.wear]) {

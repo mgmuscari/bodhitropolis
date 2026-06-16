@@ -896,17 +896,47 @@ describe('building health from citizen trips (plot-use wellbeing carried home)',
     return false;
   }
 
-  it('a short residential trip WALKS (ped tagged with home) and deposits POSITIVE health for a commercial visit', () => {
-    const { map, path, home } = citizenTrip(BuiltKind.CommercialStrip); // 7-tile path ≤ WALK_RANGE
+  it('a short residential trip WALKS and carries POSITIVE health home via a pleasant route', () => {
+    const map = new GameMap(16, 12);
+    map.built[map.idx(2, 3)] = BuiltKind.HouseSingle; // home
+    map.built[map.idx(8, 3)] = BuiltKind.CommercialStrip; // a shop to visit
+    for (let x = 2; x <= 8; x++) map.built[map.idx(x, 4)] = BuiltKind.Promenade; // promenade (no road-walk toll)
+    const home = map.idx(2, 3);
+    const path: number[] = [];
+    for (let x = 2; x <= 8; x++) path.push(map.idx(x, 4));
     const probe = createAmbientState();
     ingestTrips(probe, [{ path }], map);
-    expect(probe.cars.length).toBe(0); // short → no car
+    expect(probe.cars.length).toBe(0); // short → walks
     const ped = probe.peds.find((p) => p.homeTile === home);
     expect(ped).toBeDefined(); // a walking citizen tagged with its home
     expect(ped!.phase).toBe('to-building');
     const state = createAmbientState();
     expect(runUntilDeposit(map, path, home, state)).toBe(true);
-    expect(state.buildingHealth.get(home)!).toBeGreaterThan(0); // commercial visit, walked home
+    expect(state.buildingHealth.get(home)!).toBeGreaterThan(0); // commercial visit on a promenade → positive
+  });
+
+  it('a road-walk taxes wellbeing: a commercial visit nets ≤ 0 by road but > 0 by promenade', () => {
+    const make = (corridor: number) => {
+      const map = new GameMap(16, 12);
+      map.built[map.idx(2, 3)] = BuiltKind.HouseSingle;
+      map.built[map.idx(8, 3)] = BuiltKind.CommercialStrip;
+      for (let x = 2; x <= 8; x++) map.built[map.idx(x, 4)] = corridor; // 7-tile walk corridor
+      const path: number[] = [];
+      for (let x = 2; x <= 8; x++) path.push(map.idx(x, 4));
+      return { map, path, home: map.idx(2, 3) };
+    };
+    const prom = make(BuiltKind.Promenade);
+    const ps = createAmbientState();
+    runUntilDeposit(prom.map, prom.path, prom.home, ps);
+    expect(ps.buildingHealth.get(prom.home)!).toBeGreaterThan(0); // pleasant route → positive
+
+    const road = make(BuiltKind.RoadStreet);
+    const rs = createAmbientState();
+    const rng = ambientFork('roadwalk');
+    ingestTrips(rs, [{ path: road.path }], road.map);
+    for (let i = 0; i < 800 && rs.peds.some((p) => p.phase !== undefined); i++) stepAmbient(rs, road.map, rng, 50);
+    // the road-walk toll cancels the small commercial value → no positive deposit
+    expect(rs.buildingHealth.get(road.home) ?? 0).toBeLessThanOrEqual(0);
   });
 
   it('mode choice: a long residential trip DRIVES (car), a short one WALKS (ped)', () => {
