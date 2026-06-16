@@ -129,6 +129,48 @@ describe('availableTools reflects grants', () => {
   });
 });
 
+describe('availableTools: rezone tools (building-target 3-way gate)', () => {
+  it('resolves the rezone convert tools with their target kind + cost', () => {
+    expect(toolDef('convert-61')!.kind).toBe(BuiltKind.Park);
+    expect(toolDef('convert-62')!.kind).toBe(BuiltKind.RewildedLand);
+    expect(toolDef('convert-61')!.cost).toBeGreaterThan(0);
+    expect(toolDef('convert-62')!.cost).toBeGreaterThan(0);
+  });
+
+  it('reveals convert-61 only after the pocket-parks chain (Park grant), never via road-diets alone', () => {
+    const tech = freshTech(1000);
+    tech.unlock('walkable-streets');
+    tech.unlock('road-diets');
+    expect(ids(tech)).not.toContain('convert-61'); // road-diets capability does NOT surface it
+    tech.unlock('parklets');
+    tech.unlock('pocket-parks'); // grants Park(61)
+    expect(ids(tech)).toContain('convert-61');
+  });
+
+  it('reveals convert-62 only after the rewilding chain (RewildedLand grant)', () => {
+    const tech = freshTech(1000);
+    tech.unlock('walkable-streets');
+    tech.unlock('road-diets');
+    expect(ids(tech)).not.toContain('convert-62');
+    tech.unlock('soil-and-soul');
+    tech.unlock('urban-composting');
+    tech.unlock('community-gardens');
+    tech.unlock('rewilding'); // grants RewildedLand(62)
+    expect(ids(tech)).toContain('convert-62');
+  });
+
+  it('road-diets still surfaces convert-1/2 but NOT the rezone tools (gate not loosened)', () => {
+    const tech = freshTech(1000);
+    tech.unlock('walkable-streets');
+    tech.unlock('road-diets');
+    const list = ids(tech);
+    expect(list).toContain('convert-1');
+    expect(list).toContain('convert-2');
+    expect(list).not.toContain('convert-61');
+    expect(list).not.toContain('convert-62');
+  });
+});
+
 describe('previewTool never mutates', () => {
   it('leaves world hash + tech snapshot byte-equal on a VALID target', () => {
     const world = freshWorld();
@@ -264,6 +306,64 @@ describe('applyTool spends + routes to single-writers', () => {
     applyTool(world, tech, toolDef('convert-7')!, 1, 1); // street -> quiet street
     applyTool(world, tech, toolDef('bulldoze')!, 3, 3); // remove the parklet
     expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
+  });
+});
+
+describe('applyTool: rezone (building-target) dispatch', () => {
+  it('convert-61 rezones an alive building parcel in place and debits its cost', () => {
+    const world = freshWorld();
+    const tech = freshTech(1000);
+    placeParcel(world.map, world.parcels, {
+      x: 4, y: 4, width: 2, height: 2, kind: BuiltKind.Projects, condition: 40,
+    });
+    const tool = toolDef('convert-61')!;
+    const before = tech.effort;
+    const r = applyTool(world, tech, tool, 4, 4);
+    expect(r.ok).toBe(true);
+    expect(tech.effort).toBe(before - tool.cost); // debited via tech.spend
+    for (let dy = 0; dy < 2; dy++) {
+      for (let dx = 0; dx < 2; dx++) {
+        expect(world.map.getBuilt(4 + dx, 4 + dy)).toBe(BuiltKind.Park);
+        expect(world.map.getParcel(4 + dx, 4 + dy)).toBe(1); // parcel id preserved
+      }
+    }
+    expect(world.parcels.conditionAt(0)).toBe(255);
+    expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
+  });
+
+  it('convert-62 rezones to RewildedLand', () => {
+    const world = freshWorld();
+    const tech = freshTech(1000);
+    placeParcel(world.map, world.parcels, { x: 3, y: 3, width: 1, height: 1, kind: BuiltKind.ParkingLot });
+    expect(applyTool(world, tech, toolDef('convert-62')!, 3, 3).ok).toBe(true);
+    expect(world.map.getBuilt(3, 3)).toBe(BuiltKind.RewildedLand);
+  });
+
+  it('rejects a rezone on empty / road / water tiles, mutating nothing', () => {
+    const world = freshWorld();
+    const tech = freshTech(1000);
+    placeTransport(world.map, 6, 6, BuiltKind.RoadStreet);
+    world.map.setWater(8, 8, Water.Lake);
+    const h = hashWorld(world);
+    const before = tech.effort;
+    expect(applyTool(world, tech, toolDef('convert-61')!, 1, 1).ok).toBe(false); // empty
+    expect(applyTool(world, tech, toolDef('convert-61')!, 6, 6).ok).toBe(false); // road
+    expect(applyTool(world, tech, toolDef('convert-61')!, 8, 8).ok).toBe(false); // water
+    expect(hashWorld(world)).toBe(h);
+    expect(tech.effort).toBe(before); // no charge on a no-op
+  });
+
+  it('keeps transport converts (convert-1, convert-6) routed to convertTransport (built only)', () => {
+    const world = freshWorld();
+    const tech = freshTech(1000);
+    placeTransport(world.map, 2, 2, BuiltKind.RoadAvenue); // convert-1: avenue -> street
+    placeTransport(world.map, 5, 5, BuiltKind.Rail); // convert-6: rail -> streetcar
+    expect(applyTool(world, tech, toolDef('convert-1')!, 2, 2).ok).toBe(true);
+    expect(world.map.getBuilt(2, 2)).toBe(BuiltKind.RoadStreet);
+    expect(world.map.getParcel(2, 2)).toBe(0); // transport convert never touches parcels
+    expect(applyTool(world, tech, toolDef('convert-6')!, 5, 5).ok).toBe(true);
+    expect(world.map.getBuilt(5, 5)).toBe(BuiltKind.Streetcar);
+    expect(world.map.getParcel(5, 5)).toBe(0);
   });
 });
 

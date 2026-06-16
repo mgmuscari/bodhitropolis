@@ -23,6 +23,11 @@ describe('isRepairTool', () => {
     }
   });
 
+  it('classifies the rezone convert tools (convert-61/62) as repairs (convert-prefix)', () => {
+    expect(isRepairTool(toolDef('convert-61')!), 'convert-61').toBe(true);
+    expect(isRepairTool(toolDef('convert-62')!), 'convert-62').toBe(true);
+  });
+
   it('classifies every ecology-BOOST build as a repair', () => {
     for (const k of [
       BuiltKind.CommunityGarden,

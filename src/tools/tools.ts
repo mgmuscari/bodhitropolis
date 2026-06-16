@@ -17,6 +17,8 @@ import {
   placeTransport,
   canConvertTransport,
   convertTransport,
+  canConvertParcel,
+  convertParcel,
   demolishParcel,
   demolishTransportAt,
 } from '../engine/fabric';
@@ -107,10 +109,11 @@ const BUILD_TABLE: Readonly<Record<number, BuildEntry>> = {
   [BuiltKind.HealingCommons]: { label: 'Healing Commons', cost: 28, footprint: { w: 3, h: 3 } },
 };
 
-// Conversion tools keyed by TARGET kind. The reachable targets are exactly the
-// union of TRANSPORT_CONVERSIONS' entry lists: {Street, Avenue, BikePath,
-// Streetcar, QuietStreet, Promenade}. Costs 2..4/tile (cheaper than fresh build —
-// a road diet reuses the roadbed).
+// Conversion tools keyed by TARGET kind. The transport targets are the union of
+// TRANSPORT_CONVERSIONS' entry lists: {Street, Avenue, BikePath, Streetcar,
+// QuietStreet, Promenade}, costs 2..4/tile (cheaper than fresh build — a road diet
+// reuses the roadbed). The building targets are the rezoning greens (Park,
+// RewildedLand): an in-place depave of any alive building parcel (see convertParcel).
 interface ConvertEntry {
   label: string;
   cost: number;
@@ -123,6 +126,8 @@ const CONVERT_TABLE: Readonly<Record<number, ConvertEntry>> = {
   [BuiltKind.Streetcar]: { label: 'Convert to Streetcar', cost: 4 },
   [BuiltKind.QuietStreet]: { label: 'Convert to Quiet Street', cost: 2 },
   [BuiltKind.Promenade]: { label: 'Convert to Promenade', cost: 3 },
+  [BuiltKind.Park]: { label: 'Rezone: Park', cost: 6 },
+  [BuiltKind.RewildedLand]: { label: 'Rezone: Rewilded Land', cost: 4 },
 };
 
 // Ascending target order for deterministic toolbar layout.
@@ -161,9 +166,10 @@ export function toolDef(id: ToolId): ToolDef | undefined {
 /**
  * The tools available given `tech`'s grants, in a stable order: inspect, bulldoze,
  * then one build tool per granted kind (ascending kind), then the conversion tools
- * (ascending target). Conversion gating is two-branch: a tech target (5..9) needs
- * its kind granted; a classic target (1..4) needs the `road-diets` capability (the
- * PRD road diet / boulevard reversal the tree never grants as a kind).
+ * (ascending target). Conversion gating is three-branch: a building target (the
+ * rezoning greens 61/62) needs its kind granted; a tech transit target (5..9) needs
+ * its kind granted; a classic road target (1..4) needs the `road-diets` capability
+ * (the PRD road diet / boulevard reversal the tree never grants as a kind).
  */
 export function availableTools(tech: TechState): ToolDef[] {
   const out: ToolDef[] = [toolDef('inspect')!, toolDef('bulldoze')!];
@@ -175,9 +181,11 @@ export function availableTools(tech: TechState): ToolDef[] {
   }
 
   for (const to of CONVERT_TARGETS) {
-    const ok = isTechTarget(to)
-      ? tech.grantedKinds().has(to as BuiltKind)
-      : tech.hasCapability('road-diets');
+    const ok = isBuildingKind(to)
+      ? tech.grantedKinds().has(to as BuiltKind) // rezoning green (61/62): kind-gated
+      : isTechTarget(to)
+        ? tech.grantedKinds().has(to as BuiltKind) // transit (5..9): kind-gated
+        : tech.hasCapability('road-diets'); // classic road (1..4): capability-gated
     if (ok) out.push(toolDef(`convert-${to}`)!);
   }
 
@@ -198,9 +206,13 @@ function geometryValid(world: ToolWorld, tool: ToolDef, x: number, y: number): P
   }
 
   if (tool.id.startsWith('convert-')) {
-    return canConvertTransport(map, x, y, tool.kind!)
-      ? { valid: true }
-      : { valid: false, reason: 'invalid-target' };
+    // A building target (rezoning green) rezones a parcel; a transport target
+    // converts a road/rail tile. Dispatch on the kind so each routes to its own
+    // single-writer predicate.
+    const ok = isBuildingKind(tool.kind!)
+      ? canConvertParcel(map, world.parcels, x, y, tool.kind!)
+      : canConvertTransport(map, x, y, tool.kind!);
+    return ok ? { valid: true } : { valid: false, reason: 'invalid-target' };
   }
 
   // build-*
@@ -284,7 +296,11 @@ export function applyTool(
     return { ok: true };
   }
   if (tool.id.startsWith('convert-')) {
-    convertTransport(map, x, y, tool.kind!);
+    // Mirror geometryValid's dispatch: a building target rezones the parcel in
+    // place, a transport target converts the tile. previewTool already proved the
+    // geometry, so the chosen writer cannot fail after the debit.
+    if (isBuildingKind(tool.kind!)) convertParcel(map, parcels, x, y, tool.kind!);
+    else convertTransport(map, x, y, tool.kind!);
     return { ok: true };
   }
   // build-*
