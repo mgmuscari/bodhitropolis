@@ -47,6 +47,13 @@ const PED_SPEED = 0.05;
 /** Highest carWeightForRoad value (highway) — the rejection-sampling denominator. */
 const CAR_MAX_WEIGHT = 3;
 
+/** How strongly a car prefers to continue straight through a junction vs. turn (the
+ *  weight of the straight-ahead option against each side option). High enough that
+ *  cars read as through-traffic running a vertical/horizontal road block, low enough
+ *  that they still occasionally turn. With 4 ways open: straight ~8/10, each turn
+ *  ~1/10. Live-pass tunable. Peds keep uniform choice (weight 1). */
+const CAR_STRAIGHT_WEIGHT = 8;
+
 /** Minimum faunaPresence (0..255) for a bird flock to consider a tile. */
 const FAUNA_THRESHOLD = 96;
 
@@ -183,7 +190,15 @@ export function birdSpawnAt(map: GameMap, x: number, y: number): boolean {
 }
 
 /** Generic junction step: pick a connected passable neighbour direction, excluding
- *  the U-turn `fromDir` unless it is the only option (dead-end). -1 if isolated. */
+ *  the U-turn `fromDir` unless it is the only option (dead-end). -1 if isolated.
+ *
+ *  `straightWeight` (default 1 = uniform) biases the choice toward continuing in the
+ *  current heading (the direction opposite the U-turn): with N ways open, the
+ *  straight option weighs `straightWeight` against 1 for each turn. Cars pass a high
+ *  weight so they run a road block and cross junctions instead of looping small
+ *  blocks (Maddy playtest); peds keep the uniform default. Determinism note: the
+ *  single-option and uniform paths consume the rng exactly as before, so junction-
+ *  free maps (e.g. the spawn-ratio characterization) are byte-identical. */
 function pickStep(
   map: GameMap,
   x: number,
@@ -191,6 +206,7 @@ function pickStep(
   fromDir: number,
   rng: Rng,
   passable: (nx: number, ny: number) => boolean,
+  straightWeight = 1,
 ): number {
   const options: number[] = [];
   let uTurn = -1;
@@ -206,7 +222,23 @@ function pickStep(
     options.push(d);
   }
   if (options.length === 0) return uTurn; // dead-end (or -1 if truly isolated)
-  return options[rng.nextInt(options.length)]!;
+  // Uniform choice when there's nothing to bias toward: a single option, no weight,
+  // or no incoming heading (fromDir < 0, i.e. spawn) — at spawn there is no "straight"
+  // to prefer, and keeping the uniform draw makes spawn rng-identical to before.
+  if (options.length === 1 || straightWeight <= 1 || fromDir < 0) {
+    return options[rng.nextInt(options.length)]!;
+  }
+  // Weighted junction choice: the straight-ahead direction (opposite the U-turn)
+  // outweighs each turn by `straightWeight`, so traffic flows through the corridor.
+  const straight = opposite(fromDir);
+  let total = 0;
+  for (const d of options) total += d === straight ? straightWeight : 1;
+  let r = rng.nextInt(total);
+  for (const d of options) {
+    r -= d === straight ? straightWeight : 1;
+    if (r < 0) return d;
+  }
+  return options[options.length - 1]!; // unreachable: r < total
 }
 
 /**
@@ -216,7 +248,15 @@ function pickStep(
  * given `rng`.
  */
 export function nextRoadStep(map: GameMap, x: number, y: number, fromDir: number, rng: Rng): number {
-  return pickStep(map, x, y, fromDir, rng, (nx, ny) => isCarRoad(map.built[map.idx(nx, ny)]!));
+  return pickStep(
+    map,
+    x,
+    y,
+    fromDir,
+    rng,
+    (nx, ny) => isCarRoad(map.built[map.idx(nx, ny)]!),
+    CAR_STRAIGHT_WEIGHT,
+  );
 }
 
 /** The pedestrian motion seam: the same junction rule over ped substrate. */

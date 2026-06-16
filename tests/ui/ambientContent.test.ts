@@ -249,6 +249,48 @@ describe('laneOffset (lane math — opposing traffic on opposite sides of a road
   });
 });
 
+describe('car routing prefers straight — runs a road block, does not loop (Maddy playtest)', () => {
+  // "cars can run in loops through 4-blocks of road ... all road gives all adjacent
+  // roads as valid destination tiles." Under uniform choice a car turns 2/3 of the
+  // time at a 4-way, so it circles small blocks. Cars should read as through-traffic:
+  // heavily prefer continuing straight, turn only occasionally (and never U-turn).
+  it('crosses a 4-way junction straight far more often than it turns, never U-turns', () => {
+    const map = new GameMap(12, 12);
+    // cross centred at (6,5): all four neighbours are road.
+    map.built[map.idx(6, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(5, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(7, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(6, 4)] = BuiltKind.RoadStreet;
+    map.built[map.idx(6, 6)] = BuiltKind.RoadStreet;
+    const rng = ambientFork('straight-bias');
+    const counts = [0, 0, 0, 0];
+    const N = 600;
+    for (let i = 0; i < N; i++) {
+      // came from West (dir 3) → straight ahead is East (dir 1).
+      const d = nextRoadStep(map, 6, 5, 3, rng);
+      counts[d] = counts[d]! + 1;
+    }
+    expect(counts[3]).toBe(0); // never the U-turn
+    expect(counts[1]).toBeGreaterThan(N * 0.6); // strongly prefers straight (East)
+    expect(counts[1]).toBeGreaterThan(counts[0]! + counts[2]!); // straight beats both turns
+    expect(counts[0]).toBeGreaterThan(0); // ...but turns still happen — a bias, not a rail
+    expect(counts[2]).toBeGreaterThan(0);
+  });
+
+  it('still turns when straight is not a road (follows an L-bend, no U-turn)', () => {
+    const map = new GameMap(12, 12);
+    // L-bend: road comes in from the West and turns North at (6,5). Straight (East)
+    // is NOT a road, so the car must turn North rather than reverse.
+    map.built[map.idx(5, 5)] = BuiltKind.RoadStreet; // west (the U-turn)
+    map.built[map.idx(6, 5)] = BuiltKind.RoadStreet; // the corner
+    map.built[map.idx(6, 4)] = BuiltKind.RoadStreet; // north
+    const rng = ambientFork('lbend');
+    for (let i = 0; i < 20; i++) {
+      expect(nextRoadStep(map, 6, 5, 3, rng)).toBe(0); // came from West → turns North
+    }
+  });
+});
+
 describe('cars never enter quiet streets (movement, not just spawn)', () => {
   it('a car on a street adjacent to a quiet street never occupies the quiet tile', () => {
     const map = new GameMap(16, 8);
