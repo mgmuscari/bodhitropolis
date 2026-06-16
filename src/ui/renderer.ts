@@ -14,6 +14,7 @@ import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
+import type { AmbientState } from './ambientContent';
 
 /** A previewed tile for the hover/drag overlay: world coords + validity tint. */
 export interface PreviewTile {
@@ -420,6 +421,14 @@ function footprintPos(map: GameMap, x: number, y: number, pid: number): Footprin
 export class Renderer {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly atlas: Map<string, HTMLCanvasElement>;
+  // Cached base pass (terrain + built + overlay) on an offscreen canvas. Rebuilt
+  // ONLY when invalidated (map/camera/overlay change), then blitted 1:1 onto the
+  // visible canvas each frame. The hover preview and the ambient sprites live in
+  // the per-frame composite, NOT the base — so a per-tile hover is a cheap blit,
+  // not an O(visible-tiles) rebuild (CRITIC-YP2).
+  private readonly base: HTMLCanvasElement;
+  private readonly baseCtx: CanvasRenderingContext2D;
+  private baseDirty = true;
   private dpr = 1;
   private cssWidth = 0;
   private cssHeight = 0;
@@ -428,6 +437,8 @@ export class Renderer {
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
+    this.base = document.createElement('canvas');
+    this.baseCtx = this.base.getContext('2d')!;
     this.atlas = buildAtlas();
   }
 
@@ -449,13 +460,30 @@ export class Renderer {
     this.canvas.height = Math.round(cssHeight * dpr);
     this.canvas.style.width = `${cssWidth}px`;
     this.canvas.style.height = `${cssHeight}px`;
+    // The offscreen base must track the same backing-store size/DPR so the
+    // identity 1:1 blit lands at the exact device pixels (no rescale/blur).
+    this.base.width = Math.round(cssWidth * dpr);
+    this.base.height = Math.round(cssHeight * dpr);
+    this.baseDirty = true; // the resized base canvas is cleared → must redraw
   }
 
-  render(world: WorldState, camera: Camera): void {
+  /** Mark the cached base pass stale (map/camera/overlay changed). */
+  invalidateBase(): void {
+    this.baseDirty = true;
+  }
+
+  /**
+   * Draw the cached BASE pass — terrain + built + power-line decoration + ecology
+   * overlay — into the offscreen base canvas. Explicitly NOT the preview (which is
+   * cursor-following and would defeat the cache on every hover) and NOT the sprites.
+   * Uses the exact transform/smoothing setup the legacy render used so the base is
+   * pixel-identical to today's terrain+built+overlay layer (CRITIC-YP2 / YP5).
+   */
+  private drawBase(world: WorldState, camera: Camera): void {
     const { map, parcels } = world;
-    const ctx = this.ctx;
+    const ctx = this.baseCtx;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = false; // base ctx scales BASE_TILE→ts; off = crisp
     ctx.fillStyle = '#14121f';
     ctx.fillRect(0, 0, this.cssWidth, this.cssHeight);
 
@@ -508,7 +536,7 @@ export class Renderer {
         }
 
         // Ecology heatmap: a translucent tint over every visible tile (built or
-        // not), drawn under the preview so the preview still reads on top.
+        // not). Part of the base — overlay changes call invalidateBase (Task 3).
         if (this.overlay) {
           const t = this.overlay.tint(i);
           if (t) {
@@ -518,14 +546,96 @@ export class Renderer {
         }
       }
     }
+  }
 
-    // Preview overlay: translucent green (valid) / red (invalid) tints over the
-    // targeted tile(s), drawn after the built pass so they read on top.
+  /**
+   * Shared per-frame work for BOTH entry points, in three explicit steps:
+   *  1. if the base is dirty, rebuild it (drawBase) and clear the flag;
+   *  2. IDENTITY-blit the base onto the visible canvas 1:1 (same backing-store dims
+   *     → no rescale; smoothing off → no re-smooth);
+   *  3. draw the preview on top under the DPR transform (it lives in the composite
+   *     now, NOT the base — so a hover never invalidates the base).
+   */
+  private composite(world: WorldState, camera: Camera): void {
+    if (this.baseDirty) {
+      this.drawBase(world, camera);
+      this.baseDirty = false;
+    }
+    const ctx = this.ctx;
+    // Identity blit: base is backing-store sized, so drawImage(base, 0, 0) is 1:1.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(this.base, 0, 0);
+
+    // Preview overlay (composite, not base): translucent green/red tile tints, drawn
+    // at the DPR transform in CSS-space coords so they read on top of the base blit.
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     if (this.preview) {
+      const ts = camera.tileSize;
       for (const t of this.preview) {
         const { sx, sy } = camera.worldToScreen(t.x, t.y);
         ctx.fillStyle = t.valid ? 'rgba(96, 200, 128, 0.40)' : 'rgba(220, 86, 86, 0.40)';
         ctx.fillRect(Math.floor(sx), Math.floor(sy), ts, ts);
+      }
+    }
+  }
+
+  /**
+   * The legacy / ambient-OFF path: composite only (base-blit + preview, NO sprites)
+   * — output-identical to today's single-pass render (terrain + built + overlay +
+   * preview), now cache-optimized so a preview-only repaint is a cheap blit.
+   */
+  render(world: WorldState, camera: Camera): void {
+    this.composite(world, camera);
+  }
+
+  /**
+   * The ambient-ON path: the same composite (base-blit + preview) THEN the ambient
+   * sprites on top, culled to the viewport — the O(visible sprites) draw.
+   */
+  renderFrame(world: WorldState, camera: Camera, ambient: AmbientState): void {
+    this.composite(world, camera);
+    this.drawSprites(camera, ambient);
+  }
+
+  /** Draw the ambient sprites (cars / pedestrians / bird flocks) at the DPR transform,
+   *  culled to the viewport. Cosmetic shell — live-pass tuned. */
+  private drawSprites(camera: Camera, ambient: AmbientState): void {
+    const ctx = this.ctx;
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    const ts = camera.tileSize;
+    const w = this.cssWidth;
+    const h = this.cssHeight;
+    const onScreen = (sx: number, sy: number): boolean =>
+      sx > -ts && sx < w + ts && sy > -ts && sy < h + ts;
+
+    // Cars: small dark rects, centred on the tile.
+    ctx.fillStyle = '#19151f';
+    const carSize = Math.max(2, ts * 0.34);
+    for (const c of ambient.cars) {
+      const { sx, sy } = camera.worldToScreen(c.x + 0.5, c.y + 0.5);
+      if (!onScreen(sx, sy)) continue;
+      ctx.fillRect(sx - carSize / 2, sy - carSize / 2, carSize, carSize);
+    }
+
+    // Pedestrians: small warm dots.
+    ctx.fillStyle = '#efe6d2';
+    const pedSize = Math.max(1, ts * 0.16);
+    for (const p of ambient.peds) {
+      const { sx, sy } = camera.worldToScreen(p.x + 0.5, p.y + 0.5);
+      if (!onScreen(sx, sy)) continue;
+      ctx.fillRect(sx - pedSize / 2, sy - pedSize / 2, pedSize, pedSize);
+    }
+
+    // Bird flocks: tiny dot clusters. Centre on the tile (+0.5) for the same
+    // grid convention as cars/peds (boids spawn clustered on the tile corner).
+    ctx.fillStyle = '#2b2433';
+    const birdSize = Math.max(1, ts * 0.1);
+    for (const f of ambient.birds) {
+      for (const b of f.birds) {
+        const { sx, sy } = camera.worldToScreen(b.x + 0.5, b.y + 0.5);
+        if (!onScreen(sx, sy)) continue;
+        ctx.fillRect(sx - birdSize / 2, sy - birdSize / 2, birdSize, birdSize);
       }
     }
   }

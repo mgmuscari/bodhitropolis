@@ -7,7 +7,7 @@
 
 /** One dock meta button: which control it is, its label, and whether it's active. */
 export interface MetaButton {
-  id: 'tech' | 'eco' | 'civic';
+  id: 'tech' | 'eco' | 'civic' | 'life';
   label: string;
   active: boolean;
 }
@@ -17,22 +17,26 @@ const META_LABELS: Record<MetaButton['id'], string> = {
   tech: 'Tech (T)',
   eco: 'Eco (E)',
   civic: 'Civic (C)',
+  life: 'Life (L)',
 };
 
 /**
- * The three dock meta buttons in fixed tech/eco/civic order, with their active
+ * The four dock meta buttons in fixed tech/eco/civic/life order, with their active
  * flags derived from the live UI state: Tech is active iff the tech panel is open;
  * Eco/Civic are active iff the single composite overlay is of that kind (they are
- * mutually exclusive, so at most one of Eco/Civic is ever active). Pure — main
- * passes (techPanel.isOpen(), the active overlay's kind or null).
+ * mutually exclusive, so at most one of Eco/Civic is ever active); Life is active
+ * iff ambient animation is on. Pure — main passes (techPanel.isOpen(), the active
+ * overlay's kind or null, the ambientOn flag).
  */
 export function metaButtons(
   panelOpen: boolean,
   activeOverlay: { kind: 'eco' | 'civic' } | null,
+  ambientOn: boolean,
 ): MetaButton[] {
   return [
     { id: 'tech', label: META_LABELS.tech, active: panelOpen },
     { id: 'eco', label: META_LABELS.eco, active: activeOverlay?.kind === 'eco' },
     { id: 'civic', label: META_LABELS.civic, active: activeOverlay?.kind === 'civic' },
+    { id: 'life', label: META_LABELS.life, active: ambientOn },
   ];
 }

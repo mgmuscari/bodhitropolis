@@ -18,6 +18,7 @@ import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
+import { createAmbientState, stepAmbient } from './ui/ambientContent';
 import { attachInput } from './ui/input';
 import { statLines, eraHeadline, challengeText, ecologyStatLine } from './ui/openingContent';
 import { overlayTint, legendLine, type OverlayView } from './ui/ecoOverlayContent';
@@ -91,10 +92,31 @@ export function main(): void {
   const renderer = new Renderer(canvas);
   renderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
 
+  // Two named dirty chokepoints (CRITIC-YP2). markDirty invalidates the cached
+  // renderer base (map/camera/overlay changed); markPreviewDirty only requests a
+  // repaint (preview/selection changed — it lives in the per-frame composite, not
+  // the base, so a hover never triggers an O(visible-tiles) base rebuild). Forward
+  // rule: a base/camera/overlay change calls markDirty(); a preview/selection-only
+  // change calls markPreviewDirty(); never a raw `dirty = true`.
   let dirty = true;
   const markDirty = (): void => {
     dirty = true;
+    renderer.invalidateBase();
   };
+  const markPreviewDirty = (): void => {
+    dirty = true;
+  };
+
+  // Ambient life (purely visual, read-only). A SEPARATE rng fork + a SEPARATE clock
+  // so ambient timing can never perturb the sim: the sim's `last` is owned by the
+  // sim path alone (its FixedTickLoop clamp owns catch-up), and `lastAmbient` is
+  // owned by the ambient path (its own stepAmbient clamp owns catch-up). Default on
+  // (PRD Q2); the [Life] toggle / L key flip it. ambientOn=false restores the exact
+  // legacy dirty-driven render path.
+  let ambientOn = true;
+  const ambientState = createAmbientState();
+  const ambientRng = createRng(seed).fork('ambient');
+  let lastAmbient = performance.now();
 
   // Opening challenge overlay. Computed from the same world, mounted over the
   // live map unless `?nointro=1`. The map input stays attached beneath; the
@@ -166,13 +188,15 @@ export function main(): void {
       selectedToolId = id as ToolId;
       renderer.setPreview(null);
       toolbar.setStatus(null); // a prior inspect readout is stale on tool change
-      dirty = true;
+      markPreviewDirty(); // selection-only: the preview lives in the composite
       toolbar.refresh();
       snapshotDock(); // selection moved the signature → keep the sim-gated check a no-op
     },
-    getMetaButtons: () => metaButtons(techPanel.isOpen(), activeOverlay && { kind: activeOverlay.kind }),
+    getMetaButtons: () =>
+      metaButtons(techPanel.isOpen(), activeOverlay && { kind: activeOverlay.kind }, ambientOn),
     onMeta: (id) => {
       if (id === 'tech') techPanel.toggle();
+      else if (id === 'life') setAmbient(!ambientOn); // same toggle the L key calls
       else cycleOverlay(id); // 'eco' | 'civic' — the SAME closure the E/C keys call
     },
   });
@@ -294,8 +318,19 @@ export function main(): void {
           ? legendLine(activeOverlay.view as OverlayView)
           : civicLegendLine(activeOverlay.view as CivicOverlayView);
     toolbar.setStatus(legend);
-    dirty = true;
+    markDirty(); // the overlay tint lives in the cached base → invalidate it
     toolbar.refreshMeta(); // the active overlay changed → dock [Eco]/[Civic] state
+  };
+
+  // The [Life] ambient toggle — one closure for the L key AND (Task 4) the dock
+  // [Life] button. Flips ambientOn, resets ONLY the ambient clock when turning ON
+  // (so the first dt after a dormant period is small — also clamp-guarded), repaints
+  // via markDirty, and refreshes the dock meta active-state.
+  const setAmbient = (on: boolean): void => {
+    ambientOn = on;
+    if (on) lastAmbient = performance.now();
+    markDirty();
+    toolbar.refreshMeta();
   };
 
   // E and C self-bind through the shared compositeKeyFor gate (suppressed while the
@@ -308,13 +343,22 @@ export function main(): void {
     cycleOverlay(kind);
   });
 
+  // L toggles ambient life, gated like E/C (suppressed while the opening overlay is
+  // up so it never fires beneath it).
+  window.addEventListener('keydown', (event) => {
+    if (overlayActive) return;
+    if (event.key !== 'l' && event.key !== 'L') return;
+    event.preventDefault();
+    setAmbient(!ambientOn);
+  });
+
   const previewAt = (tx: number, ty: number): void => {
     if (selectedToolId === null) return;
     const def = toolDef(selectedToolId);
     if (!def) return;
     const p = previewTool(world, tech, def, tx, ty);
     renderer.setPreview([{ x: tx, y: ty, valid: p.valid }]);
-    dirty = true;
+    markPreviewDirty(); // hover tile-change: preview only, never a base rebuild
   };
 
   const applyAt = (tx: number, ty: number): void => {
@@ -329,7 +373,7 @@ export function main(): void {
       return;
     }
     if (r.ok) {
-      dirty = true;
+      markDirty(); // mutated the built/parcel layer → rebuild the cached base
       // Effort changed → dock affordability + (if open) tech-panel affordability.
       // Refresh directly and snapshot both signatures so the next sim-gated check
       // is a no-op (the discrete-event path, per Y5).
@@ -359,13 +403,13 @@ export function main(): void {
     hover: previewAt,
     clearHover: () => {
       renderer.setPreview(null);
-      dirty = true;
+      markPreviewDirty(); // cleared the preview only — no base change
     },
     onHotkey: (action) => {
       selectedToolId = action === 'inspect' ? 'inspect' : action === 'bulldoze' ? 'bulldoze' : null;
       renderer.setPreview(null);
       toolbar.setStatus(null);
-      dirty = true;
+      markPreviewDirty(); // selection/preview only — preview is in the composite
       toolbar.refresh();
       snapshotDock(); // selection moved the signature → keep the sim-gated check a no-op
     },
@@ -376,6 +420,18 @@ export function main(): void {
     cssHeight = window.innerHeight;
     camera.setViewport(cssWidth, cssHeight);
     renderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
+    markDirty();
+  });
+
+  // Tab visibility: on becoming visible, reset ONLY the ambient clock (so the
+  // ambient dt doesn't jump) and request a repaint. The sim's `last` is deliberately
+  // NOT reset — its FixedTickLoop catch-up (a long hidden gap clamped to maxFrameMs)
+  // must run exactly as today, keeping sim output byte-identical whether ambient is
+  // on or off (AC#7). The ambient clamp already makes a missed reset harmless, so
+  // this handler is for smoothness, not safety.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    lastAmbient = performance.now();
     markDirty();
   });
 
@@ -392,14 +448,14 @@ export function main(): void {
       // biodiversity is derived → recompute + re-push; soil/flora/fauna read the
       // live layers and need no recompute.
       if (activeOverlay.view === 'biodiversity') applyOverlay();
-      dirty = true;
+      markDirty(); // eco overlay re-push changes the base tint → invalidate base
     }
     if (r.civicTicked) {
       // the partition was refreshed/remapped and values changed → rebuild the
       // civic overlay against the new partition + values.
       if (activeOverlay?.kind === 'civic') {
         applyOverlay();
-        dirty = true;
+        markDirty(); // civic overlay re-push changes the base tint → invalidate base
       }
       const wb = wellbeingNow();
       pulseDock.set(pulseLine(wb, prevWellbeing));
@@ -408,9 +464,21 @@ export function main(): void {
   });
   let last = performance.now();
   const frame = (now: number): void => {
+    // Sim path is VERBATIM today's — two independent clocks (YP3): `last` drives the
+    // sim (its FixedTickLoop clamp owns catch-up); never fold the ambient dt into it.
     sim.advance(now - last);
     last = now;
-    if (dirty) {
+    if (ambientOn && !document.hidden) {
+      // Continuous ambient path: step the ambient sim on its OWN clock (its Task-1
+      // clamp owns catch-up), then composite + sprites. The base rebuilds inside
+      // renderFrame iff invalidated, so this stays cheap.
+      stepAmbient(ambientState, world.map, ambientRng, now - lastAmbient);
+      lastAmbient = now;
+      renderer.renderFrame(world, camera, ambientState);
+      dirty = false;
+    } else if (dirty) {
+      // Legacy ambient-OFF path: repaint only when something changed (byte-identical
+      // to today's render path).
       renderer.render(world, camera);
       dirty = false;
     }
