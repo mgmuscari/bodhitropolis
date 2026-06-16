@@ -624,15 +624,19 @@ export class Renderer {
     const parkedSize = Math.max(2, ts * 0.3);
     for (const c of ambient.cars) {
       ctx.fillStyle = CAR_COLORS[(c.tint ?? 0) % CAR_COLORS.length]!;
-      if (c.parked) {
+      if (c.parked && c.lotIdx !== undefined) {
+        // Lot stall: centred on the stall.
         const { sx, sy } = camera.worldToScreen(c.x + 0.5, c.y + 0.5);
         if (!onScreen(sx, sy)) continue;
         ctx.fillRect(Math.floor(sx - parkedSize / 2), Math.floor(sy - parkedSize / 2), parkedSize, parkedSize);
       } else {
+        // Moving OR street-parked: pulled to the curb (right of heading). Parked cars are
+        // drawn at the smaller parked size so they read as stopped, not in traffic.
         const lane = laneOffset(c.dir);
         const { sx, sy } = camera.worldToScreen(c.x + 0.5 + lane.dx, c.y + 0.5 + lane.dy);
         if (!onScreen(sx, sy)) continue;
-        ctx.fillRect(sx - carSize / 2, sy - carSize / 2, carSize, carSize);
+        const size = c.parked ? parkedSize : carSize;
+        ctx.fillRect(Math.floor(sx - size / 2), Math.floor(sy - size / 2), size, size);
       }
     }
 

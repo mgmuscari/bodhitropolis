@@ -126,7 +126,7 @@ describe('isCarRoad (the traversability predicate — closes the spawn-vs-move g
 });
 
 describe('ingestTrips (cars ARE the sim O-D trips)', () => {
-  it('spawns a car per trip that follows its committed path and despawns on arrival', () => {
+  it('spawns a car per trip that follows its committed path and parks on arrival', () => {
     const map = new GameMap(16, 8);
     for (let x = 2; x <= 8; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadStreet;
     const state = createAmbientState();
@@ -137,14 +137,13 @@ describe('ingestTrips (cars ARE the sim O-D trips)', () => {
     expect(car.x).toBe(2); // starts at the path origin
     const rng = ambientFork('trip');
     let maxX = car.x;
-    let steps = 0;
-    while (state.cars.length > 0 && steps < 200) {
+    for (let i = 0; i < 100 && !car.parked; i++) {
       maxX = Math.max(maxX, car.x);
       stepAmbient(state, map, rng, 50);
-      steps++;
     }
     expect(maxX).toBeGreaterThanOrEqual(4); // drove along the path toward the destination
-    expect(state.cars.length).toBe(0); // despawned on arrival (path exhausted), not stuck
+    expect(car.parked).toBe(true); // parked at the destination (street curb), did NOT despawn
+    expect(car.lotIdx).toBeUndefined(); // no lots on this map → street-parked
   });
 
   it('ignores degenerate trips and respects CAR_CAP, deterministically', () => {
@@ -661,14 +660,15 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     expect(state.cars.length).toBe(0);
   });
 
-  it('with no lots published, a trip-car despawns at its destination (never parks)', () => {
+  it('with no lots, a trip-car street-parks at its destination (does not despawn)', () => {
     const { map, path } = roadWithLot(); // lots NOT published to the ambient state
     const state = createAmbientState();
     ingestTrips(state, [{ path }], map);
     const rng = ambientFork('nolot');
-    for (let i = 0; i < 120 && state.cars.length > 0; i++) stepAmbient(state, map, rng, 50);
-    expect(state.cars.length).toBe(0);
-    expect(state.cars.every((c) => !c.parked)).toBe(true);
+    const car = state.cars[0]!;
+    for (let i = 0; i < 120 && !car.parked; i++) stepAmbient(state, map, rng, 50);
+    expect(car.parked).toBe(true); // parked at a street curb, did NOT vanish at the building
+    expect(car.lotIdx).toBeUndefined(); // on the street (no lot was available)
   });
 
   it('a parked car puts a last-mile pedestrian on the street (to/from the car)', () => {
@@ -683,7 +683,7 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     expect(state.peds.every((p) => p.walkTo !== undefined)).toBe(true); // last-mile walkers
   });
 
-  it('respects lot capacity: never stores more cars than the lot has stalls', () => {
+  it('respects lot capacity: never stores more LOT cars than the lot has stalls', () => {
     const { map, path } = roadWithLot();
     const lots = lotInfo(map);
     const capacity = lots[0]!.stalls.length; // per-tile grid → scales with lot size
@@ -691,13 +691,69 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     setParkingLots(state, lots);
     ingestTrips(state, Array.from({ length: capacity + 8 }, () => ({ path })), map);
     const rng = ambientFork('cap');
-    let maxParked = 0;
+    let maxLotParked = 0;
     for (let i = 0; i < 200; i++) {
       stepAmbient(state, map, rng, 50);
-      maxParked = Math.max(maxParked, state.cars.filter((c) => c.parked).length);
+      const lotParked = state.cars.filter((c) => c.parked && c.lotIdx !== undefined).length;
+      maxLotParked = Math.max(maxLotParked, lotParked);
     }
-    expect(maxParked).toBeGreaterThan(0);
-    expect(maxParked).toBeLessThanOrEqual(capacity); // one car per stall, the rest despawn
+    expect(maxLotParked).toBeGreaterThan(0);
+    expect(maxLotParked).toBeLessThanOrEqual(capacity); // one car per stall; extras street-park
+  });
+
+  it('binds a pedestrian to the parked car that walks to the destination building', () => {
+    const { map, path } = roadWithLot();
+    const state = createAmbientState();
+    setParkingLots(state, lotInfo(map));
+    ingestTrips(state, [{ path }], map);
+    const rng = ambientFork('bound');
+    const car = state.cars[0]!;
+    for (let i = 0; i < 120 && !car.parked; i++) stepAmbient(state, map, rng, 50);
+    expect(car.parked).toBe(true);
+    expect(car.id).toBeDefined();
+    const ped = state.peds.find((p) => p.carId === car.id);
+    expect(ped).toBeDefined(); // a ped is bound to THIS car
+    expect(ped!.building).toEqual({ x: 9, y: 7 }); // and walks to the destination building
+  });
+
+  it('the car waits for its pedestrian, then leaves only after the ped returns', () => {
+    const { map, path } = roadWithLot();
+    const state = createAmbientState();
+    setParkingLots(state, lotInfo(map));
+    ingestTrips(state, [{ path }], map);
+    const rng = ambientFork('wait');
+    const car = state.cars[0]!;
+    for (let i = 0; i < 120 && !car.parked; i++) stepAmbient(state, map, rng, 50);
+    const id = car.id!;
+    // while the ped is inside the building the car is still parked (waiting for it)
+    let sawInside = false;
+    for (let i = 0; i < 250 && !sawInside; i++) {
+      stepAmbient(state, map, rng, 50);
+      sawInside = state.peds.some((p) => p.carId === id && p.phase === 'inside');
+    }
+    expect(sawInside).toBe(true);
+    expect(state.cars.some((c) => c.id === id)).toBe(true); // still there, waiting for its ped
+    // the ped returns and releases the car, which then leaves
+    for (let i = 0; i < 500 && state.cars.some((c) => c.id === id); i++) stepAmbient(state, map, rng, 50);
+    expect(state.cars.some((c) => c.id === id)).toBe(false);
+  });
+
+  it('crowding: a second car to the same destination parks at a different (farther) curb', () => {
+    const map = new GameMap(20, 12); // a road + a building, NO lot → both cars street-park
+    for (let x = 2; x <= 8; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(8, 6)] = BuiltKind.HouseSingle;
+    const state = createAmbientState();
+    const path: number[] = [];
+    for (let x = 2; x <= 8; x++) path.push(map.idx(x, 5));
+    ingestTrips(state, [{ path }, { path }], map); // two cars, same destination
+    const rng = ambientFork('crowd');
+    for (let i = 0; i < 150 && state.cars.filter((c) => c.parked).length < 2; i++) {
+      stepAmbient(state, map, rng, 50);
+    }
+    const parked = state.cars.filter((c) => c.parked);
+    expect(parked.length).toBe(2);
+    const tiles = new Set(parked.map((c) => `${Math.round(c.x)},${Math.round(c.y)}`));
+    expect(tiles.size).toBe(2); // the crowded-out car parked on a different curb tile
   });
 
   it('parking is deterministic for the same seed', () => {
