@@ -7,7 +7,7 @@
 //
 // No transcendental Math, no DOM: just deterministic string construction.
 
-import { BuiltKind } from '../engine/fabric';
+import { BuiltKind, isRoadKind } from '../engine/fabric';
 
 /** Footprint position of a building tile: center / edge / corner. */
 export type FootprintPos = 'c' | 'e' | 'k';
@@ -26,6 +26,15 @@ const ROAD_RENDER_KINDS: readonly number[] = [
   BuiltKind.RoadHighway,
   BuiltKind.QuietStreet,
 ];
+
+// Road kinds that can render as a continuous WIDE slab (a 2×2-block corridor):
+// exactly the classic roads 1..3, because the wide flag originates from
+// `wideRoadAt` which is `isRoadKind`-based (1..3). QuietStreet(7) is deliberately
+// EXCLUDED — `render()` can never request a wide quiet-street key, so enumerating
+// `road-7-{m}-w` would emit 16 painted-but-unreachable atlas tiles. Restricting the
+// wide block to isRoadKind keeps the wide keyspace == exactly the keys render() can
+// request: no dead keys, no blank-tile risk.
+const WIDE_ROAD_KINDS: readonly number[] = ROAD_RENDER_KINDS.filter(isRoadKind);
 
 // Non-road transport kinds → their key prefix, in a fixed enumeration order.
 const TRANSPORT_PREFIX: ReadonlyArray<readonly [number, string]> = [
@@ -68,15 +77,21 @@ const BUILDING_RENDER_KINDS: readonly number[] = [
  * road kinds 1..3 and QuietStreet(7) → `road-{kind}-{mask}`, the rest → their
  * prefix + mask (`rail-`/`streetcar-`/`elev-`/`bike-`/`ped-`). Buildings key on
  * footprint `pos` and condition `condTier` (mask ignored) → `b-{kind}-{pos}-{tier}`.
- * `pos` is REQUIRED — a building key cannot be formed without it.
+ * `pos` is REQUIRED — a building key cannot be formed without it. `wide` (a 2×2
+ * road-slab flag) appends `-w` for the classic road kinds 1..3 ONLY; it is ignored
+ * for QuietStreet(7), the other transport prefixes, and building kinds — none of
+ * which ever widen. Defaults to false so every existing 4-arg call/key is unchanged.
  */
 export function builtRenderKey(
   kind: number,
   mask: number,
   pos: FootprintPos,
   condTier: number,
+  wide = false,
 ): string {
-  if (ROAD_RENDER_KINDS.includes(kind)) return `road-${kind}-${mask}`;
+  if (ROAD_RENDER_KINDS.includes(kind)) {
+    return `road-${kind}-${mask}${wide && isRoadKind(kind) ? '-w' : ''}`;
+  }
   const prefix = PREFIX_OF.get(kind);
   if (prefix !== undefined) return `${prefix}-${mask}`;
   return `b-${kind}-${pos}-${condTier}`;
@@ -93,6 +108,12 @@ export function renderKeyspace(): readonly string[] {
   const keys: string[] = [];
   for (const k of ROAD_RENDER_KINDS) {
     for (let m = 0; m < MASKS; m++) keys.push(`road-${k}-${m}`);
+  }
+  // Wide-body slab variants, appended right after the plain road block so order
+  // stays stable and duplicate-free. Only kinds 1..3 (WIDE_ROAD_KINDS) — render()
+  // can never request road-7-*-w, so enumerating them would be dead keyspace.
+  for (const k of WIDE_ROAD_KINDS) {
+    for (let m = 0; m < MASKS; m++) keys.push(`road-${k}-${m}-w`);
   }
   for (const [, prefix] of TRANSPORT_PREFIX) {
     for (let m = 0; m < MASKS; m++) keys.push(`${prefix}-${m}`);

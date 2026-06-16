@@ -13,6 +13,7 @@ import { BuiltKind, isTransportKind, transportMask } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
+import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 
 /** A previewed tile for the hover/drag overlay: world coords + validity tint. */
 export interface PreviewTile {
@@ -37,6 +38,11 @@ const N = 1;
 const E = 2;
 const S = 4;
 const W = 8;
+
+// How many tiles a power-line wire segment spans from a pole. Matches the pole
+// spacing in decoration.ts so each pole's wire reaches the next pole, reading as a
+// continuous line. Purely cosmetic (the placement decision is poleWireDirs').
+const POLE_WIRE_REACH = 4;
 
 // Dharmapunk-warm terrain palette: [base, accent] per tile kind. The accent is
 // dithered in for subtle texture (deep/shallow water, gold-green meadows).
@@ -221,7 +227,7 @@ function makeTerrainTile(base: RGB, accent: RGB): HTMLCanvasElement {
   return paintTile((set) => ditherFill(set, base, accent));
 }
 
-function makeRoadTile(kind: number, mask: number): HTMLCanvasElement {
+function makeRoadTile(kind: number, mask: number, wide = false): HTMLCanvasElement {
   const style = ROAD_STYLES[kind]!;
   const cols = style.double ? [6, 9] : [7];
   const rows = style.double ? [6, 9] : [7];
@@ -231,6 +237,18 @@ function makeRoadTile(kind: number, mask: number): HTMLCanvasElement {
   };
   return paintTile((set) => {
     ditherFill(set, style.base, style.accent);
+    if (wide) {
+      // Wide-body slab: a continuous asphalt mass for a 2-/3-row corridor. Suppress
+      // the per-edge lane markings AND the isolated stub so adjacent wide tiles read
+      // as one slab rather than parallel striped roads; lay only a faint center seam
+      // toward each connected edge to hint at travel direction (live-pass tunable).
+      const seam = shade(style.base, 10);
+      if (mask & N) for (let y = 0; y < 8; y++) set(7, y, seam);
+      if (mask & S) for (let y = 8; y < BASE_TILE; y++) set(7, y, seam);
+      if (mask & E) for (let x = 8; x < BASE_TILE; x++) set(x, 7, seam);
+      if (mask & W) for (let x = 0; x < 8; x++) set(x, 7, seam);
+      return;
+    }
     if (mask & N) for (let y = 0; y < 8; y++) for (const cx of cols) mark(set, cx, y);
     if (mask & S) for (let y = 8; y < BASE_TILE; y++) for (const cx of cols) mark(set, cx, y);
     if (mask & E) for (let x = 8; x < BASE_TILE; x++) for (const cy of rows) mark(set, x, cy);
@@ -314,7 +332,9 @@ function paintForKey(key: string): HTMLCanvasElement {
     case 'b':
       return makeBuildingTile(Number(parts[1]), parts[2]!, Number(parts[3]));
     case 'road':
-      return makeRoadTile(Number(parts[1]), Number(parts[2]));
+      // parts[3] === 'w' is the wide-slab variant; key off the value, never the
+      // length (b-… building keys also split to length 4).
+      return makeRoadTile(Number(parts[1]), Number(parts[2]), parts[3] === 'w');
     case 'rail':
       return makeRailTile(Number(parts[1]));
     case 'streetcar':
@@ -455,8 +475,31 @@ export class Renderer {
           const pid = isT ? 0 : map.parcel[i]!;
           const tier = isT ? 0 : parcels.conditionAt(pid - 1) < 128 ? 1 : 0;
           const pos: FootprintPos = isT ? 'c' : footprintPos(map, tx, ty, pid);
-          const builtTile = this.atlas.get(builtRenderKey(built, mask, pos, tier));
+          // wideRoadAt is predicate-guarded (false for any non-road tile), so this
+          // only ever flips the slab variant on for a 2-/3-row road corridor.
+          const wide = wideRoadAt(map, tx, ty);
+          const builtTile = this.atlas.get(builtRenderKey(built, mask, pos, tier, wide));
           if (builtTile) ctx.drawImage(builtTile, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
+
+          // Power-line decoration: pure-visual ctx drawing (no atlas key). Every
+          // DECISION is owned by decoration.ts — powerPoleAt picks the pole tiles,
+          // poleWireDirs picks the wire offsets. The shell only draws the mast and a
+          // segment toward each returned offset; it holds no branching of its own.
+          if (powerPoleAt(map, tx, ty)) {
+            const cx = dx + ts * 0.5;
+            const cy = dy + ts * 0.5;
+            const mast = Math.max(1, ts * 0.16);
+            ctx.fillStyle = '#241f2b';
+            ctx.fillRect(cx - mast / 2, cy - mast / 2, mast, mast);
+            ctx.strokeStyle = 'rgba(26, 22, 32, 0.85)';
+            ctx.lineWidth = Math.max(1, ts * 0.05);
+            for (const [ox, oy] of poleWireDirs(map, tx, ty)) {
+              ctx.beginPath();
+              ctx.moveTo(cx, cy);
+              ctx.lineTo(cx + ox * ts * POLE_WIRE_REACH, cy + oy * ts * POLE_WIRE_REACH);
+              ctx.stroke();
+            }
+          }
         }
 
         // Ecology heatmap: a translucent tint over every visible tile (built or

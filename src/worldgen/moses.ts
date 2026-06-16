@@ -54,6 +54,7 @@ export interface MosesParams {
   era2Industry: number; // industrial parcels on rail/water frontage
   industryFrontage: number; // an industrial footprint must be within this of rail/water
   era2Parking: number; // parking lots near the crossroads
+  era2ParkingFields: number; // full 2x2-lot parking fields laid in the open fringe
   era2Parcels: number; // extra houses/strips filling new frontage
   // Era 3 highways & urban renewal
   era3DensityRadius: number; // boxDensity radius for corridor scoring
@@ -90,7 +91,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   railLines: 2,
   railExtension: 10,
   railMinLength: 6,
-  era1Parcels: 40,
+  era1Parcels: 80,
   era1Commercial: 6,
   commercialRadius: 6,
   coreRadius: 8,
@@ -98,7 +99,8 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era2Industry: 4,
   industryFrontage: 2,
   era2Parking: 2,
-  era2Parcels: 24,
+  era2ParkingFields: 2,
+  era2Parcels: 90,
   era3DensityRadius: 3,
   era3MinDemolish: 5,
   corridorTopK: 3,
@@ -107,7 +109,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era4Spurs: 10,
   era4SpurMin: 4,
   era4SpurMax: 12,
-  era4Houses: 25,
+  era4Houses: 55,
   era4Offices: 3,
   era4DeclineRadius: 18,
   era4DeclineMin: 20,
@@ -226,6 +228,12 @@ type AttrGen = (rng: Rng) => { density: number; condition: number };
 const HEALTHY_ATTRS: AttrGen = (rng) => ({ density: 1 + rng.nextInt(2), condition: 200 + rng.nextInt(56) });
 /** Urban-renewal projects: built dense and cheap (condition 140..180). */
 const PROJECT_ATTRS: AttrGen = (rng) => ({ density: 3 + rng.nextInt(2), condition: 140 + rng.nextInt(41) });
+/**
+ * Dense near-core construction (Apartments): density 2..3, pristine-ish condition.
+ * Same TWO-nextInt draw shape as HEALTHY_ATTRS, so swapping it in inside
+ * fillFrontage leaves the 'fill' rng stream structure (and determinism) unchanged.
+ */
+const DENSE_ATTRS: AttrGen = (rng) => ({ density: 2 + rng.nextInt(2), condition: 200 + rng.nextInt(56) });
 
 function placeAdjacent(
   map: GameMap,
@@ -252,6 +260,148 @@ function placeAdjacent(
     return placeParcel(map, store, { x: ax, y: ay, width: w, height: h, kind, density, condition });
   }
   return -1;
+}
+
+/**
+ * Pack frontage on ALL FOUR lanes of every road tile (not first-fit), walking the
+ * caller-supplied deterministic order (e.g. byCore), placing pickKind(roadIndex)
+ * parcels until `budget` is reached. Each parcel is 1×1 (or 2×1 for a
+ * CommercialStrip), placed only where the lane is free (canPlaceParcel) and via
+ * placeParcel — so every placed parcel is road-adjacent BY CONSTRUCTION and the
+ * store/tile agreement (checkParcelAgreement) is preserved. Apartments draw the
+ * dense attr gen; other kinds the healthy one — same two-nextInt draw shape, so the
+ * rng stream is kind-independent. Returns the number of parcels placed.
+ */
+function fillFrontage(
+  map: GameMap,
+  parcels: ParcelStore,
+  roadTiles: number[],
+  rng: Rng,
+  budget: number,
+  pickKind: (roadIndex: number) => BuiltKind,
+): number {
+  let placed = 0;
+  for (const i of roadTiles) {
+    if (placed >= budget) break;
+    const rx = i % map.width;
+    const ry = (i - rx) / map.width;
+    const kind = pickKind(i);
+    const w = kind === BuiltKind.CommercialStrip ? 2 : 1;
+    const h = 1;
+    const attrs: AttrGen = kind === BuiltKind.Apartments ? DENSE_ATTRS : HEALTHY_ATTRS;
+    const anchors: ReadonlyArray<readonly [number, number]> = [
+      [rx, ry - h], // N: parcel's south edge abuts the road
+      [rx, ry + 1], // S
+      [rx - w, ry], // W
+      [rx + 1, ry], // E
+    ];
+    for (const [ax, ay] of anchors) {
+      if (placed >= budget) break;
+      if (!canPlaceParcel(map, ax, ay, w, h)) continue;
+      const { density, condition } = attrs(rng);
+      if (placeParcel(map, parcels, { x: ax, y: ay, width: w, height: h, kind, density, condition }) !== -1) {
+        placed++;
+      }
+    }
+  }
+  return placed;
+}
+
+/**
+ * A core-weighted kind chooser for {@link fillFrontage}: dense Apartments (plus an
+ * every-5th CommercialStrip) within commercialRadius, Apartments within coreRadius,
+ * else HouseSingle. Closes over a deterministic commercial cadence counter and
+ * consumes NO rng — pure kind selection from the road tile's core distance.
+ */
+function coreWeightedPickKind(
+  map: GameMap,
+  siteX: number,
+  siteY: number,
+  p: MosesParams,
+): (roadIndex: number) => BuiltKind {
+  let commercialSeen = 0;
+  return (i: number): BuiltKind => {
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const coreDist = Math.abs(x - siteX) + Math.abs(y - siteY);
+    if (coreDist <= p.commercialRadius) {
+      return commercialSeen++ % 5 === 4 ? BuiltKind.CommercialStrip : BuiltKind.Apartments;
+    }
+    if (coreDist <= p.coreRadius) return BuiltKind.Apartments;
+    return BuiltKind.HouseSingle;
+  };
+}
+
+/**
+ * Widen an upgraded arterial into a 2-row avenue: lay RoadAvenue along the line one
+ * tile parallel (index+1) to the arterial, over the run [lo, hi], demolishing any
+ * parcel in the way first. Each parallel tile is 4-adjacent to the (gap-free) avenue
+ * spine, so the road network stays a single component. Deterministic geometry — no
+ * rng. Returns the number of avenue tiles placed (folded into the era-2 chronicle).
+ */
+function widenAvenue(
+  map: GameMap,
+  parcels: ParcelStore,
+  axis: Axis,
+  index: number,
+  lo: number,
+  hi: number,
+): number {
+  const parallel = index + 1;
+  let placed = 0;
+  for (let s = lo; s <= hi; s++) {
+    const x = axis === 'row' ? s : parallel;
+    const y = axis === 'row' ? parallel : s;
+    if (!map.inBounds(x, y)) continue;
+    const pid = map.parcel[map.idx(x, y)]!;
+    if (pid !== 0) demolishParcel(map, parcels, pid - 1);
+    if (placeTransport(map, x, y, BuiltKind.RoadAvenue)) placed++;
+  }
+  return placed;
+}
+
+/**
+ * Lay a `cols`×`rows` grid of 2×2 ParkingLot parcels (a 2·cols × 2·rows rectangle
+ * anchored at (ax, ay)). ALL-OR-NOTHING: returns 0 (placing NOTHING) unless the
+ * ENTIRE rectangle is free first — so any field that lands is one full contiguous
+ * mass (no partial field, hence no flaky sub-target component). Draws one rng value
+ * (condition) per lot ONLY on success. Returns the number of ParkingLot parcels
+ * placed (cols·rows on success, 0 on failure — a field is N parcels, not 1).
+ */
+export function placeParkingField(
+  map: GameMap,
+  parcels: ParcelStore,
+  rng: Rng,
+  ax: number,
+  ay: number,
+  cols: number,
+  rows: number,
+): number {
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      if (!canPlaceParcel(map, ax + cx * 2, ay + cy * 2, 2, 2)) return 0;
+    }
+  }
+  let placed = 0;
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      const condition = 60 + rng.nextInt(60); // vacant-lot grade, 60..119
+      if (
+        placeParcel(map, parcels, {
+          x: ax + cx * 2,
+          y: ay + cy * 2,
+          width: 2,
+          height: 2,
+          kind: BuiltKind.ParkingLot,
+          density: 1,
+          condition,
+        }) !== -1
+      ) {
+        placed++;
+      }
+    }
+  }
+  return placed;
 }
 
 /** Minimum value of `field` over a w×h footprint anchored at (ax, ay). */
@@ -471,13 +621,18 @@ export function era1Founding(world: WorldState, rng: Rng, p: MosesParams, state:
     }
   }
 
-  // Housing fills the remaining frontage, row-major, up to the budget.
-  for (const i of roadTiles) {
-    if (placed >= p.era1Parcels) break;
-    const x = i % map.width;
-    const y = (i - x) / map.width;
-    if (placeAdjacent(map, parcels, x, y, 1, 1, BuiltKind.HouseSingle, fabRng) !== -1) placed++;
-  }
+  // Housing & near-core density fill the remaining frontage on ALL lanes, core
+  // first: dense Apartments (with the occasional CommercialStrip) toward the
+  // crossroads, single houses farther out. Core-weighting steers the later era-5
+  // abandonment numerator into the band era 3 carves the highway through.
+  placed += fillFrontage(
+    map,
+    parcels,
+    byCore,
+    rng.fork('fill'),
+    p.era1Parcels - placed,
+    coreWeightedPickKind(map, siteX, siteY, p),
+  );
 
   world.log.push(`era1: fabric — ${placed} parcels (${commercial} commercial)`);
 }
@@ -516,10 +671,21 @@ export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state:
   const fabRng = rng.fork('fabric');
 
   const bbox: BBox = { x0: state.gridX0, y0: state.gridY0, x1: state.gridX1, y1: state.gridY1 };
+  // The era-1 grid extent (captured before the extension grows the bbox). Era 2's
+  // infill targets the NEW extension ONLY (tiles outside this box), so it never
+  // re-plugs the era-1 core where the era-4 downtown offices need 2x2 room.
+  const e1x0 = state.gridX0;
+  const e1y0 = state.gridY0;
+  const e1x1 = state.gridX1;
+  const e1y1 = state.gridY1;
 
-  // 1. Arterial upgrade: street -> avenue along the existing arterials.
+  // 1. Arterial upgrade: street -> avenue along the existing arterials, then widen
+  //    each into a 2-row avenue (parallel row/col). The widening counts fold into
+  //    the chronicle `avenues` tally so it reports the upgrade PLUS the widening.
   let avenues = upgradeArterialRow(map, arterialRow, state.gridX0, state.gridX1);
   avenues += upgradeArterialCol(map, arterialCol, state.gridY0, state.gridY1);
+  avenues += widenAvenue(map, parcels, 'row', arterialRow, state.gridX0, state.gridX1);
+  avenues += widenAvenue(map, parcels, 'col', arterialCol, state.gridY0, state.gridY1);
 
   // 2. Grid extension: extend the arterials (as avenue), then add parallel
   //    streets within the extended spans. Avenues stop at rail/water.
@@ -599,19 +765,60 @@ export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state:
     if (placeAdjacent(map, parcels, x, y, 2, 2, BuiltKind.ParkingLot, fabRng) !== -1) parking++;
   }
 
-  // 5. More houses (and the occasional strip) fill the new frontage.
-  let filled = 0;
-  for (const i of roadTiles) {
-    if (filled >= p.era2Parcels) break;
+  // 5. Dense infill on ALL lanes of the NEW extension frontage. Era 2 is the
+  //    OUTWARD motor-age fill: it packs the rings the extension just added (tiles
+  //    outside the era-1 grid box) and deliberately leaves the era-1 core untouched,
+  //    so the era-4 downtown offices still find 2x2 room there after the era-3 carve.
+  const extensionFrontage = byCore.filter((i) => {
     const x = i % map.width;
     const y = (i - x) / map.width;
-    const kind = filled % 6 === 5 ? BuiltKind.CommercialStrip : BuiltKind.HouseSingle;
-    const w = kind === BuiltKind.CommercialStrip ? 2 : 1;
-    if (placeAdjacent(map, parcels, x, y, w, 1, kind, fabRng) !== -1) filled++;
+    return x < e1x0 || x > e1x1 || y < e1y0 || y > e1y1;
+  });
+  const filled = fillFrontage(
+    map,
+    parcels,
+    extensionFrontage,
+    rng.fork('fill'),
+    p.era2Parcels,
+    coreWeightedPickKind(map, siteX, siteY, p),
+  );
+
+  // 6. Parking FIELDS in the open fringe. The dense grid has no free 4x4 interior
+  //    (blockSpacing 4 → 3x3 interiors, mostly filled), so scan open land past the
+  //    grid's half-span, nearest-fringe first (deterministic), and lay full
+  //    all-or-nothing fields there — up to era2ParkingFields.
+  const parkRng = rng.fork('parkfield');
+  const gridHalf = Math.max(
+    state.gridX1 - siteX,
+    siteX - state.gridX0,
+    state.gridY1 - siteY,
+    siteY - state.gridY0,
+  );
+  const fringe: number[] = [];
+  for (let i = 0; i < map.built.length; i++) {
+    if (map.built[i] !== 0 || map.parcel[i] !== 0) continue;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    if (Math.abs(x - siteX) + Math.abs(y - siteY) <= gridHalf) continue;
+    fringe.push(i);
+  }
+  fringe.sort((a, b) => toCore(a) - toCore(b) || a - b);
+  let fields = 0;
+  let fieldLots = 0;
+  for (const i of fringe) {
+    if (fields >= p.era2ParkingFields) break;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const n = placeParkingField(map, parcels, parkRng, x, y, 2, 2);
+    if (n > 0) {
+      fields++;
+      fieldLots += n;
+    }
   }
 
   world.log.push(
-    `era2: motor age — ${avenues} avenue tiles, ${industry} industry, ${parking} parking, ${filled} infill`,
+    `era2: motor age — ${avenues} avenue tiles, ${industry} industry, ${parking} parking, ` +
+      `${fields} fields (${fieldLots} lots), ${filled} infill`,
   );
 }
 
@@ -643,23 +850,38 @@ function corridorParcels(map: GameMap, c: Corridor): number {
 }
 
 /**
- * Carve corridor `c`: demolish every parcel on the line, rip out any rail in the
- * path, then lay RoadHighway along the full run (merging over street/avenue).
- * Returns [parcels demolished, rail tiles removed].
+ * Carve corridor `c` as a 3-ROW highway: demolish every parcel and rip any rail
+ * across the center spine PLUS the two parallel rows (index ± 1, perpendicular to
+ * the axis), then lay RoadHighway across all three (merging over street/avenue).
+ * The parallel tiles are 4-adjacent to the gap-free spine, so the band is one
+ * connected highway mass. Returns [parcels demolished, rail tiles removed], summed
+ * over ALL THREE rows — the chronicle/balance equation depends on the TOTAL.
+ * demolishParcel clears a whole footprint and tombstones once, so a parcel spanning
+ * rows is demolished (and counted) exactly once.
  */
 function carveCorridor(map: GameMap, store: ParcelStore, c: Corridor): [number, number] {
   let demolished = 0;
   let rail = 0;
-  for (let s = c.lo; s <= c.hi; s++) {
-    const [x, y] = corridorTile(c, s);
-    const i = map.idx(x, y);
-    const pid = map.parcel[i]!;
-    if (pid !== 0 && demolishParcel(map, store, pid - 1)) demolished++;
-    if (map.built[i] === BuiltKind.Rail && demolishTransportAt(map, x, y)) rail++;
+  const offsets = [0, -1, 1]; // center spine, then the two parallel rows
+  const tileOf = (s: number, off: number): [number, number] =>
+    c.axis === 'row' ? [s, c.index + off] : [c.index + off, s];
+  // Demolish all three rows first, then lay continuous highway across them.
+  for (const off of offsets) {
+    for (let s = c.lo; s <= c.hi; s++) {
+      const [x, y] = tileOf(s, off);
+      if (!map.inBounds(x, y)) continue;
+      const i = map.idx(x, y);
+      const pid = map.parcel[i]!;
+      if (pid !== 0 && demolishParcel(map, store, pid - 1)) demolished++;
+      if (map.built[i] === BuiltKind.Rail && demolishTransportAt(map, x, y)) rail++;
+    }
   }
-  for (let s = c.lo; s <= c.hi; s++) {
-    const [x, y] = corridorTile(c, s);
-    placeTransport(map, x, y, BuiltKind.RoadHighway);
+  for (const off of offsets) {
+    for (let s = c.lo; s <= c.hi; s++) {
+      const [x, y] = tileOf(s, off);
+      if (!map.inBounds(x, y)) continue;
+      placeTransport(map, x, y, BuiltKind.RoadHighway);
+    }
   }
   return [demolished, rail];
 }
@@ -910,13 +1132,21 @@ export function era4Suburbs(world: WorldState, rng: Rng, p: MosesParams, state: 
   };
   const allRoads = collectRoadTiles(map, 0, 0, map.width - 1, map.height - 1);
   const byCore = [...allRoads].sort((a, b) => toCore(a) - toCore(b) || a - b);
+  // Downtown offices sit within coreRadius+2 of the crossroads. The denser fabric +
+  // the 3-row highway carve leave almost no 2x2 room inside coreRadius itself, so
+  // consider road tiles out to coreRadius+2 and pin the office ANCHOR within that
+  // same radius (the `nearCore` accept) — the room just outside the carved core,
+  // exactly the band the test counts as "near the center".
+  const officeReach = p.coreRadius + 2;
+  const nearCore = (ax: number, ay: number): boolean =>
+    Math.abs(ax - siteX) + Math.abs(ay - siteY) <= officeReach;
   let offices = 0;
   for (const i of byCore) {
     if (offices >= p.era4Offices) break;
-    if (toCore(i) > p.coreRadius) continue;
+    if (toCore(i) > officeReach) continue;
     const x = i % map.width;
     const y = (i - x) / map.width;
-    if (placeAdjacent(map, parcels, x, y, 2, 2, BuiltKind.Offices, buildRng) !== -1) offices++;
+    if (placeAdjacent(map, parcels, x, y, 2, 2, BuiltKind.Offices, buildRng, nearCore) !== -1) offices++;
   }
 
   // 2b. Sprawl: houses (and the occasional strip) on far-network frontage,
@@ -1011,12 +1241,27 @@ export function era5Disinvestment(world: WorldState, rng: Rng, p: MosesParams, s
     if (!demolishParcel(map, parcels, idx)) continue;
     abandoned++;
     if (!craterRng.chance(p.craterChance)) continue;
-    const w = e.width >= 2 ? 2 : 1;
-    const h = e.height >= 2 ? 2 : 1;
-    const condition = 40 + craterRng.nextInt(50);
-    if (placeParcel(map, parcels, { x: e.x, y: e.y, width: w, height: h, kind: BuiltKind.ParkingLot, density: 1, condition }) !== -1) {
-      craters++;
+    // Some craters expand into a small parking FIELD where the cleared land allows
+    // (a 2x2 grid of lots on the doomed footprint + open neighbours); otherwise a
+    // single vacant lot. placeParkingField is all-or-nothing and draws ZERO rng when
+    // it can't fit, so in the dense organic city (no room) the rng stream — and the
+    // crater condition draw — is unchanged. `craters` sums the ACTUAL ParkingLot
+    // parcels placed (field count or 1), NOT crater events, so the exact balance
+    // equation alive === preEra5Alive − abandoned + craters holds with fields.
+    let lots = placeParkingField(map, parcels, craterRng, e.x, e.y, 2, 2);
+    if (lots === 0) {
+      const w = e.width >= 2 ? 2 : 1;
+      const h = e.height >= 2 ? 2 : 1;
+      const condition = 40 + craterRng.nextInt(50);
+      if (
+        placeParcel(map, parcels, {
+          x: e.x, y: e.y, width: w, height: h, kind: BuiltKind.ParkingLot, density: 1, condition,
+        }) !== -1
+      ) {
+        lots = 1;
+      }
     }
+    craters += lots;
   }
 
   world.log.push(

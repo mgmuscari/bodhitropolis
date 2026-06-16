@@ -9,6 +9,8 @@ import {
   hashWorld,
   parcelTouchesRoad,
   checkParcelAgreement,
+  ParcelStore,
+  placeParcel,
 } from '../../src/engine/fabric';
 import {
   createMosesState,
@@ -18,11 +20,13 @@ import {
   era4Suburbs,
   era5Disinvestment,
   mosesCenturyStage,
+  placeParkingField,
   DEFAULT_MOSES_PARAMS,
   type MosesParams,
   type MosesState,
 } from '../../src/worldgen/moses';
 import { boxDensity, distanceField } from '../../src/worldgen/fields';
+import { wideRoadAt } from '../../src/ui/decoration';
 
 const SEEDS = ['moses-1', 'moses-2', 'moses-3'];
 const P = DEFAULT_MOSES_PARAMS;
@@ -206,6 +210,59 @@ describe('era1Founding settlement', () => {
   }
 });
 
+// Count of road tiles flanked by parcels on BOTH sides (>= 2 distinct adjacent
+// parcel ids). A 1-wide street tile has only its two perpendicular neighbours
+// available as frontage, so per-tile this saturates at "both sides" — the COUNT
+// across the grid is the all-lane signature: an all-lane fillFrontage drives it
+// to ~72, where the old first-fit-one-lane loop reaches only ~14 (mostly around
+// the civic megablock). So the COUNT, not a per-tile max, is the discriminator.
+function bothSidesBuilt(map: GameMap): number {
+  const { width, height } = map;
+  let n = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!isRoadKind(map.built[map.idx(x, y)]!)) continue;
+      const ids = new Set<number>();
+      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]] as const) {
+        if (!map.inBounds(nx, ny)) continue;
+        const pid = map.parcel[map.idx(nx, ny)]!;
+        if (pid !== 0) ids.add(pid);
+      }
+      if (ids.size >= 2) n++;
+    }
+  }
+  return n;
+}
+
+describe('era1Founding density (urban-density Task 4)', () => {
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": fills BOTH sides of streets (all-lane, not first-fit)`, () => {
+      const { map } = runEra1(seed).world;
+      // All-lane fillFrontage flanks ~72 road tiles on both sides; the old first-fit
+      // loop manages ~14. The >= 40 bar cleanly separates them — a clean RED on the
+      // pre-impl first-fit code (verified: 14 < 40), GREEN on the all-lane fill.
+      expect(bothSidesBuilt(map)).toBeGreaterThanOrEqual(40);
+    });
+
+    it(`seed "${seed}": is materially denser than the old baseline (>= 2x ~40)`, () => {
+      // Realized era-1 alive is 80 on moses-1/2/3 (era1Parcels=80, the AC#4 ">= 2x
+      // the old ~40 baseline" target; the PRP's unmeasured 150 saturated the core
+      // and collapsed the era-5 far cohort, so it was calibrated down to 80). The
+      // asserted floor sits below the realized minimum with margin per the
+      // budget-as-cap discipline — defensible against a water-heavier seed.
+      const alive = runEra1(seed).world.parcels.aliveCount();
+      expect(alive).toBeGreaterThanOrEqual(72);
+    });
+
+    it(`seed "${seed}": places dense near-core Apartments`, () => {
+      // fillFrontage steers Apartments (the dense kind, DENSE_ATTRS density 2-3)
+      // into the core — the band era 3 later carves the highway through, which is
+      // what keeps the era-5 abandonment numerator healthy by construction.
+      expect(aliveKindCount(runEra1(seed).world, BuiltKind.Apartments)).toBeGreaterThanOrEqual(5);
+    });
+  }
+});
+
 // Manhattan distance from any tile of parcel `i`'s footprint to the nearest
 // rail or water tile, capped at `cap` (searches a small neighbourhood).
 function nearRailOrWater(map: GameMap, parcels: WorldState['parcels'], i: number, cap = 2): boolean {
@@ -280,6 +337,50 @@ describe('era2MotorAge', () => {
   }
 });
 
+describe('placeParkingField (all-or-nothing, unit)', () => {
+  it('places cols*rows lots on a fully-free region as one contiguous field', () => {
+    const map = new GameMap(20, 20);
+    const parcels = new ParcelStore();
+    const n = placeParkingField(map, parcels, createRng('pf'), 2, 2, 2, 2);
+    expect(n).toBe(4); // a 2x2 grid of 2x2 lots
+    // The 4 lots tile a 4x4 rectangle → one 4-connected component of 16 tiles.
+    expect(componentSizes(map, BuiltKind.ParkingLot).sort((a, b) => b - a)).toEqual([16]);
+    expect(checkParcelAgreement(map, parcels)).toEqual([]);
+  });
+
+  it('places nothing and returns 0 if any tile in the rectangle is occupied', () => {
+    const map = new GameMap(20, 20);
+    const parcels = new ParcelStore();
+    map.built[map.idx(3, 3)] = BuiltKind.RoadStreet; // one occupied tile inside the 4x4
+    const n = placeParkingField(map, parcels, createRng('pf'), 2, 2, 2, 2);
+    expect(n).toBe(0);
+    expect(countBuilt(map, BuiltKind.ParkingLot)).toBe(0);
+  });
+});
+
+describe('era2MotorAge density & widening (urban-density Task 5)', () => {
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": widens an arterial into a 2-row avenue (wideRoadAt)`, () => {
+      const { map } = runEras(seed, 2).world;
+      let found = false;
+      for (let y = 0; y < map.height && !found; y++) {
+        for (let x = 0; x < map.width && !found; x++) {
+          if (map.built[map.idx(x, y)] === BuiltKind.RoadAvenue && wideRoadAt(map, x, y)) found = true;
+        }
+      }
+      expect(found).toBe(true);
+    });
+
+    it(`seed "${seed}": lays a parking field (>= 16-tile ParkingLot component)`, () => {
+      // The fringe field is all-or-nothing in open land past the dense grid, so the
+      // full 4x4 (16 tiles) lands as one component — satisfiable by construction.
+      const { map } = runEras(seed, 2).world;
+      const sizes = componentSizes(map, BuiltKind.ParkingLot).sort((a, b) => b - a);
+      expect(sizes[0]).toBeGreaterThanOrEqual(16);
+    });
+  }
+});
+
 // Connected-component sizes of a given built kind (4-connected).
 function componentSizes(map: GameMap, kind: number): number[] {
   const { width, height } = map;
@@ -315,6 +416,25 @@ function countBuilt(map: GameMap, kind: number): number {
   let n = 0;
   for (let i = 0; i < map.built.length; i++) if (map.built[i] === kind) n++;
   return n;
+}
+
+// True iff any 2x2 block is ALL RoadHighway — the signature of a multi-row carve.
+// A single-row corridor cannot form one (even at a + crossing or alongside grid
+// streets, the diagonal cell is never a 2nd highway row).
+function hasHighwaySlab(map: GameMap): boolean {
+  for (let y = 0; y < map.height - 1; y++) {
+    for (let x = 0; x < map.width - 1; x++) {
+      if (
+        map.built[map.idx(x, y)] === BuiltKind.RoadHighway &&
+        map.built[map.idx(x + 1, y)] === BuiltKind.RoadHighway &&
+        map.built[map.idx(x, y + 1)] === BuiltKind.RoadHighway &&
+        map.built[map.idx(x + 1, y + 1)] === BuiltKind.RoadHighway
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 // Min Manhattan distance from any footprint tile of parcel `i` to the nearest
@@ -376,6 +496,16 @@ describe('era3Highways', () => {
         if (map.built[i] === BuiltKind.RoadHighway && density[i]! >= q75) inMask++;
       }
       expect(inMask).toBeGreaterThanOrEqual(5);
+    });
+
+    it(`seed "${seed}": carves a 3-row highway slab (a 2x2 all-highway block)`, () => {
+      const { world } = runEra3(seed);
+      const { map } = world;
+      // The signature of a multi-row carve: a 2x2 block of ALL RoadHighway tiles.
+      // A 1-wide carve cannot form one even where it abuts grid streets — and
+      // wideRoadAt alone admits mixed-kind 2x2s, so it can't discriminate the band.
+      // Every tile of an all-highway 2x2 also reads wide to the renderer.
+      expect(hasHighwaySlab(map)).toBe(true);
     });
 
     it(`seed "${seed}": demolition balance equation holds (yield point 5b)`, () => {
@@ -581,6 +711,37 @@ describe('era5Disinvestment blight & abandonment', () => {
   }
 });
 
+describe('era5Disinvestment crater fields (urban-density Task 7)', () => {
+  it('a crater expands into a parking field on cleared land; balance stays exact', () => {
+    // Constructed fixture (seed-independent): a highway tile + an adjacent
+    // low-condition house with open land around it, so era-5 decay dooms the
+    // house and the crater FIELD has contiguous room to form. Pins the wiring
+    // (placeParkingField reused on the cleared footprint, count summed into
+    // craters) without relying on fragile organic clustering on moses-1/2/3.
+    const map = new GameMap(24, 24);
+    const parcels = new ParcelStore();
+    map.built[map.idx(10, 5)] = BuiltKind.RoadHighway;
+    placeParcel(map, parcels, {
+      x: 10, y: 6, width: 1, height: 1, kind: BuiltKind.HouseSingle, density: 1, condition: 45,
+    });
+    const world: WorldState = { seed: 'crater-field', map, parcels, log: [] };
+    const state = createMosesState();
+    state.founded = true;
+    const params: MosesParams = { ...DEFAULT_MOSES_PARAMS, craterChance: 1 };
+    era5Disinvestment(world, createRng('crater-field').fork('era5'), params, state);
+
+    // A field formed: a ParkingLot component larger than a single 2x2 lot (4 tiles).
+    const sizes = componentSizes(map, BuiltKind.ParkingLot).sort((a, b) => b - a);
+    expect(sizes[0]).toBeGreaterThanOrEqual(8);
+    // Balance is exact: craters counts EVERY placed lot, not crater events.
+    const line = world.log.find((l) => /disinvestment/.test(l))!;
+    const abandoned = Number(/(\d+) abandoned/.exec(line)![1]);
+    const craters = Number(/(\d+) craters/.exec(line)![1]);
+    expect(parcels.aliveCount()).toBe(state.preEra5Alive - abandoned + craters);
+    expect(checkParcelAgreement(map, parcels)).toEqual([]);
+  });
+});
+
 describe('mosesCenturyStage (full assembly)', () => {
   it('produces an identical canonical hash for the same seed', () => {
     expect(hashWorld(runFullStage('moses-1'))).toBe(hashWorld(runFullStage('moses-1')));
@@ -589,6 +750,16 @@ describe('mosesCenturyStage (full assembly)', () => {
   it('produces different canonical hashes for different seeds', () => {
     expect(hashWorld(runFullStage('moses-1'))).not.toBe(hashWorld(runFullStage('moses-2')));
   });
+
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": three full-stage runs are byte-identical (triple-snapshot)`, () => {
+      const h1 = hashWorld(runFullStage(seed));
+      const h2 = hashWorld(runFullStage(seed));
+      const h3 = hashWorld(runFullStage(seed));
+      expect(h1).toBe(h2);
+      expect(h1).toBe(h3);
+    });
+  }
 
   it('logs the pipeline stage order terrain → moses-century', () => {
     const world = runFullStage('moses-1');
