@@ -1075,3 +1075,45 @@ describe('desire-path wear (pedestrians trample wild green into brown + trash)',
     expect(state.waterPollution.get(map.idx(5, 5)) ?? 0).toBe(0); // interior water, all-water neighbours → clean
   });
 });
+
+describe('failed trips + freeway speed', () => {
+  it('a citizen whose pathing dead-ends gives up and docks its home wellbeing', () => {
+    const map = new GameMap(12, 12);
+    map.built[map.idx(2, 2)] = BuiltKind.HouseSingle; // home
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      map.built[map.idx(5 + dx, 5 + dy)] = BuiltKind.HouseSingle; // box the ped in at (5,5)
+    }
+    const state = createAmbientState();
+    state.peds.push({
+      x: 5, y: 5, dir: 0, tx: 5, ty: 5,
+      walkTo: { x: 10, y: 10 }, phase: 'to-building',
+      homeTile: map.idx(2, 2), building: { x: 10, y: 10 },
+    });
+    const rng = ambientFork('giveup');
+    stepAmbient(state, map, rng, 50);
+    expect(state.peds.length).toBe(0); // boxed in → gave up, despawned
+    expect(state.buildingHealth.get(map.idx(2, 2))!).toBeLessThan(0); // home docked for the lost trip
+  });
+
+  it('cars travel faster on a freeway than on a street', () => {
+    const hwMap = new GameMap(40, 8);
+    const stMap = new GameMap(40, 8);
+    for (let x = 0; x < 40; x++) {
+      hwMap.built[hwMap.idx(x, 4)] = BuiltKind.RoadHighway;
+      stMap.built[stMap.idx(x, 4)] = BuiltKind.RoadStreet;
+    }
+    const path = [];
+    for (let x = 2; x <= 36; x++) path.push(hwMap.idx(x, 4));
+    const hw = createAmbientState();
+    const st = createAmbientState();
+    hw.cars.push({ x: 2, y: 4, dir: 1, tx: 3, ty: 4, path, leg: 2 });
+    st.cars.push({ x: 2, y: 4, dir: 1, tx: 3, ty: 4, path, leg: 2 });
+    const r1 = ambientFork('hw');
+    const r2 = ambientFork('st');
+    for (let i = 0; i < 20; i++) {
+      stepAmbient(hw, hwMap, r1, 50);
+      stepAmbient(st, stMap, r2, 50);
+    }
+    expect(hw.cars[0]!.x).toBeGreaterThan(st.cars[0]!.x); // freeway car got further
+  });
+});
