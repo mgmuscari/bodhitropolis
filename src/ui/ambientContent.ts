@@ -367,11 +367,17 @@ function freewayStep(
   return lane.dir; // ran out of road — continue off-network, despawn next step
 }
 
-/** Car traversability for general (non-lane) routing: a car-road tile that is NOT a
- *  divided road's median. Cars neither spawn on, weave onto, nor turn (at a junction)
- *  onto a median — so the median stays a true no-traffic gap. */
+/** A car may occupy a road (1..3) or a parking lot — cars cut THROUGH parking (the
+ *  accumulated concrete of the over-paved city) rather than routing around it. */
+function carTraversable(kind: number): boolean {
+  return isCarRoad(kind) || kind === BuiltKind.ParkingLot;
+}
+
+/** Car traversability for general (non-lane) routing: a road or parking tile that is
+ *  NOT a divided road's median. Cars neither spawn on, weave onto, nor turn (at a
+ *  junction) onto a median — so the median stays a true no-traffic gap. */
 function carPassable(map: GameMap, x: number, y: number): boolean {
-  if (!isCarRoad(map.built[map.idx(x, y)]!)) return false;
+  if (!carTraversable(map.built[map.idx(x, y)]!)) return false;
   const lane = freewayLane(map, x, y);
   return lane === null || lane.role !== 'median';
 }
@@ -407,12 +413,13 @@ function nextPedStep(map: GameMap, x: number, y: number, fromDir: number, rng: R
 
 // --- Despawn predicates --------------------------------------------------
 
-/** A car is gone once the tile under it is no longer a road (e.g. converted). */
+/** A car is gone once the tile under it is no longer traversable — a road or parking
+ *  lot (e.g. bulldozed/converted, or driven off the far side of the lot it cut through). */
 function carOffNetwork(map: GameMap, c: Car): boolean {
   const x = Math.round(c.x);
   const y = Math.round(c.y);
   if (!map.inBounds(x, y)) return true;
-  return !isCarRoad(map.built[map.idx(x, y)]!);
+  return !carTraversable(map.built[map.idx(x, y)]!);
 }
 
 /** A ped is gone once the tile under it is no longer pedestrian substrate. */
