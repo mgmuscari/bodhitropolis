@@ -67,7 +67,9 @@ const PARK_MAX_WAIT = 600;
  *  deposits the destination plot's visitValue at the citizen's home, and health eases back
  *  toward neutral (0) so it reflects RECENT trips, not all-time. Live, not hashed. */
 const HEALTH_MAX = 120;
-const HEALTH_DECAY = 0.1;
+// Slow decay so health ACCUMULATES across a home's repeated trips into a persistent,
+// readable signal (a fast decay left most homes flickering back to neutral between visits).
+const HEALTH_DECAY = 0.02;
 
 /** Transport-MODE threshold: a citizen trip whose committed path is at most this many tiles
  *  is walked (a pedestrian routes the whole way); longer trips drive. So as destinations come
