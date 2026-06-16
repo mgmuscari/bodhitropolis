@@ -258,6 +258,35 @@ describe('anti-loop routing: recent-tile avoidance (Maddy playtest — tight loo
   });
 });
 
+describe('parking lots are drivable — cars cut through (Maddy: cars cut through parking)', () => {
+  it('a car cuts through a parking lot in its path instead of being blocked', () => {
+    const m = new GameMap(16, 8);
+    for (let x = 0; x < 16; x++) m.built[m.idx(x, 4)] = BuiltKind.RoadStreet;
+    m.built[m.idx(7, 4)] = BuiltKind.ParkingLot; // a parking segment across the road
+    m.built[m.idx(8, 4)] = BuiltKind.ParkingLot;
+    const state = createAmbientState();
+    const car = { x: 2, y: 4, dir: 1, tx: 3, ty: 4 }; // heading East toward the parking
+    state.cars.push(car);
+    const rng = ambientFork('cut');
+    let maxX = 2;
+    for (let i = 0; i < 200 && state.cars.includes(car); i++) {
+      maxX = Math.max(maxX, car.x);
+      stepAmbient(state, m, rng, 50);
+    }
+    expect(maxX).toBeGreaterThan(9); // drove through the parking (x7,8) out the far side, not blocked
+  });
+
+  it('a car on a parking tile is not despawned (parking is drivable)', () => {
+    const m = new GameMap(8, 8);
+    for (let x = 0; x < 8; x++) m.built[m.idx(x, 4)] = BuiltKind.ParkingLot;
+    const state = createAmbientState();
+    state.cars.push({ x: 2, y: 4, dir: 1, tx: 3, ty: 4 });
+    const rng = ambientFork('pk');
+    stepAmbient(state, m, rng, 50);
+    expect(state.cars.length).toBe(1); // survived a step on the lot
+  });
+});
+
 describe('laneOffset (lane math — opposing traffic on opposite sides of a road block)', () => {
   // Maddy playtest: "the roads need lane math" + "a road block should run either
   // vertical or horizontal and have bidirectional flow." A mover is drawn offset to
