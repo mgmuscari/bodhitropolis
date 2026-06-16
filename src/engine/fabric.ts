@@ -57,6 +57,11 @@ export const BuiltKind = {
   Bazaar: 58,
   MakerSpace: 59,
   HealingCommons: 60,
+  // Rezoning-era greens 61..62 — placed only by converting an existing building
+  // parcel in place (convert-61/62); soil-healing (unsealed, see ecology) and,
+  // for Park, a gathering place (see civic dynamics).
+  Park: 61,
+  RewildedLand: 62,
 } as const;
 export type BuiltKind = (typeof BuiltKind)[keyof typeof BuiltKind];
 

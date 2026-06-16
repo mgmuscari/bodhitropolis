@@ -156,6 +156,11 @@ const BUILDING_STYLES: Record<number, BuildingStyle> = {
   [BuiltKind.Bazaar]: { base: [180, 120, 90], accent: [200, 140, 108], roof: [146, 90, 64] },
   [BuiltKind.MakerSpace]: { base: [150, 140, 110], accent: [170, 160, 128], roof: [112, 104, 80] },
   [BuiltKind.HealingCommons]: { base: [196, 176, 150], accent: [212, 194, 168], roof: [158, 138, 116] },
+  // Rezoning greens 61..62 — depaved, soil-healing land. Park is a tended,
+  // mown-and-pathed green (bright, even); RewildedLand is a wilder, deeper scrub
+  // green — both distinct from Parklet's blue-green and CommunityGarden's olive.
+  [BuiltKind.Park]: { base: [96, 162, 92], accent: [118, 186, 110], roof: [72, 134, 70] },
+  [BuiltKind.RewildedLand]: { base: [58, 116, 64], accent: [78, 140, 80], roof: [40, 88, 48] },
 };
 
 // Coverage guards (headless-testable). The atlas iterates renderKeyspace() and

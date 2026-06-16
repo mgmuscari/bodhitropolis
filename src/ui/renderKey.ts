@@ -46,8 +46,8 @@ const TRANSPORT_PREFIX: ReadonlyArray<readonly [number, string]> = [
 ];
 const PREFIX_OF = new Map<number, string>(TRANSPORT_PREFIX);
 
-// Building kinds that render as footprint tiles: Moses-era 16..23 + tech 48..60.
-// Must match the renderer's BUILDING_STYLES key set exactly.
+// Building kinds that render as footprint tiles: Moses-era 16..23 + tech 48..60
+// + rezoning greens 61..62. Must match the renderer's BUILDING_STYLES key set exactly.
 const BUILDING_RENDER_KINDS: readonly number[] = [
   BuiltKind.HouseSingle,
   BuiltKind.Apartments,
@@ -70,6 +70,8 @@ const BUILDING_RENDER_KINDS: readonly number[] = [
   BuiltKind.Bazaar,
   BuiltKind.MakerSpace,
   BuiltKind.HealingCommons,
+  BuiltKind.Park,
+  BuiltKind.RewildedLand,
 ];
 
 /**
