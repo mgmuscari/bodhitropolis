@@ -54,13 +54,16 @@ runs or not.
    - Sprites **despawn** when their substrate is gone (a car on a bulldozed/
      converted road; birds where fauna collapses).
 
-2. **Split renderer — `src/ui/renderer.ts`** : the existing full draw
-   (terrain + built + overlay + preview) becomes a **base pass cached to an
-   offscreen canvas**, rebuilt only when the view is dirty (map edit / pan /
-   zoom / overlay / resize). A per-frame **composite** blits the cached base
-   (one `drawImage`) and draws the ambient sprites on top — O(visible sprites)
-   per frame, not O(visible tiles). **When ambient is off, the render path is
-   exactly today's** dirty-driven full draw (no regression).
+2. **Split renderer — `src/ui/renderer.ts`** : the static layers
+   (terrain + built + overlay) become a **base pass cached to an offscreen
+   canvas**, rebuilt only on a map/camera/overlay change (map edit / pan / zoom /
+   overlay / resize). The cursor-following **preview** and the ambient **sprites**
+   draw in a per-frame **composite** that blits the cached base (one `drawImage`)
+   and draws them on top — so a hover never invalidates the base. The per-frame
+   DRAW is O(visible sprites); the stepper's spawn/move is O(capped total
+   sprites), camera-free. **When ambient is off, the render output equals
+   today's** (no regression), now cache-optimized (a hover is a cheap blit, not a
+   full redraw).
 
 3. **Continuous loop + toggle — `src/main.ts` + `src/ui/dockContent.ts`** : when
    ambient is enabled, the rAF frame steps the ambient stepper and composites
@@ -119,9 +122,12 @@ never serialized, never part of `hashWorld`. No new tile layers, no
    (e.g. one 100ms step ≡ two 50ms steps; a 30ms then 70ms step ≡ two 50ms
    substeps at the boundary). Determinism holds headlessly (Node) and therefore
    across engines.
-3. **Cars follow road class (tested):** spawn density scales **highway 3× /
-   avenue 2× / street 1× / quiet-street 0** — a pure ratio assertion over a
-   fixture map (and zero cars ever spawn on quiet streets/non-roads).
+3. **Cars follow road class (tested):** the **exact, pure** contract is the
+   weight helper `carWeightForRoad` returning **highway 3 / avenue 2 / street 1 /
+   quiet-street 0 / non-road 0**; emergent spawn counts (seed-dependent) are
+   pinned at a fixed seed by exact integer counts + the ordering highway > avenue
+   > street > quiet = 0 — NOT a tolerance-banded "~ratio". Zero cars ever spawn on
+   OR move onto quiet streets/non-roads (traversal pinned to `isRoadKind`).
 4. **Pedestrians follow calm/green (tested):** peds appear on quiet streets,
    promenades, parklets, and near community gardens/parks, and **not** on
    busy streets/avenues/highways — a pure predicate test.
@@ -137,11 +143,14 @@ never serialized, never part of `hashWorld`. No new tile layers, no
    (ambient forks its own `'ambient'` stream and never advances a sim stream —
    a worldgen/sim determinism run is unchanged by ambient existing).
 8. **Renderer split (tested where headless-possible):** the base is rebuilt only
-   when invalidated; `invalidateBase()` is called by **every** existing dirty
-   trigger (pan/zoom/resize/tool-apply/overlay-cycle/preview/opening-dismiss/
-   overlay-tick) — enumerated and pinned at the seam level; with ambient **off**,
-   the render output equals today's (regression). (The pixel composite itself is
-   the live-pass gate.)
+   when invalidated; `invalidateBase()` is called by every **base-affecting**
+   trigger (pan/zoom/resize/tool-apply/overlay-cycle/opening-dismiss/overlay-tick),
+   while **preview/selection** (hover/clearHover/select/hotkey) are composite-only
+   and do NOT invalidate the base (the preview moved into the per-frame composite,
+   so a hover doesn't rebuild the base). Headless backstops: the offscreen base
+   dims track `resize`, and a `drawBase` spy proves it runs only on an invalidating
+   frame; with ambient **off**, the render output equals today's (regression). The
+   pixel composite itself is the live-pass gate.
 9. **Toggle + pause:** the [Life] dock button (and its key) flips ambient on/off
    through the same pure `metaButtons`/`onMeta` seam as [Tech]/[Eco]/[Civic];
    the loop pauses on `document.hidden`.
@@ -183,10 +192,13 @@ never serialized, never part of `hashWorld`. No new tile layers, no
 
 ## 6. Open Questions
 
-1. **Sprite caps / spawn rates?** Assume modest per-kind caps tuned in the live
-   pass (e.g. cars proportional to visible busy-road tiles up to a cap; a
-   handful of bird flocks). Magnitudes are placeholder; the *ratios* (car class,
-   ped substrate, bird fauna) are the tested contract.
+1. **Sprite caps / spawn rates?** RESOLVED (plan review): the stepper is
+   camera-free, so it spawns **map-wide, class/substrate/fauna-weighted, up to a
+   GLOBAL per-kind cap** (rng rejection-sampling, no full-map scan); the renderer
+   culls to the viewport at draw. (NOT "proportional to visible tiles" — a
+   viewport-coupled spawn would break determinism on pan.) Magnitudes are
+   placeholder, live-pass tuned; the *contracts* (exact car weight, ped substrate,
+   bird fauna, flock 3–7) are tested.
 2. **Default on or off?** Assume ambient **on** by default (it's the payoff),
    with the [Life] toggle to disable; revisit in the live pass if it's
    distracting.
