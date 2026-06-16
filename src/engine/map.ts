@@ -54,6 +54,9 @@ export class GameMap {
   readonly floraVitality: Uint8Array;
   /** Fauna presence per cell, 0..255 (ecology layer; see src/ecology). */
   readonly faunaPresence: Uint8Array;
+  /** Traffic density per cell, 0..255 (traffic layer; see src/traffic). Laid by
+   *  origin→destination trips, decays each traffic cycle. */
+  readonly traffic: Uint8Array;
 
   constructor(width = 128, height = 128) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
@@ -71,6 +74,7 @@ export class GameMap {
     this.soilHealth = new Uint8Array(n);
     this.floraVitality = new Uint8Array(n);
     this.faunaPresence = new Uint8Array(n);
+    this.traffic = new Uint8Array(n);
   }
 
   idx(x: number, y: number): number {
@@ -161,6 +165,7 @@ export class GameMap {
     h = fnv1aBytes(h, bytesOf(this.soilHealth));
     h = fnv1aBytes(h, bytesOf(this.floraVitality));
     h = fnv1aBytes(h, bytesOf(this.faunaPresence));
+    h = fnv1aBytes(h, bytesOf(this.traffic));
     return `${this.width}x${this.height}:${(h >>> 0).toString(16).padStart(8, '0')}`;
   }
 }
