@@ -76,6 +76,28 @@ const HEALTH_DECAY = 0.02;
  *  closer / streets calm, citizens shift out of cars — the heart of the congestion→bloom loop. */
 const WALK_RANGE = 10;
 
+/** Desire-path WEAR: pedestrians beat a path through WILD-GREEN ground (empty land whose flora
+ *  is at least WEAR_FLORA_MIN). Each ped on such a tile adds WEAR_RATE per substep up to
+ *  WEAR_MAX; unused wear decays by WEAR_DECAY so a path regrows once foot traffic reroutes
+ *  (e.g. onto a promenade the player lays down). Live/cosmetic — the deterministic ecology
+ *  layers are read, never written. */
+const WEAR_MAX = 255;
+const WEAR_RATE = 1.5;
+// Slow decay so repeated crossings ACCUMULATE into a bold, persistent desire line instead of
+// a single faint crossing fading at once; the path still regrows over minutes if foot traffic
+// reroutes (e.g. onto a promenade the player lays down).
+const WEAR_DECAY = 0.02;
+
+/** Water-runoff pollution: water tiles are impassable and instead collect runoff from the
+ *  ground around them, growing heavily polluted over time. Computed every WATER_RUNOFF_CADENCE
+ *  substeps; each ground 4-neighbour sheds RUNOFF_* into the water tile (paved/built/worn ground
+ *  sheds most, wild ground least), accumulating toward WATER_POLL_MAX. Live/cosmetic. */
+const WATER_POLL_MAX = 255;
+const WATER_RUNOFF_CADENCE = 20;
+const RUNOFF_URBAN = 2; // a paved/built ground neighbour
+const RUNOFF_WILD = 0.4; // a wild/empty ground neighbour
+const RUNOFF_WORN = 2; // extra when that ground is a beaten desire path
+
 /** Substeps a pedestrian spends INSIDE its destination building before walking back to the
  *  car: a base plus a seeded spread so visitors don't all return together. ~3–13s. */
 const INSIDE_DWELL_MIN = 60;
@@ -136,6 +158,18 @@ const CURB = 0.32;
  *  than on the lane. Cosmetic — read only by the renderer. */
 export function curbParkOffset(curbDir: number): { dx: number; dy: number } {
   return { dx: DIR_DX[curbDir]! * CURB, dy: DIR_DY[curbDir]! * CURB };
+}
+
+/** How far a pedestrian is drawn toward the kerb (perpendicular to its heading) when walking
+ *  ALONG a street — bigger than the car LANE so it clears the traffic onto the sidewalk edge.
+ *  Opposite-direction walkers ride opposite kerbs (right-hand), so both sides of the street
+ *  are used. Through-the-middle is reserved for demand-path cut-throughs across open ground. */
+const PED_CURB = 0.38;
+
+/** A pedestrian's draw-time kerb offset (perpendicular-right of its heading), for when it is
+ *  walking along a road. Cosmetic — read only by the renderer's sprite draw. */
+export function pedCurbOffset(dir: number): { dx: number; dy: number } {
+  return { dx: -DIR_DY[dir]! * PED_CURB, dy: DIR_DX[dir]! * PED_CURB };
 }
 
 /** A grid-following sprite: float world position + heading + committed target tile. */
@@ -235,10 +269,29 @@ export interface AmbientState {
    *  its citizens bring home from their trips (decayed toward neutral). Renderer-side, never
    *  hashed — it reads the deterministic world but is a live overlay quantity. */
   buildingHealth: Map<number, number>;
+  /** Live trample WEAR (0..WEAR_MAX), keyed by tile index: how hard pedestrians have beaten a
+   *  desire path through a wild-green tile. Accumulates under foot traffic, decays when unused
+   *  (the path regrows). Renderer-side, never hashed — the deterministic ecology is untouched;
+   *  the renderer browns the ground + litters trash by this value. */
+  wear: Map<number, number>;
+  /** Live WATER POLLUTION (0..WATER_POLL_MAX), keyed by water tile index: runoff collected from
+   *  the surrounding ground, growing heavily polluted over time. Renderer-side, never hashed. */
+  waterPollution: Map<number, number>;
+  /** Substep counter gating the (whole-map) water-runoff pass to WATER_RUNOFF_CADENCE. */
+  waterTick: number;
 }
 
 export function createAmbientState(): AmbientState {
-  return { cars: [], peds: [], birds: [], accMs: 0, buildingHealth: new Map() };
+  return {
+    cars: [],
+    peds: [],
+    birds: [],
+    accMs: 0,
+    buildingHealth: new Map(),
+    wear: new Map(),
+    waterPollution: new Map(),
+    waterTick: 0,
+  };
 }
 
 /** Publish the parking lots that store moving cars. The host (main.ts) computes these from
@@ -585,10 +638,6 @@ function advanceMover(
   return true;
 }
 
-/** Advance one last-mile pedestrian straight toward its `walkTo` target by `speed`,
- *  off-grid (it may cross a lot or road). Returns false on arrival so the caller despawns
- *  it. Direction is normalized with sqrt (no trig — allowlist-safe); `dir` is set to the
- *  dominant cardinal so any heading-based draw stays sane. */
 /** Ped-walkable: any in-bounds, non-water tile that is NOT an occupied R/C/I/Civic plot —
  *  i.e. roads, transit, PARKING, parks, rewilded greens, empty land all walk; only the actual
  *  building footprints block. Routed pedestrians step across these (around plots), so they no
@@ -597,6 +646,15 @@ function isWalkable(map: GameMap, x: number, y: number): boolean {
   if (!map.inBounds(x, y)) return false;
   if (map.water[map.idx(x, y)] !== 0) return false; // Water.None === 0
   return zoneTypeOf(map.built[map.idx(x, y)]!) === ZoneType.None;
+}
+
+/** Wild-green ground a desire path forms through: ANY empty land (no road/building) that isn't
+ *  water. Empty ground IS the wild green — even bare patches wear and litter under foot traffic
+ *  (water is impassable and pollutes instead). Pedestrians crossing these trample them brown. */
+export function isWearable(map: GameMap, x: number, y: number): boolean {
+  if (!map.inBounds(x, y)) return false;
+  const i = map.idx(x, y);
+  return map.built[i] === BuiltKind.None && map.water[i] === 0;
 }
 
 /** A routed pedestrian's next grid step (a Manhattan walk): the walkable, non-recent
@@ -1093,6 +1151,91 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       else state.buildingHealth.set(k, nv);
     }
   }
+
+  // 5. Desire-path WEAR: every pedestrian on a wild-green tile beats it down a little; unused
+  //    wear regrows. Cars don't count (they ride pavement) — this is foot traffic forming paths.
+  for (const p of state.peds) {
+    const tx = Math.round(p.x);
+    const ty = Math.round(p.y);
+    if (!isWearable(map, tx, ty)) continue;
+    const i = map.idx(tx, ty);
+    const w = (state.wear.get(i) ?? 0) + WEAR_RATE;
+    state.wear.set(i, w > WEAR_MAX ? WEAR_MAX : w);
+  }
+  if (state.wear.size > 0) {
+    for (const [k, v] of [...state.wear]) {
+      const nv = v - WEAR_DECAY;
+      if (nv <= 0) state.wear.delete(k);
+      else state.wear.set(k, nv);
+    }
+  }
+
+  // 6. Water runoff: on a slow cadence, each coastal water tile collects pollution from the
+  //    ground around it and grows heavily polluted over time (impassable, so it never wears).
+  state.waterTick += 1;
+  if (state.waterTick % WATER_RUNOFF_CADENCE === 0) accumulateWaterRunoff(state, map);
+}
+
+/** One water-runoff pass: every water tile with ground neighbours collects their runoff
+ *  (paved/built/worn ground sheds most), accumulating toward WATER_POLL_MAX. Open water with no
+ *  ground neighbours stays clean. Whole-map scan — gated to WATER_RUNOFF_CADENCE by the caller. */
+function accumulateWaterRunoff(state: AmbientState, map: GameMap): void {
+  const W = map.width;
+  const H = map.height;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = map.idx(x, y);
+      if (map.water[i] === 0) continue; // only water collects runoff
+      let runoff = 0;
+      for (let d = 0; d < 4; d++) {
+        const nx = x + DIR_DX[d]!;
+        const ny = y + DIR_DY[d]!;
+        if (!map.inBounds(nx, ny)) continue;
+        const ni = map.idx(nx, ny);
+        if (map.water[ni] !== 0) continue; // a water neighbour sheds nothing
+        const k = map.built[ni]!;
+        runoff += isRoadKind(k) || k === BuiltKind.ParkingLot || zoneTypeOf(k) !== ZoneType.None
+          ? RUNOFF_URBAN
+          : RUNOFF_WILD;
+        if ((state.wear.get(ni) ?? 0) > 40) runoff += RUNOFF_WORN;
+      }
+      if (runoff === 0) continue;
+      const next = (state.waterPollution.get(i) ?? 0) + runoff;
+      state.waterPollution.set(i, next > WATER_POLL_MAX ? WATER_POLL_MAX : next);
+    }
+  }
+}
+
+/** Number of urban (road / parking / built) tiles in the 8-neighbourhood of (x, y). */
+function urbanNeighbours(map: GameMap, x: number, y: number): number {
+  let n = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!map.inBounds(nx, ny)) continue;
+      const k = map.built[map.idx(nx, ny)]!;
+      if (isRoadKind(k) || k === BuiltKind.ParkingLot || zoneTypeOf(k) !== ZoneType.None) n++;
+    }
+  }
+  return n;
+}
+
+/** Seed the live blight a century of car-culture left BEFORE the player arrives, so the city
+ *  starts degraded rather than pristine: empty urban ground is already trampled brown (wear,
+ *  by how hemmed-in it is) and the shorelines are already polluted (runoff). Derived from the
+ *  worldgen world; the live layers evolve from here as the player heals or neglects the city. */
+export function seedBlight(state: AmbientState, map: GameMap): void {
+  for (let y = 0; y < map.height; y++) {
+    for (let x = 0; x < map.width; x++) {
+      if (!isWearable(map, x, y)) continue;
+      const urban = urbanNeighbours(map, x, y);
+      if (urban >= 2) state.wear.set(map.idx(x, y), Math.min(WEAR_MAX, urban * 26));
+    }
+  }
+  // A century of runoff already in the water — saturate the urban shorelines.
+  for (let n = 0; n < 60; n++) accumulateWaterRunoff(state, map);
 }
 
 /**

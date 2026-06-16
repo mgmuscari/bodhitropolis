@@ -9,12 +9,12 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
-import { laneOffset, curbParkOffset } from './ambientContent';
+import { laneOffset, curbParkOffset, pedCurbOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
 
 /** A previewed tile for the hover/drag overlay: world coords + validity tint. */
@@ -617,11 +617,51 @@ export class Renderer {
     const onScreen = (sx: number, sy: number): boolean =>
       sx > -ts && sx < w + ts && sy > -ts && sy < h + ts;
 
+    const mapW = world.map.width;
+
+    // Desire-path WEAR: pedestrians beat wild-green ground into brown dirt + litter. Drawn
+    // first (ground level), browning the tile by wear and dropping trash specks as it deepens.
+    for (const [tile, wear] of ambient.wear) {
+      const wx = tile % mapW;
+      const wy = (tile - wx) / mapW;
+      const { sx, sy } = camera.worldToScreen(wx, wy);
+      if (sx < -ts || sx > w + ts || sy < -ts || sy > h + ts) continue;
+      const f = wear / 255;
+      ctx.globalAlpha = 0.7 * f; // browns the green underneath, proportional to wear
+      ctx.fillStyle = '#6e5d3f';
+      ctx.fillRect(Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
+      ctx.globalAlpha = 1;
+      if (wear > 120) {
+        ctx.fillStyle = '#2e2a22'; // trash specks, more as the path deepens
+        const specks: ReadonlyArray<readonly [number, number]> = [
+          [0.3, 0.35],
+          [0.65, 0.5],
+          [0.45, 0.72],
+        ];
+        const n = wear > 210 ? 3 : wear > 170 ? 2 : 1;
+        const sp = Math.max(1, ts * 0.12);
+        for (let k = 0; k < n; k++) {
+          ctx.fillRect(Math.floor(sx + specks[k]![0] * ts), Math.floor(sy + specks[k]![1] * ts), sp, sp);
+        }
+      }
+    }
+
+    // Water pollution: runoff murks the coastal water green-brown, deepening with accumulation.
+    for (const [tile, poll] of ambient.waterPollution) {
+      const wx = tile % mapW;
+      const wy = (tile - wx) / mapW;
+      const { sx, sy } = camera.worldToScreen(wx, wy);
+      if (sx < -ts || sx > w + ts || sy < -ts || sy > h + ts) continue;
+      ctx.globalAlpha = 0.72 * (poll / 255);
+      ctx.fillStyle = '#46502f';
+      ctx.fillRect(Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
+    }
+    ctx.globalAlpha = 1;
+
     // Building health: a bright corner PIP on each home its citizens' trips have marked —
     // green when thriving, red when suffering, growing with magnitude. A distinct badge (not
     // a tile tint) so it reads against any building colour. The visible output of the
     // citizen-transit-health loop; live per-frame, so it lives here, not in the cached base.
-    const mapW = world.map.width;
     for (const [tile, health] of ambient.buildingHealth) {
       const hx = tile % mapW;
       const hy = (tile - hx) / mapW;
@@ -659,11 +699,19 @@ export class Renderer {
       }
     }
 
-    // Pedestrians: small warm dots.
+    // Pedestrians: small warm dots. On a STREET a ped walks the kerb (sidewalk), pulled
+    // perpendicular off the lane; crossing open ground (a demand path) it stays centred.
     ctx.fillStyle = '#efe6d2';
     const pedSize = Math.max(1, ts * 0.16);
     for (const p of ambient.peds) {
-      const { sx, sy } = camera.worldToScreen(p.x + 0.5, p.y + 0.5);
+      let ox = 0.5;
+      let oy = 0.5;
+      if (isRoadKind(world.map.built[world.map.idx(Math.round(p.x), Math.round(p.y))]!)) {
+        const o = pedCurbOffset(p.dir);
+        ox += o.dx;
+        oy += o.dy;
+      }
+      const { sx, sy } = camera.worldToScreen(p.x + ox, p.y + oy);
       if (!onScreen(sx, sy)) continue;
       ctx.fillRect(sx - pedSize / 2, sy - pedSize / 2, pedSize, pedSize);
     }

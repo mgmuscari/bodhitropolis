@@ -18,7 +18,7 @@ import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
-import { createAmbientState, stepAmbient, ingestTrips, setParkingLots } from './ui/ambientContent';
+import { createAmbientState, stepAmbient, ingestTrips, setParkingLots, seedBlight } from './ui/ambientContent';
 import { parkingLots, parkingStalls } from './ui/parkingContent';
 import { attachInput } from './ui/input';
 import { statLines, eraHeadline, challengeText, ecologyStatLine } from './ui/openingContent';
@@ -134,6 +134,10 @@ export function main(): void {
     );
   };
   refreshParkingLots();
+
+  // The city starts BLIGHTED: a century of car-culture has already trampled the urban ground
+  // into desire paths and polluted the shorelines, before the player arrives to heal it.
+  seedBlight(ambientState, world.map);
 
   // Dev / live-pass affordance: a small global to drive the camera and inspect live
   // state from outside the input layer (e.g. screenshot tooling that needs to focus a
