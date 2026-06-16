@@ -57,7 +57,10 @@ const ambientFork = (seed: string): ReturnType<typeof createRng> =>
 // realized mix is a conscious update, not a silent drift. The load-bearing contract
 // is carWeightForRoad (exact 3/2/1/0, above); this pins the integration. Droppable
 // if it proves brittle — never weakened to pass.
-const EXPECTED_CAR_COUNTS = { hwy: 35, ave: 12, st: 5, quiet: 0 };
+// Re-characterized 2026-06-16: anti-loop routing (recent-tile avoidance + despawn-
+// when-boxed) makes a car despawn at a dead-end row's far side instead of bouncing
+// back, shifting the realized mix (was 35/12/5). The ordering contract is unchanged.
+const EXPECTED_CAR_COUNTS = { hwy: 28, ave: 14, st: 5, quiet: 0 };
 
 describe('ambient determinism', () => {
   it('is identical across two independently-constructed, identically-seeded forks', () => {
@@ -203,6 +206,55 @@ describe('car motion: no oscillation (CRITIC-YP6)', () => {
     map.built[map.idx(6, 5)] = BuiltKind.RoadStreet; // (6,5) dead-ends west to (5,5)
     const rng = ambientFork('deadend');
     expect(nextRoadStep(map, 6, 5, 3, rng)).toBe(3); // only road neighbour is the U-turn
+  });
+});
+
+describe('anti-loop routing: recent-tile avoidance (Maddy playtest — tight loops)', () => {
+  function cross(): GameMap {
+    const map = new GameMap(12, 12);
+    map.built[map.idx(6, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(5, 5)] = BuiltKind.RoadStreet; // W
+    map.built[map.idx(7, 5)] = BuiltKind.RoadStreet; // E
+    map.built[map.idx(6, 4)] = BuiltKind.RoadStreet; // N
+    map.built[map.idx(6, 6)] = BuiltKind.RoadStreet; // S
+    return map;
+  }
+
+  it('avoids a recently-visited neighbour when a fresh option exists', () => {
+    const map = cross();
+    const rng = ambientFork('avoid');
+    const recent = [map.idx(7, 5)]; // East tile was just visited
+    for (let i = 0; i < 40; i++) {
+      // came from West (fromDir 3); straight-ahead East is recent → must turn to a fresh option
+      const d = nextRoadStep(map, 6, 5, 3, rng, recent);
+      expect(d).not.toBe(1); // never East (recently visited)
+      expect(d).not.toBe(3); // never the U-turn
+      expect([0, 2]).toContain(d); // a fresh option (North or South)
+    }
+  });
+
+  it('returns -1 when every non-U-turn option is recently visited (boxed in → despawn)', () => {
+    const map = cross();
+    const rng = ambientFork('boxed');
+    const recent = [map.idx(7, 5), map.idx(6, 4), map.idx(6, 6)]; // E, N, S all recent; W is the U-turn
+    expect(nextRoadStep(map, 6, 5, 3, rng, recent)).toBe(-1);
+  });
+
+  it('a car on an isolated 2x2 ring despawns instead of circling forever', () => {
+    const map = new GameMap(12, 12);
+    for (const [x, y] of [[5, 5], [6, 5], [5, 6], [6, 6]] as const) {
+      map.built[map.idx(x, y)] = BuiltKind.RoadStreet; // a 4-tile ring with no exit
+    }
+    const state = createAmbientState();
+    state.cars.push({ x: 5, y: 5, dir: 1, tx: 6, ty: 5 });
+    const rng = ambientFork('ring');
+    let steps = 0;
+    while (state.cars.length > 0 && steps < 400) {
+      stepAmbient(state, map, rng, 50);
+      steps++;
+    }
+    expect(state.cars.length).toBe(0); // boxed in by its own path → despawned, not an infinite loop
+    expect(steps).toBeLessThan(400);
   });
 });
 
