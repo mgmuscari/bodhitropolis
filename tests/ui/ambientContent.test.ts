@@ -19,6 +19,7 @@ import {
   isPedSubstrate,
   birdSpawnAt,
   nextRoadStep,
+  laneOffset,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -201,6 +202,92 @@ describe('car motion: no oscillation (CRITIC-YP6)', () => {
     map.built[map.idx(6, 5)] = BuiltKind.RoadStreet; // (6,5) dead-ends west to (5,5)
     const rng = ambientFork('deadend');
     expect(nextRoadStep(map, 6, 5, 3, rng)).toBe(3); // only road neighbour is the U-turn
+  });
+});
+
+describe('laneOffset (lane math — opposing traffic on opposite sides of a road block)', () => {
+  // Maddy playtest: "the roads need lane math" + "a road block should run either
+  // vertical or horizontal and have bidirectional flow." A mover is drawn offset to
+  // the RIGHT of its heading (right-hand traffic), so on any vertical/horizontal road
+  // the two travel directions ride opposite sides. 0=N, 1=E, 2=S, 3=W; screen coords
+  // are y-down, so "right of heading" is heading rotated 90° clockwise.
+  it('offsets each heading perpendicular-right (right-hand traffic)', () => {
+    const n = laneOffset(0);
+    const e = laneOffset(1);
+    const s = laneOffset(2);
+    const w = laneOffset(3);
+    // North → east side; East → south side; South → west side; West → north side.
+    // (The off-axis component is exactly zero, ±0 — toBeCloseTo treats both as 0.)
+    expect(n.dx).toBeGreaterThan(0);
+    expect(n.dy).toBeCloseTo(0);
+    expect(e.dy).toBeGreaterThan(0);
+    expect(e.dx).toBeCloseTo(0);
+    expect(s.dx).toBeLessThan(0);
+    expect(s.dy).toBeCloseTo(0);
+    expect(w.dy).toBeLessThan(0);
+    expect(w.dx).toBeCloseTo(0);
+  });
+
+  it('puts opposing directions on opposite sides (equal and opposite) — bidirectional flow', () => {
+    const n = laneOffset(0);
+    const s = laneOffset(2);
+    const e = laneOffset(1);
+    const w = laneOffset(3);
+    expect(n.dx).toBeCloseTo(-s.dx);
+    expect(n.dy).toBeCloseTo(-s.dy);
+    expect(e.dx).toBeCloseTo(-w.dx);
+    expect(e.dy).toBeCloseTo(-w.dy);
+  });
+
+  it('uses one consistent, nonzero lane width for every heading', () => {
+    const mags = [0, 1, 2, 3].map((d) => {
+      const { dx, dy } = laneOffset(d);
+      return Math.sqrt(dx * dx + dy * dy);
+    });
+    for (const m of mags) expect(m).toBeGreaterThan(0);
+    for (const m of mags) expect(m).toBeCloseTo(mags[0]!);
+  });
+});
+
+describe('car routing prefers straight — runs a road block, does not loop (Maddy playtest)', () => {
+  // "cars can run in loops through 4-blocks of road ... all road gives all adjacent
+  // roads as valid destination tiles." Under uniform choice a car turns 2/3 of the
+  // time at a 4-way, so it circles small blocks. Cars should read as through-traffic:
+  // heavily prefer continuing straight, turn only occasionally (and never U-turn).
+  it('crosses a 4-way junction straight far more often than it turns, never U-turns', () => {
+    const map = new GameMap(12, 12);
+    // cross centred at (6,5): all four neighbours are road.
+    map.built[map.idx(6, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(5, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(7, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(6, 4)] = BuiltKind.RoadStreet;
+    map.built[map.idx(6, 6)] = BuiltKind.RoadStreet;
+    const rng = ambientFork('straight-bias');
+    const counts = [0, 0, 0, 0];
+    const N = 600;
+    for (let i = 0; i < N; i++) {
+      // came from West (dir 3) → straight ahead is East (dir 1).
+      const d = nextRoadStep(map, 6, 5, 3, rng);
+      counts[d] = counts[d]! + 1;
+    }
+    expect(counts[3]).toBe(0); // never the U-turn
+    expect(counts[1]).toBeGreaterThan(N * 0.6); // strongly prefers straight (East)
+    expect(counts[1]).toBeGreaterThan(counts[0]! + counts[2]!); // straight beats both turns
+    expect(counts[0]).toBeGreaterThan(0); // ...but turns still happen — a bias, not a rail
+    expect(counts[2]).toBeGreaterThan(0);
+  });
+
+  it('still turns when straight is not a road (follows an L-bend, no U-turn)', () => {
+    const map = new GameMap(12, 12);
+    // L-bend: road comes in from the West and turns North at (6,5). Straight (East)
+    // is NOT a road, so the car must turn North rather than reverse.
+    map.built[map.idx(5, 5)] = BuiltKind.RoadStreet; // west (the U-turn)
+    map.built[map.idx(6, 5)] = BuiltKind.RoadStreet; // the corner
+    map.built[map.idx(6, 4)] = BuiltKind.RoadStreet; // north
+    const rng = ambientFork('lbend');
+    for (let i = 0; i < 20; i++) {
+      expect(nextRoadStep(map, 6, 5, 3, rng)).toBe(0); // came from West → turns North
+    }
   });
 });
 

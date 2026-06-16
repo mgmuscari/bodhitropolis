@@ -14,6 +14,7 @@ import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
+import { laneOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
 
 /** A previewed tile for the hover/drag overlay: world coords + validity tint. */
@@ -609,11 +610,13 @@ export class Renderer {
     const onScreen = (sx: number, sy: number): boolean =>
       sx > -ts && sx < w + ts && sy > -ts && sy < h + ts;
 
-    // Cars: small dark rects, centred on the tile.
+    // Cars: small dark rects, drawn to the right of their heading (laneOffset) so
+    // opposing traffic rides opposite sides of a vertical/horizontal road block.
     ctx.fillStyle = '#19151f';
     const carSize = Math.max(2, ts * 0.34);
     for (const c of ambient.cars) {
-      const { sx, sy } = camera.worldToScreen(c.x + 0.5, c.y + 0.5);
+      const lane = laneOffset(c.dir);
+      const { sx, sy } = camera.worldToScreen(c.x + 0.5 + lane.dx, c.y + 0.5 + lane.dy);
       if (!onScreen(sx, sy)) continue;
       ctx.fillRect(sx - carSize / 2, sy - carSize / 2, carSize, carSize);
     }
