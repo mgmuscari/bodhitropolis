@@ -50,6 +50,13 @@ function classRowsMap(): GameMap {
 const ambientFork = (seed: string): ReturnType<typeof createRng> =>
   createRng(seed).fork('ambient');
 
+// Fixed-seed characterization of the emergent spawn ordering (seed 'cars-order',
+// 60 substeps). Locked at GREEN so a future motion/spawn tweak that changes the
+// realized mix is a conscious update, not a silent drift. The load-bearing contract
+// is carWeightForRoad (exact 3/2/1/0, above); this pins the integration. Droppable
+// if it proves brittle — never weakened to pass.
+const EXPECTED_CAR_COUNTS = { hwy: 35, ave: 12, st: 5, quiet: 0 };
+
 describe('ambient determinism', () => {
   it('is identical across two independently-constructed, identically-seeded forks', () => {
     const map = gridMap();
@@ -343,9 +350,3 @@ describe('ambient stream isolation (AC#7 pin b)', () => {
     expect(runSim(true)).toBe(runSim(false));
   });
 });
-
-// Fixed-seed characterization of the emergent spawn ordering. Locked at GREEN so a
-// future motion/spawn tweak that changes the realized mix is a conscious update,
-// not a silent drift. The load-bearing contract is carWeightForRoad (above); this
-// pins the integration. Droppable if it proves brittle — never weakened to pass.
-const EXPECTED_CAR_COUNTS = { hwy: 35, ave: 12, st: 5, quiet: 0 };

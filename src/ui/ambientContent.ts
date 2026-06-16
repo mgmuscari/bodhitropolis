@@ -365,7 +365,8 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   state.cars = state.cars.filter((c) => !carOffNetwork(map, c));
   state.peds = state.peds.filter((p) => !pedOffNetwork(map, p));
   for (const f of state.birds) {
-    if (!birdSpawnAt(map, flockTile(map, f).x, flockTile(map, f).y)) f.birds.pop();
+    const t = flockTile(map, f);
+    if (!birdSpawnAt(map, t.x, t.y)) f.birds.pop();
   }
   state.birds = state.birds.filter((f) => f.birds.length > 0);
 
