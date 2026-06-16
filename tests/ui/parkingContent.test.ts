@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { GameMap } from '../../src/engine/map';
 import { BuiltKind } from '../../src/engine/fabric';
-import { parkingLots, parkingStalls, lotOccupancy, LOT_CAPACITY } from '../../src/ui/parkingContent';
+import { parkingLots, parkingStalls, STALLS_PER_AXIS } from '../../src/ui/parkingContent';
 
 describe('parkingLots (connected ParkingLot components)', () => {
   it('finds one component for a contiguous block, with its bounding box', () => {
@@ -21,47 +21,26 @@ describe('parkingLots (connected ParkingLot components)', () => {
   });
 });
 
-describe('parkingStalls (capacity-9 grid layout)', () => {
-  it('returns 9 stall centres in a 3x3 grid inside the lot bbox', () => {
-    const lot = { x0: 4, y0: 4, x1: 7, y1: 7, tiles: [] };
+describe('parkingStalls (per-tile, tile-aligned grid)', () => {
+  it('places a clean sub-grid in EVERY tile, aligned within each tile (no offset on multi-tile lots)', () => {
+    const lot = { x0: 4, y0: 4, x1: 5, y1: 5, tiles: [] }; // a 2x2 lot — the buggy case
     const stalls = parkingStalls(lot);
-    expect(stalls.length).toBe(LOT_CAPACITY);
-    expect(LOT_CAPACITY).toBe(9);
+    const per = STALLS_PER_AXIS * STALLS_PER_AXIS;
+    expect(stalls.length).toBe(4 * per); // one sub-grid per tile, capacity scales with size
     for (const s of stalls) {
+      // every stall sits at a tile-relative sub-position (0.25 / 0.75 for STALLS_PER_AXIS=2)
+      const fx = s.x - Math.floor(s.x);
+      const fy = s.y - Math.floor(s.y);
+      expect([0.25, 0.75]).toContain(fx);
+      expect([0.25, 0.75]).toContain(fy);
       expect(s.x).toBeGreaterThanOrEqual(lot.x0);
-      expect(s.x).toBeLessThanOrEqual(lot.x1 + 1);
+      expect(s.x).toBeLessThan(lot.x1 + 1);
       expect(s.y).toBeGreaterThanOrEqual(lot.y0);
-      expect(s.y).toBeLessThanOrEqual(lot.y1 + 1);
+      expect(s.y).toBeLessThan(lot.y1 + 1);
     }
-    // distinct positions laid out in a grid (3 unique x, 3 unique y)
-    expect(new Set(stalls.map((s) => s.x)).size).toBe(3);
-    expect(new Set(stalls.map((s) => s.y)).size).toBe(3);
+    // the offset bug: stalls used to land on 1.0 (a tile boundary) for a 2-wide lot
+    expect(stalls.some((s) => s.x === lot.x0 + 1.0)).toBe(false);
+    expect(new Set(stalls.map((s) => `${s.x},${s.y}`)).size).toBe(4 * per); // all distinct
   });
 });
 
-describe('lotOccupancy (how full a lot reads, from local demand)', () => {
-  it('is zero for a lot with no neighbouring buildings', () => {
-    const m = new GameMap(16, 12);
-    for (let y = 5; y <= 6; y++) for (let x = 5; x <= 6; x++) m.built[m.idx(x, y)] = BuiltKind.ParkingLot;
-    const lot = parkingLots(m)[0]!;
-    expect(lotOccupancy(m, lot)).toBe(0);
-  });
-
-  it('fills (capped at capacity) when ringed by buildings', () => {
-    const m = new GameMap(16, 12);
-    for (let y = 5; y <= 6; y++) for (let x = 5; x <= 6; x++) m.built[m.idx(x, y)] = BuiltKind.ParkingLot;
-    // ring the 2x2 lot with apartments
-    for (let x = 4; x <= 7; x++) {
-      m.built[m.idx(x, 4)] = BuiltKind.Apartments;
-      m.built[m.idx(x, 7)] = BuiltKind.Apartments;
-    }
-    for (let y = 5; y <= 6; y++) {
-      m.built[m.idx(4, y)] = BuiltKind.Apartments;
-      m.built[m.idx(7, y)] = BuiltKind.Apartments;
-    }
-    const lot = parkingLots(m)[0]!;
-    const occ = lotOccupancy(m, lot);
-    expect(occ).toBeGreaterThan(0);
-    expect(occ).toBeLessThanOrEqual(LOT_CAPACITY);
-  });
-});
