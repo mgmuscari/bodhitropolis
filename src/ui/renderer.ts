@@ -16,6 +16,7 @@ import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 import { laneOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
+import { parkingLots, parkingStalls, lotOccupancy } from './parkingContent';
 
 /** A previewed tile for the hover/drag overlay: world coords + validity tint. */
 export interface PreviewTile {
@@ -40,6 +41,10 @@ const N = 1;
 const E = 2;
 const S = 4;
 const W = 8;
+
+// Muted-but-distinct paints for parked cars, so rows of cars read against the dark
+// parking pavement. Picked deterministically per (lot, stall) — no rng.
+const PARKED_CAR_COLORS = ['#a8483c', '#3f6e86', '#cfc8b4', '#5a7d4e', '#9a8466', '#46424e'] as const;
 
 // How many tiles a power-line wire segment spans from a pole. Matches the pole
 // spacing in decoration.ts so each pole's wire reaches the next pole, reading as a
@@ -545,6 +550,24 @@ export class Renderer {
             ctx.fillRect(dx, dy, ts, ts);
           }
         }
+      }
+    }
+
+    // Parked cars: the over-paved city's lots, visibly filling. Each ParkingLot
+    // component stalls up to LOT_CAPACITY in a 3x3 grid; lotOccupancy reads how full it
+    // is from local demand. Static → part of the cached base (no flicker, no per-frame
+    // cost), culled to the visible range. Muted-but-distinct paint per stall so the rows
+    // of cars read against the dark pavement (deterministic by lot+stall, no rng).
+    const parkedSize = Math.max(2, ts * 0.3);
+    for (const lot of parkingLots(map)) {
+      if (lot.x1 < range.x0 || lot.x0 > range.x1 || lot.y1 < range.y0 || lot.y0 > range.y1) continue;
+      const occ = lotOccupancy(map, lot);
+      if (occ === 0) continue;
+      const stalls = parkingStalls(lot);
+      for (let s = 0; s < occ; s++) {
+        ctx.fillStyle = PARKED_CAR_COLORS[(lot.x0 * 3 + lot.y0 + s) % PARKED_CAR_COLORS.length]!;
+        const { sx, sy } = camera.worldToScreen(stalls[s]!.x, stalls[s]!.y);
+        ctx.fillRect(Math.floor(sx - parkedSize / 2), Math.floor(sy - parkedSize / 2), parkedSize, parkedSize);
       }
     }
   }

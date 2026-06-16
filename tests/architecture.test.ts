@@ -103,6 +103,7 @@ const PURE_UI_ALLOWLIST = [
   'src/ui/reconcile.ts',
   'src/ui/dockContent.ts',
   'src/ui/ambientContent.ts',
+  'src/ui/parkingContent.ts',
 ];
 
 describe('architecture guard: headless + deterministic', () => {
