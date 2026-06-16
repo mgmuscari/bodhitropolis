@@ -81,9 +81,43 @@ const WALK_RANGE = 10;
  *  nothing. Subtracted from the home deposit on arrival. */
 const ROAD_WALK_PENALTY = 0.04;
 
+/** Terrain-aware foot routing over WILD ground (empty land): lush growth is hard to push through
+ *  (higher cost), a beaten desire path is easy going (lower cost) — so foot traffic self-reinforces
+ *  desire paths over time. PED_GROUND_MIN floors the beaten cost just ABOVE a promenade (0.3) and a
+ *  quiet street (0.5), so a promenade the player lays still wins the route and lures peds off the
+ *  wild. Flora term adds with lushness; wear term subtracts with beaten-ness (both 0..1). */
+const PED_GROUND_BASE = 0.9; // a bare empty tile (no flora, no wear)
+const PED_LUSH = 0.8; // added to ground cost at full floraVitality
+const PED_BEATEN = 0.7; // subtracted from ground cost at full wear
+const PED_GROUND_MIN = 0.4; // floor: a fully-beaten path, still dearer than a promenade
+
+/** A worn desire path is convenient underfoot but DEGRADED (brown, littered): a citizen walking it
+ *  brings home less wellbeing. A wearable tile counts as wellbeing-degrading once its wear reaches
+ *  WORN_DEGRADE_MIN; each such substep taxes the home deposit by WORN_WALK_PENALTY. */
+const WORN_DEGRADE_MIN = 128; // half of WEAR_MAX — clearly a beaten path, not incidental trampling
+const WORN_WALK_PENALTY = 0.04;
+
 /** Wellbeing a home loses when one of its citizens can't reach its destination on foot — the
  *  pathing dead-ends (e.g. blocked by a freeway) and the citizen gives up: a lost resident. */
 const FAILED_TRIP_PENALTY = 10;
+
+/** A walking citizen's FUEL is a persistent ENERGY tank, not a per-leg budget: it is SPENT crossing
+ *  terrain (a beaten path is cheap, lush wild ground dear — see `fuelBurn`) and REFILLED by visiting
+ *  good plots (`refuelFor`, scaled by the plot's status/use). A citizen that chases an UNREACHABLE
+ *  destination — looping without ever closing the distance — burns the tank down and gives out; this
+ *  catches limit cycles LONGER than the `recent` window (RECENT_CAP), which `advanceMover`'s box-in
+ *  check alone misses. On burnout mid-trip it turns back home on a small FUEL_LIMP_HOME reserve,
+ *  losing GIVE_UP_PENALTY wellbeing; if even that runs out it respawns at home (FAILED_TRIP_PENALTY).
+ *  Live-pass tunable. */
+const FUEL_TANK = 600; // a full tank — covers a typical round trip even without refuelling
+const FUEL_LIMP_HOME = 200; // the reserve granted on give-up, just enough to drag itself home
+const FUEL_BURN_BASE = 1; // fuel spent per substep on a paved/built/bare tile
+const FUEL_BURN_LUSH = 0.8; // extra burn at full floraVitality — lush ground is tiring
+const FUEL_BURN_BEATEN = 0.7; // burn saved on a fully-beaten path — easy underfoot
+const FUEL_BURN_MIN = 0.3; // floor on per-substep burn
+const FUEL_REFUEL_BASE = 120; // base fuel a visit hands back
+const FUEL_REFUEL_PER_VALUE = 30; // × the plot's visitValue (−4..+6): healing refuels lots, industry ~none
+const GIVE_UP_PENALTY = 4;
 
 /** Desire-path WEAR: pedestrians beat a path through WILD-GREEN ground (empty land whose flora
  *  is at least WEAR_FLORA_MIN). Each ped on such a tile adds WEAR_RATE per substep up to
@@ -236,6 +270,14 @@ export interface Mover {
   dwellInside?: number;
   /** Substeps a walking citizen has spent on a road/stroad this trip — taxes the home deposit. */
   roadSteps?: number;
+  /** Substeps a walking citizen has spent on a heavily-WORN (degraded) desire path this trip —
+   *  also taxes the home deposit: a beaten path is convenient underfoot but bleak. */
+  wornSteps?: number;
+  /** A walking citizen's remaining FUEL (substeps) for the current leg. Lazily budgeted from the
+   *  leg's start→target distance and re-budgeted (cleared) at each phase change. When it hits zero
+   *  the citizen gives up — turns back home, or dies if the way home is blocked too. Guards against
+   *  oscillation toward an unreachable destination (a limit cycle the `recent` window can't catch). */
+  fuel?: number;
 }
 
 export type Car = Mover;
@@ -663,8 +705,10 @@ function isWalkable(map: GameMap, x: number, y: number): boolean {
 
 /** A pedestrian's PREFERENCE cost for a walkable tile (lower = nicer): promenades best, then
  *  calm streets, then a LOCAL street by inverse traffic density, then open ground, with stroads
- *  (avenues) worst. So peds drift onto promenades and shun busy stroads where the route allows. */
-function pedCost(map: GameMap, x: number, y: number): number {
+ *  (avenues) worst. So peds drift onto promenades and shun busy stroads where the route allows.
+ *  WILD ground (empty land) is terrain-aware via `wear`: lush is dear, a beaten desire path cheap
+ *  (foot traffic self-reinforces paths). */
+function pedCost(map: GameMap, x: number, y: number, wear?: ReadonlyMap<number, number>): number {
   const i = map.idx(x, y);
   const k = map.built[i]!;
   if (k === BuiltKind.Promenade) return 0.3;
@@ -672,7 +716,31 @@ function pedCost(map: GameMap, x: number, y: number): number {
   const trafficLoad = (map.traffic[i]! / 255) * 2; // inverse traffic density: busier → costlier
   if (k === BuiltKind.RoadStreet) return 0.55 + trafficLoad; // a local street
   if (k === BuiltKind.RoadAvenue) return 2.0 + trafficLoad; // a stroad — unpleasant on foot
-  return 0.9; // open ground / parking / transit / greens
+  if (k === BuiltKind.None) {
+    // wild ground: lush growth (high flora) is hard going; a beaten path (high wear) is easy.
+    const flora = map.floraVitality[i]! / 255;
+    const worn = (wear?.get(i) ?? 0) / WEAR_MAX;
+    return Math.max(PED_GROUND_MIN, PED_GROUND_BASE + flora * PED_LUSH - worn * PED_BEATEN);
+  }
+  return 0.9; // parking / transit / built greens
+}
+
+/** Fuel a citizen spends on one substep at (x,y) — the SPEND side of the fuel economy, twinned with
+ *  `pedCost`'s routing: a beaten desire path is cheap, lush wild ground dear, pavement/built nominal.
+ *  So citizens go further on worn paths (and the network of paths reinforces itself). */
+function fuelBurn(map: GameMap, wear: ReadonlyMap<number, number>, x: number, y: number): number {
+  const i = map.idx(x, y);
+  if (map.built[i] !== BuiltKind.None || map.water[i] !== 0) return FUEL_BURN_BASE; // paved/built/edge
+  const flora = map.floraVitality[i]! / 255;
+  const worn = (wear.get(i) ?? 0) / WEAR_MAX;
+  return Math.max(FUEL_BURN_MIN, FUEL_BURN_BASE + flora * FUEL_BURN_LUSH - worn * FUEL_BURN_BEATEN);
+}
+
+/** Fuel a successful visit to a plot of `kind` hands back — the REFILL side: scaled by the plot's
+ *  status/use (`visitValue`), floored at 0 so a grim industrial visit refuels ~nothing while a
+ *  healing commons tops the tank right up. */
+function refuelFor(kind: number): number {
+  return Math.max(0, FUEL_REFUEL_BASE + visitValue(kind) * FUEL_REFUEL_PER_VALUE);
 }
 
 /** Wild-green ground a desire path forms through: ANY empty land (no road/building) that isn't
@@ -695,6 +763,7 @@ function nextStepToward(
   tgtx: number,
   tgty: number,
   recent?: readonly number[],
+  wear?: ReadonlyMap<number, number>,
 ): number {
   if (Math.abs(x - tgtx) + Math.abs(y - tgty) <= 1) return -1; // at / adjacent to the target
   let best = -1;
@@ -705,7 +774,7 @@ function nextStepToward(
     if (!isWalkable(map, nx, ny)) continue;
     if (recent && recent.includes(map.idx(nx, ny))) continue;
     // Distance dominates (still reaches the target); pedCost nudges onto promenades, off stroads.
-    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + pedCost(map, nx, ny);
+    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + pedCost(map, nx, ny, wear);
     if (score < bestScore) {
       bestScore = score;
       best = d;
@@ -1072,6 +1141,43 @@ function depositVisit(
   depositHealth(state, homeTile, visitValue(map.built[map.idx(plot.x, plot.y)]!) - penalty);
 }
 
+/** A walk citizen whose trip can't complete (its destination is unreachable, OR the way home is
+ *  blocked too) isn't annihilated in the field: the household persists, so the citizen RESPAWNS at
+ *  home — snapped to a walkable spot beside its home plot, trip state cleared so it rejoins the
+ *  neighbourhood — and the home takes the FAILED_TRIP_PENALTY for the wasted trip. A bound or
+ *  homeless ped (no `homeTile`) has nowhere to respawn, so it despawns (its car releases on its own
+ *  timeout). Returns true if it respawned (keep the sprite), false if it should despawn. */
+function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
+  if (p.homeTile === undefined) return false;
+  depositHealth(state, p.homeTile, -FAILED_TRIP_PENALTY);
+  const hx = p.homeTile % map.width;
+  const hy = (p.homeTile - hx) / map.width;
+  let sx = hx;
+  let sy = hy;
+  for (let d = 0; d < 4; d++) {
+    const nx = hx + DIR_DX[d]!;
+    const ny = hy + DIR_DY[d]!;
+    if (isWalkable(map, nx, ny)) {
+      sx = nx; // stand just outside the home plot (the plot tile itself isn't walkable)
+      sy = ny;
+      break;
+    }
+  }
+  p.x = sx;
+  p.y = sy;
+  p.tx = sx;
+  p.ty = sy;
+  p.walkTo = undefined;
+  p.phase = undefined;
+  p.building = undefined;
+  p.carId = undefined;
+  p.fuel = undefined;
+  p.recent = undefined;
+  p.roadSteps = undefined;
+  p.wornSteps = undefined;
+  return true;
+}
+
 function spawnFlocks(state: AmbientState, map: GameMap, rng: Rng): void {
   for (let s = 0; s < SAMPLES_PER_SUBSTEP; s++) {
     if (state.birds.length >= FLOCK_CAP) return;
@@ -1160,21 +1266,48 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     if (p.walkTo !== undefined) {
       const tgtx = Math.round(p.walkTo.x);
       const tgty = Math.round(p.walkTo.y);
+      // FUEL: a persistent tank, spent per substep by the terrain underfoot (beaten paths cheap,
+      //   lush ground dear) and refilled at plots. A citizen chasing an UNREACHABLE destination loops
+      //   without closing the distance and burns out — catching limit cycles longer than `recent`.
+      //   On burnout it turns back home on a limp-home reserve (losing some wellbeing); if it's
+      //   ALREADY heading home (or has no home), it respawns at home / despawns.
+      p.fuel ??= FUEL_TANK;
+      p.fuel -= fuelBurn(map, state.wear, Math.round(p.x), Math.round(p.y));
+      if (p.fuel <= 0) {
+        if (p.carId === undefined && p.phase === 'to-building' && p.homeTile !== undefined) {
+          const hx = p.homeTile % map.width;
+          const hy = (p.homeTile - hx) / map.width;
+          p.phase = 'to-home';
+          p.walkTo = { x: hx, y: hy };
+          p.building = undefined; // never visited the plot → carries no visit value, just the give-up cost
+          p.tx = Math.round(p.x); // recommit the route home from here
+          p.ty = Math.round(p.y);
+          p.recent = undefined;
+          p.fuel = FUEL_LIMP_HOME; // a reserve to drag itself home (not a full tank)
+          depositHealth(state, p.homeTile, -GIVE_UP_PENALTY);
+          return true;
+        }
+        return respawnAtHome(state, p, map); // couldn't even get home → respawn there (or despawn if homeless)
+      }
       const moving = advanceMover(p, PED_SPEED, map, (x, y, _fromDir, recent) =>
-        nextStepToward(map, x, y, tgtx, tgty, recent),
+        nextStepToward(map, x, y, tgtx, tgty, recent, state.wear),
       );
       if (moving) return true; // still walking this leg
       // advanceMover stopped: arrived (within a tile of the target) or boxed in.
       const arrived = Math.abs(Math.round(p.x) - tgtx) + Math.abs(Math.round(p.y) - tgty) <= 1;
       if (!arrived) {
-        // pathing went nowhere (e.g. dead-ended at a freeway) — the citizen gives up; their home
-        // loses wellbeing for the lost trip. (A bound car releases on its safety timeout.)
-        if (p.homeTile !== undefined) depositHealth(state, p.homeTile, -FAILED_TRIP_PENALTY);
-        return false;
+        // pathing went nowhere (e.g. boxed in, or dead-ended at a freeway) — the citizen gives up.
+        // A homed citizen respawns at home (the household persists) and home loses wellbeing for the
+        // lost trip; a bound/homeless ped despawns (a bound car releases on its safety timeout).
+        return respawnAtHome(state, p, map);
       }
       if (p.phase === 'to-building') {
         p.phase = 'inside';
         p.dwellInside = INSIDE_DWELL_MIN + rng.nextInt(INSIDE_DWELL_SPAN);
+        // A successful visit refuels the citizen by the plot's status/use (a good plot restores more).
+        if (p.building) {
+          p.fuel = Math.min(FUEL_TANK, (p.fuel ?? 0) + refuelFor(map.built[map.idx(p.building.x, p.building.y)]!));
+        }
         return true;
       }
       if (p.phase === 'to-car') {
@@ -1183,9 +1316,12 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         return false;
       }
       if (p.phase === 'to-home') {
-        // Walked home → deposit the visit's wellbeing, less the toll of any road-walking trudge.
+        // Walked home → deposit the visit's wellbeing, less the toll of any road-walking trudge
+        // AND of trudging beaten/degraded desire paths (convenient underfoot, but bleak).
         if (p.homeTile !== undefined && p.building) {
-          const penalty = Math.floor((p.roadSteps ?? 0) * ROAD_WALK_PENALTY);
+          const penalty = Math.floor(
+            (p.roadSteps ?? 0) * ROAD_WALK_PENALTY + (p.wornSteps ?? 0) * WORN_WALK_PENALTY,
+          );
           depositVisit(state, p.homeTile, p.building, map, penalty);
         }
         return false;
@@ -1213,7 +1349,13 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     if (isWearable(map, tx, ty)) {
       const i = map.idx(tx, ty);
       const w = (state.wear.get(i) ?? 0) + WEAR_RATE;
-      state.wear.set(i, w > WEAR_MAX ? WEAR_MAX : w);
+      const capped = w > WEAR_MAX ? WEAR_MAX : w;
+      state.wear.set(i, capped);
+      // A walking citizen crossing a heavily-worn (degraded, littered) path brings home less — the
+      // beaten path is convenient but bleak.
+      if (p.phase !== undefined && p.carId === undefined && capped >= WORN_DEGRADE_MIN) {
+        p.wornSteps = (p.wornSteps ?? 0) + 1;
+      }
     } else if (p.phase !== undefined && p.carId === undefined) {
       // A walking citizen trudging a road/stroad accrues the unpleasant-commute penalty.
       const k = map.built[map.idx(tx, ty)]!;

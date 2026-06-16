@@ -1077,7 +1077,7 @@ describe('desire-path wear (pedestrians trample wild green into brown + trash)',
 });
 
 describe('failed trips + freeway speed', () => {
-  it('a citizen whose pathing dead-ends gives up and docks its home wellbeing', () => {
+  it('a citizen whose pathing dead-ends respawns at home and docks its wellbeing', () => {
     const map = new GameMap(12, 12);
     map.built[map.idx(2, 2)] = BuiltKind.HouseSingle; // home
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
@@ -1091,7 +1091,9 @@ describe('failed trips + freeway speed', () => {
     });
     const rng = ambientFork('giveup');
     stepAmbient(state, map, rng, 50);
-    expect(state.peds.length).toBe(0); // boxed in → gave up, despawned
+    expect(state.peds.length).toBe(1); // boxed in → respawned at home (household persists)
+    const p = state.peds[0]!;
+    expect(Math.abs(Math.round(p.x) - 2) + Math.abs(Math.round(p.y) - 2)).toBeLessThanOrEqual(1); // back beside home
     expect(state.buildingHealth.get(map.idx(2, 2))!).toBeLessThan(0); // home docked for the lost trip
   });
 
@@ -1115,5 +1117,167 @@ describe('failed trips + freeway speed', () => {
       stepAmbient(st, stMap, r2, 50);
     }
     expect(hw.cars[0]!.x).toBeGreaterThan(st.cars[0]!.x); // freeway car got further
+  });
+});
+
+describe('pedestrian fuel (give up / die when a destination is unreachable — Maddy playtest)', () => {
+  it('out of fuel mid-trip: a walk citizen turns back home and loses some wellbeing', () => {
+    const map = new GameMap(16, 16); // empty = walkable everywhere
+    map.built[map.idx(2, 8)] = BuiltKind.HouseSingle; // home
+    const state = createAmbientState();
+    state.peds.push({
+      x: 8, y: 8, dir: 0, tx: 8, ty: 8,
+      walkTo: { x: 15, y: 8 }, phase: 'to-building',
+      homeTile: map.idx(2, 8), building: { x: 15, y: 8 },
+      fuel: 1, // burns out on the next substep, before it can reach (15,8)
+    });
+    const rng = ambientFork('fuel-giveup');
+    stepAmbient(state, map, rng, 50);
+    expect(state.peds.length).toBe(1); // still alive — it gave up, it did not die
+    const p = state.peds[0]!;
+    expect(p.phase).toBe('to-home'); // turned back toward home
+    expect(p.walkTo).toEqual({ x: 2, y: 8 }); // heading to its home tile
+    expect(p.building).toBeUndefined(); // never visited the plot → carries no visit wellbeing
+    expect(state.buildingHealth.get(map.idx(2, 8))!).toBeLessThan(0); // home docked for the wasted trip
+  });
+
+  it('out of fuel on the way home: the citizen respawns at home; home takes the failed-trip hit', () => {
+    const map = new GameMap(16, 16);
+    map.built[map.idx(2, 8)] = BuiltKind.HouseSingle;
+    const state = createAmbientState();
+    state.peds.push({
+      x: 12, y: 8, dir: 0, tx: 12, ty: 8,
+      walkTo: { x: 2, y: 8 }, phase: 'to-home',
+      homeTile: map.idx(2, 8),
+      fuel: 1, // can't even make it home
+    });
+    const rng = ambientFork('fuel-die');
+    stepAmbient(state, map, rng, 50);
+    expect(state.peds.length).toBe(1); // not annihilated mid-field — respawned at home (household persists)
+    const p = state.peds[0]!;
+    expect(Math.abs(Math.round(p.x) - 2) + Math.abs(Math.round(p.y) - 8)).toBeLessThanOrEqual(1); // beside home
+    expect(p.walkTo).toBeUndefined(); // trip state cleared — it rejoins the neighbourhood
+    expect(p.phase).toBeUndefined();
+    // ≈-10 is the full FAILED_TRIP_PENALTY (module-private; eased ~0.02 by one health-decay tick).
+    expect(state.buildingHealth.get(map.idx(2, 8))!).toBeCloseTo(-10, 0);
+  });
+
+  it('a homeless/bound ped that cannot path home despawns (nowhere to respawn)', () => {
+    const map = new GameMap(16, 16);
+    const state = createAmbientState();
+    state.peds.push({
+      x: 8, y: 8, dir: 0, tx: 8, ty: 8,
+      walkTo: { x: 15, y: 8 }, phase: 'to-home', // no homeTile (a freight/bound stand-in)
+      fuel: 1,
+    });
+    const rng = ambientFork('fuel-homeless');
+    stepAmbient(state, map, rng, 50);
+    expect(state.peds.length).toBe(0); // no home to return to → it just vanishes
+  });
+
+  it('an unreachable destination no longer loops forever — the citizen eventually gives up and goes', () => {
+    const map = new GameMap(20, 16); // open ground, with a wall of water the ped can never cross
+    for (let y = 0; y < 16; y++) map.water[map.idx(10, y)] = 1; // impassable column at x=10
+    map.built[map.idx(2, 8)] = BuiltKind.HouseSingle; // home, on the reachable (west) side
+    const state = createAmbientState();
+    state.peds.push({
+      x: 3, y: 8, dir: 0, tx: 3, ty: 8,
+      walkTo: { x: 17, y: 8 }, phase: 'to-building', // east of the water — never reachable on foot
+      homeTile: map.idx(2, 8), building: { x: 17, y: 8 },
+    });
+    const rng = ambientFork('fuel-loop');
+    let alive = 1;
+    for (let i = 0; i < 4000 && state.peds.length > 0; i++) {
+      stepAmbient(state, map, rng, 50);
+      alive = state.peds.length;
+    }
+    expect(alive).toBe(0); // it did not oscillate forever — fuel ran out, it gave up and walked home, despawned
+    expect(state.buildingHealth.get(map.idx(2, 8))!).toBeLessThan(0); // home felt the wasted trip
+  });
+});
+
+describe('terrain-aware ped pathing (lush is dear, the beaten path is cheap — Maddy playtest)', () => {
+  it('routes onto a beaten desire path and shuns lush wild ground at equal distance', () => {
+    const map = new GameMap(16, 16); // empty = walkable everywhere
+    map.floraVitality[map.idx(3, 4)] = 255; // lush wild ground to the NORTH — hard to push through
+    const state = createAmbientState();
+    state.wear.set(map.idx(4, 5), 255); // a beaten desire path to the EAST — easy going
+    // (3,5) -> (6,2): NORTH (3,4) and EAST (4,5) both cut the Manhattan distance equally; cost decides.
+    state.peds.push({ x: 3, y: 5, dir: 0, tx: 3, ty: 5, walkTo: { x: 6, y: 2 } });
+    const rng = ambientFork('beaten');
+    const visited = new Set<string>();
+    for (let i = 0; i < 30; i++) {
+      stepAmbient(state, map, rng, 50);
+      const p = state.peds[0];
+      if (p) visited.add(`${Math.round(p.x)},${Math.round(p.y)}`);
+    }
+    expect(visited.has('4,5')).toBe(true); // took the beaten path east
+    expect(visited.has('3,4')).toBe(false); // avoided the lush wild ground north
+  });
+
+  it('walking a worn desire path saps the wellbeing carried home (vs fresh ground)', () => {
+    const build = (worn: boolean): number => {
+      const map = new GameMap(16, 16);
+      map.built[map.idx(2, 8)] = BuiltKind.HouseSingle; // home
+      map.built[map.idx(13, 8)] = BuiltKind.HealingCommons; // the restorative plot just visited (+6)
+      const state = createAmbientState();
+      if (worn) for (let x = 3; x <= 11; x++) state.wear.set(map.idx(x, 8), 255); // a beaten corridor home
+      state.peds.push({
+        x: 11, y: 8, dir: 0, tx: 11, ty: 8,
+        walkTo: { x: 2, y: 8 }, phase: 'to-home',
+        homeTile: map.idx(2, 8), building: { x: 13, y: 8 },
+      });
+      const rng = ambientFork(worn ? 'worn' : 'fresh');
+      for (let i = 0; i < 600; i++) {
+        stepAmbient(state, map, rng, 50);
+        if (state.peds.length === 0) break; // arrived home + deposited (read before decay erodes it)
+      }
+      return state.buildingHealth.get(map.idx(2, 8)) ?? 0;
+    };
+    const fresh = build(false);
+    const worn = build(true);
+    expect(fresh).toBeGreaterThan(0); // a restorative visit, pleasant walk → positive at home
+    expect(worn).toBeLessThan(fresh); // the SAME visit over a beaten/degraded path brings home less
+  });
+});
+
+describe('citizen fuel economy (spend on terrain, refuel at good plots — Maddy playtest)', () => {
+  it('a beaten path costs less fuel to walk than lush wild ground (same distance)', () => {
+    const walk = (lush: boolean): number => {
+      const map = new GameMap(24, 8);
+      const state = createAmbientState();
+      for (let x = 2; x <= 20; x++) {
+        const i = map.idx(x, 4);
+        if (lush) map.floraVitality[i] = 255; // lush wild — tiring
+        else state.wear.set(i, 255); // a beaten path — easy underfoot
+      }
+      state.peds.push({ x: 2, y: 4, dir: 1, tx: 2, ty: 4, walkTo: { x: 22, y: 4 }, fuel: 100000 });
+      const rng = ambientFork(lush ? 'lushwalk' : 'beatenwalk');
+      for (let i = 0; i < 120; i++) stepAmbient(state, map, rng, 50);
+      return state.peds[0]!.fuel!; // fuel remaining after the same walk
+    };
+    expect(walk(false)).toBeGreaterThan(walk(true)); // beaten path → more fuel left → spent less
+  });
+
+  it('a successful visit refuels a citizen by the plot status/use (healing >> industrial)', () => {
+    const reachInside = (plotKind: number): number => {
+      const map = new GameMap(16, 16);
+      map.built[map.idx(2, 8)] = BuiltKind.HouseSingle; // home
+      map.built[map.idx(6, 8)] = plotKind; // the plot to visit
+      const state = createAmbientState();
+      state.peds.push({
+        x: 4, y: 8, dir: 0, tx: 4, ty: 8,
+        walkTo: { x: 6, y: 8 }, phase: 'to-building',
+        homeTile: map.idx(2, 8), building: { x: 6, y: 8 },
+        fuel: 100, // a low tank so the refuel is visible
+      });
+      const rng = ambientFork('refuel');
+      for (let i = 0; i < 200 && state.peds[0]?.phase !== 'inside'; i++) stepAmbient(state, map, rng, 50);
+      return state.peds[0]!.fuel!;
+    };
+    const healing = reachInside(BuiltKind.HealingCommons); // visitValue +6 → a big refuel
+    const industrial = reachInside(BuiltKind.Industrial); // visitValue −4 → ~no refuel
+    expect(healing).toBeGreaterThan(100); // restorative plot tops the tank up past where it started
+    expect(healing).toBeGreaterThan(industrial); // refuel scales with plot status/use
   });
 });
