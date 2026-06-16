@@ -18,6 +18,8 @@ import {
   ingestTrips,
   setParkingLots,
   curbParkOffset,
+  isWearable,
+  seedBlight,
   carWeightForRoad,
   isCarRoad,
   isPedSubstrate,
@@ -953,5 +955,67 @@ describe('building health from citizen trips (plot-use wellbeing carried home)',
     const rng = ambientFork('decay');
     for (let i = 0; i < 400; i++) stepAmbient(state, map, rng, 50);
     expect(Math.abs(state.buildingHealth.get(home) ?? 0)).toBeLessThan(peak);
+  });
+});
+
+describe('desire-path wear (pedestrians trample wild green into brown + trash)', () => {
+  it('isWearable: ANY empty land (even bare) — not roads, buildings, or water', () => {
+    const map = new GameMap(8, 8);
+    expect(isWearable(map, 3, 3)).toBe(true); // bare empty ground IS wild green now
+    map.floraVitality[map.idx(2, 2)] = 200;
+    expect(isWearable(map, 2, 2)).toBe(true); // green empty too
+    map.built[map.idx(3, 3)] = BuiltKind.RoadStreet;
+    expect(isWearable(map, 3, 3)).toBe(false); // a road is paved
+    map.built[map.idx(4, 4)] = BuiltKind.HouseSingle;
+    expect(isWearable(map, 4, 4)).toBe(false); // a building, not ground
+    map.water[map.idx(5, 5)] = 1;
+    expect(isWearable(map, 5, 5)).toBe(false); // water is impassable, not walked
+  });
+
+  it('pedestrians beat a desire PATH (multiple worn tiles) through wild green', () => {
+    const map = new GameMap(20, 12);
+    map.floraVitality.fill(200); // open wild field (all empty land)
+    const state = createAmbientState();
+    state.peds.push({ x: 2, y: 5, dir: 0, tx: 2, ty: 5, walkTo: { x: 14, y: 5 } });
+    const rng = ambientFork('wear');
+    for (let i = 0; i < 120; i++) stepAmbient(state, map, rng, 50);
+    let total = 0;
+    for (const [, v] of state.wear) total += v;
+    expect(total).toBeGreaterThan(0);
+    expect(state.wear.size).toBeGreaterThan(1); // a line of worn tiles, not a single spot
+  });
+
+  it('wear decays when the foot traffic stops (the path regrows)', () => {
+    const map = new GameMap(8, 8);
+    map.floraVitality.fill(200);
+    const state = createAmbientState();
+    state.wear.set(map.idx(4, 4), 60); // a pre-worn tile, nobody walking it now
+    const rng = ambientFork('regrow');
+    for (let i = 0; i < 80; i++) stepAmbient(state, map, rng, 50);
+    expect(state.wear.get(map.idx(4, 4)) ?? 0).toBeLessThan(60); // eased back toward green
+  });
+
+  it('seedBlight starts the city degraded — trampled urban ground + polluted shores', () => {
+    const map = new GameMap(16, 16);
+    for (let x = 4; x <= 8; x++) map.built[map.idx(x, 6)] = BuiltKind.RoadStreet; // a street pair
+    for (let x = 4; x <= 8; x++) map.built[map.idx(x, 8)] = BuiltKind.RoadStreet; // with an empty gap at y=7
+    for (let y = 0; y < 16; y++) map.water[map.idx(12, y)] = 1; // a shoreline
+    map.built[map.idx(11, 6)] = BuiltKind.RoadStreet; // urban tile on the shore
+    const state = createAmbientState();
+    seedBlight(state, map);
+    expect(state.wear.get(map.idx(6, 7)) ?? 0).toBeGreaterThan(0); // hemmed-in gap is pre-trampled
+    expect(state.waterPollution.get(map.idx(12, 6)) ?? 0).toBeGreaterThan(0); // shore pre-polluted
+    expect(state.wear.get(map.idx(0, 0)) ?? 0).toBe(0); // open wild ground starts clean/green
+  });
+
+  it('coastal water collects runoff pollution from nearby ground; open water stays clean', () => {
+    const map = new GameMap(12, 12);
+    for (let y = 4; y <= 7; y++) for (let x = 4; x <= 7; x++) map.water[map.idx(x, y)] = 1; // water block
+    for (let y = 4; y <= 7; y++) map.built[map.idx(3, y)] = BuiltKind.RoadStreet; // urban shore to the west
+    const state = createAmbientState();
+    const rng = ambientFork('runoff');
+    for (let i = 0; i < 60; i++) stepAmbient(state, map, rng, 50); // several runoff cadences
+    expect(state.waterPollution.get(map.idx(4, 5)) ?? 0).toBeGreaterThan(0); // shore water, runoff from the road
+    expect(state.waterPollution.get(map.idx(5, 5)) ?? 0).toBe(0); // interior water, all-water neighbours → clean
   });
 });
