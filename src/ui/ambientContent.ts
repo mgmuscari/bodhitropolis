@@ -101,15 +101,22 @@ const WORN_WALK_PENALTY = 0.04;
  *  pathing dead-ends (e.g. blocked by a freeway) and the citizen gives up: a lost resident. */
 const FAILED_TRIP_PENALTY = 10;
 
-/** A walking citizen's FUEL: the most substeps it will spend on ONE leg before giving up. Budgeted
- *  per leg from the leg's straight-line distance (so a long but legitimate walk is never cut short)
- *  plus generous slack for routing detours around plots — only a citizen chasing an UNREACHABLE
- *  destination, looping without ever closing the distance, burns out. This catches limit cycles
- *  LONGER than the `recent` window (RECENT_CAP), which `advanceMover`'s box-in check alone misses.
- *  On burnout mid-trip the citizen turns back home, losing GIVE_UP_PENALTY wellbeing; if even the
- *  walk home burns out it's a lost resident (FAILED_TRIP_PENALTY). Live-pass tunable. */
-const FUEL_BASE = 120;
-const FUEL_PER_TILE = 40;
+/** A walking citizen's FUEL is a persistent ENERGY tank, not a per-leg budget: it is SPENT crossing
+ *  terrain (a beaten path is cheap, lush wild ground dear — see `fuelBurn`) and REFILLED by visiting
+ *  good plots (`refuelFor`, scaled by the plot's status/use). A citizen that chases an UNREACHABLE
+ *  destination — looping without ever closing the distance — burns the tank down and gives out; this
+ *  catches limit cycles LONGER than the `recent` window (RECENT_CAP), which `advanceMover`'s box-in
+ *  check alone misses. On burnout mid-trip it turns back home on a small FUEL_LIMP_HOME reserve,
+ *  losing GIVE_UP_PENALTY wellbeing; if even that runs out it respawns at home (FAILED_TRIP_PENALTY).
+ *  Live-pass tunable. */
+const FUEL_TANK = 600; // a full tank — covers a typical round trip even without refuelling
+const FUEL_LIMP_HOME = 200; // the reserve granted on give-up, just enough to drag itself home
+const FUEL_BURN_BASE = 1; // fuel spent per substep on a paved/built/bare tile
+const FUEL_BURN_LUSH = 0.8; // extra burn at full floraVitality — lush ground is tiring
+const FUEL_BURN_BEATEN = 0.7; // burn saved on a fully-beaten path — easy underfoot
+const FUEL_BURN_MIN = 0.3; // floor on per-substep burn
+const FUEL_REFUEL_BASE = 120; // base fuel a visit hands back
+const FUEL_REFUEL_PER_VALUE = 30; // × the plot's visitValue (−4..+6): healing refuels lots, industry ~none
 const GIVE_UP_PENALTY = 4;
 
 /** Desire-path WEAR: pedestrians beat a path through WILD-GREEN ground (empty land whose flora
@@ -718,6 +725,24 @@ function pedCost(map: GameMap, x: number, y: number, wear?: ReadonlyMap<number, 
   return 0.9; // parking / transit / built greens
 }
 
+/** Fuel a citizen spends on one substep at (x,y) — the SPEND side of the fuel economy, twinned with
+ *  `pedCost`'s routing: a beaten desire path is cheap, lush wild ground dear, pavement/built nominal.
+ *  So citizens go further on worn paths (and the network of paths reinforces itself). */
+function fuelBurn(map: GameMap, wear: ReadonlyMap<number, number>, x: number, y: number): number {
+  const i = map.idx(x, y);
+  if (map.built[i] !== BuiltKind.None || map.water[i] !== 0) return FUEL_BURN_BASE; // paved/built/edge
+  const flora = map.floraVitality[i]! / 255;
+  const worn = (wear.get(i) ?? 0) / WEAR_MAX;
+  return Math.max(FUEL_BURN_MIN, FUEL_BURN_BASE + flora * FUEL_BURN_LUSH - worn * FUEL_BURN_BEATEN);
+}
+
+/** Fuel a successful visit to a plot of `kind` hands back — the REFILL side: scaled by the plot's
+ *  status/use (`visitValue`), floored at 0 so a grim industrial visit refuels ~nothing while a
+ *  healing commons tops the tank right up. */
+function refuelFor(kind: number): number {
+  return Math.max(0, FUEL_REFUEL_BASE + visitValue(kind) * FUEL_REFUEL_PER_VALUE);
+}
+
 /** Wild-green ground a desire path forms through: ANY empty land (no road/building) that isn't
  *  water. Empty ground IS the wild green — even bare patches wear and litter under foot traffic
  *  (water is impassable and pollutes instead). Pedestrians crossing these trample them brown. */
@@ -1236,18 +1261,19 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       p.tx = Math.round(p.x); // recommit the Manhattan route from here toward the destination
       p.ty = Math.round(p.y);
       p.recent = undefined;
-      p.fuel = undefined; // new leg → re-budget fuel from the new start→target distance
       return true;
     }
     if (p.walkTo !== undefined) {
       const tgtx = Math.round(p.walkTo.x);
       const tgty = Math.round(p.walkTo.y);
-      // FUEL: a citizen that walks too long without arriving (a destination it can never reach, so
-      //   it loops without ever closing the distance) burns out. Budget the leg lazily from its
-      //   start→target distance; spend one unit per substep. On burnout it turns back home (losing
-      //   some wellbeing); if it's ALREADY heading home (or has none), it's a lost resident.
-      p.fuel ??= FUEL_BASE + FUEL_PER_TILE * (Math.abs(Math.round(p.x) - tgtx) + Math.abs(Math.round(p.y) - tgty));
-      if (--p.fuel <= 0) {
+      // FUEL: a persistent tank, spent per substep by the terrain underfoot (beaten paths cheap,
+      //   lush ground dear) and refilled at plots. A citizen chasing an UNREACHABLE destination loops
+      //   without closing the distance and burns out — catching limit cycles longer than `recent`.
+      //   On burnout it turns back home on a limp-home reserve (losing some wellbeing); if it's
+      //   ALREADY heading home (or has no home), it respawns at home / despawns.
+      p.fuel ??= FUEL_TANK;
+      p.fuel -= fuelBurn(map, state.wear, Math.round(p.x), Math.round(p.y));
+      if (p.fuel <= 0) {
         if (p.carId === undefined && p.phase === 'to-building' && p.homeTile !== undefined) {
           const hx = p.homeTile % map.width;
           const hy = (p.homeTile - hx) / map.width;
@@ -1257,7 +1283,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
           p.tx = Math.round(p.x); // recommit the route home from here
           p.ty = Math.round(p.y);
           p.recent = undefined;
-          p.fuel = undefined; // re-budget the walk home
+          p.fuel = FUEL_LIMP_HOME; // a reserve to drag itself home (not a full tank)
           depositHealth(state, p.homeTile, -GIVE_UP_PENALTY);
           return true;
         }
@@ -1278,6 +1304,10 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       if (p.phase === 'to-building') {
         p.phase = 'inside';
         p.dwellInside = INSIDE_DWELL_MIN + rng.nextInt(INSIDE_DWELL_SPAN);
+        // A successful visit refuels the citizen by the plot's status/use (a good plot restores more).
+        if (p.building) {
+          p.fuel = Math.min(FUEL_TANK, (p.fuel ?? 0) + refuelFor(map.built[map.idx(p.building.x, p.building.y)]!));
+        }
         return true;
       }
       if (p.phase === 'to-car') {

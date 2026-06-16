@@ -1187,7 +1187,7 @@ describe('pedestrian fuel (give up / die when a destination is unreachable — M
     });
     const rng = ambientFork('fuel-loop');
     let alive = 1;
-    for (let i = 0; i < 2500 && state.peds.length > 0; i++) {
+    for (let i = 0; i < 4000 && state.peds.length > 0; i++) {
       stepAmbient(state, map, rng, 50);
       alive = state.peds.length;
     }
@@ -1238,5 +1238,46 @@ describe('terrain-aware ped pathing (lush is dear, the beaten path is cheap — 
     const worn = build(true);
     expect(fresh).toBeGreaterThan(0); // a restorative visit, pleasant walk → positive at home
     expect(worn).toBeLessThan(fresh); // the SAME visit over a beaten/degraded path brings home less
+  });
+});
+
+describe('citizen fuel economy (spend on terrain, refuel at good plots — Maddy playtest)', () => {
+  it('a beaten path costs less fuel to walk than lush wild ground (same distance)', () => {
+    const walk = (lush: boolean): number => {
+      const map = new GameMap(24, 8);
+      const state = createAmbientState();
+      for (let x = 2; x <= 20; x++) {
+        const i = map.idx(x, 4);
+        if (lush) map.floraVitality[i] = 255; // lush wild — tiring
+        else state.wear.set(i, 255); // a beaten path — easy underfoot
+      }
+      state.peds.push({ x: 2, y: 4, dir: 1, tx: 2, ty: 4, walkTo: { x: 22, y: 4 }, fuel: 100000 });
+      const rng = ambientFork(lush ? 'lushwalk' : 'beatenwalk');
+      for (let i = 0; i < 120; i++) stepAmbient(state, map, rng, 50);
+      return state.peds[0]!.fuel!; // fuel remaining after the same walk
+    };
+    expect(walk(false)).toBeGreaterThan(walk(true)); // beaten path → more fuel left → spent less
+  });
+
+  it('a successful visit refuels a citizen by the plot status/use (healing >> industrial)', () => {
+    const reachInside = (plotKind: number): number => {
+      const map = new GameMap(16, 16);
+      map.built[map.idx(2, 8)] = BuiltKind.HouseSingle; // home
+      map.built[map.idx(6, 8)] = plotKind; // the plot to visit
+      const state = createAmbientState();
+      state.peds.push({
+        x: 4, y: 8, dir: 0, tx: 4, ty: 8,
+        walkTo: { x: 6, y: 8 }, phase: 'to-building',
+        homeTile: map.idx(2, 8), building: { x: 6, y: 8 },
+        fuel: 100, // a low tank so the refuel is visible
+      });
+      const rng = ambientFork('refuel');
+      for (let i = 0; i < 200 && state.peds[0]?.phase !== 'inside'; i++) stepAmbient(state, map, rng, 50);
+      return state.peds[0]!.fuel!;
+    };
+    const healing = reachInside(BuiltKind.HealingCommons); // visitValue +6 → a big refuel
+    const industrial = reachInside(BuiltKind.Industrial); // visitValue −4 → ~no refuel
+    expect(healing).toBeGreaterThan(100); // restorative plot tops the tank up past where it started
+    expect(healing).toBeGreaterThan(industrial); // refuel scales with plot status/use
   });
 });
