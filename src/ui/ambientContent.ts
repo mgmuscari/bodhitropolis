@@ -44,9 +44,6 @@ const SAMPLES_PER_SUBSTEP = 8;
 const CAR_SPEED = 0.12;
 const PED_SPEED = 0.05;
 
-/** Highest carWeightForRoad value (highway) — the rejection-sampling denominator. */
-const CAR_MAX_WEIGHT = 3;
-
 /** How strongly a car prefers to continue straight through a junction vs. turn (the
  *  weight of the straight-ahead option against each side option). High enough that
  *  cars read as through-traffic running a vertical/horizontal road block, low enough
@@ -106,6 +103,12 @@ export interface Mover {
    *  prefers a neighbour NOT in this list; if boxed in (all options recent) it
    *  despawns instead of circling. Lazily created on first recommit. */
   recent?: number[];
+  /** Committed trip path (tile indices, origin→destination) — set for cars that ARE the
+   *  sim's planned O-D trips. A car with a `path` follows it leg by leg (see pathStep)
+   *  and despawns on arrival, instead of wandering. */
+  path?: readonly number[];
+  /** Cursor into `path`: the index of the NEXT tile to commit to. */
+  leg?: number;
 }
 
 export type Car = Mover;
@@ -526,19 +529,48 @@ function sampleTile(map: GameMap, rng: Rng): { x: number; y: number } {
   return { x: rng.nextInt(map.width), y: rng.nextInt(map.height) };
 }
 
-function spawnCars(state: AmbientState, map: GameMap, rng: Rng): void {
-  for (let s = 0; s < SAMPLES_PER_SUBSTEP; s++) {
-    if (state.cars.length >= CAR_CAP) return;
-    const { x, y } = sampleTile(map, rng);
-    const weight = carWeightForRoad(map.built[map.idx(x, y)]!);
-    if (weight === 0) continue;
-    const lane = freewayLane(map, x, y);
-    if (lane && lane.role === 'median') continue; // the median carries no traffic
-    if (!rng.chance(weight / CAR_MAX_WEIGHT)) continue;
-    const dir = nextRoadStep(map, x, y, -1, rng);
-    if (dir < 0) continue; // isolated road tile — no leg to commit to
-    state.cars.push({ x, y, dir, tx: x + DIR_DX[dir]!, ty: y + DIR_DY[dir]! });
+/**
+ * Spawn trip-cars from the sim's published origin→destination trips: cars ARE trips. Each
+ * car follows its committed `path` leg by leg and despawns on arrival. Called once per
+ * traffic cadence with that cadence's found trips; capped at CAR_CAP. Renderer-side and
+ * deterministic — the paths come from the (deterministic) sim; the animation draws no rng.
+ * `trips` is structural ({ path }) so this module stays decoupled from the traffic layer.
+ */
+export function ingestTrips(
+  state: AmbientState,
+  trips: ReadonlyArray<{ path: readonly number[] }>,
+  map: GameMap,
+): void {
+  for (const trip of trips) {
+    if (state.cars.length >= CAR_CAP) break;
+    if (trip.path.length < 2) continue; // need at least one leg to drive
+    const p0 = trip.path[0]!;
+    const p1 = trip.path[1]!;
+    const x0 = p0 % map.width;
+    const y0 = (p0 - x0) / map.width;
+    const x1 = p1 % map.width;
+    const y1 = (p1 - x1) / map.width;
+    const dir = x1 > x0 ? 1 : x1 < x0 ? 3 : y1 > y0 ? 2 : 0;
+    state.cars.push({ x: x0, y: y0, dir, tx: x1, ty: y1, path: trip.path, leg: 2 });
   }
+}
+
+/** A trip-car's next-leg picker (the `pickNext` for advanceMover): head to the next tile
+ *  on the committed path, advancing the leg cursor; -1 when the path is exhausted (the car
+ *  has arrived → despawn). Path tiles are adjacent, so the heading is their delta. */
+function pathStep(map: GameMap, car: Mover, x: number, y: number): number {
+  const path = car.path!;
+  const leg = car.leg!;
+  if (leg >= path.length) return -1;
+  const next = path[leg]!;
+  const nx = next % map.width;
+  const ny = (next - nx) / map.width;
+  car.leg = leg + 1;
+  if (nx > x) return 1;
+  if (nx < x) return 3;
+  if (ny > y) return 2;
+  if (ny < y) return 0;
+  return -1; // non-adjacent (shouldn't happen on a committed path) → despawn
 }
 
 function spawnPeds(state: AmbientState, map: GameMap, rng: Rng): void {
@@ -583,15 +615,23 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   }
   state.birds = state.birds.filter((f) => f.birds.length > 0);
 
-  // 2. Spawn map-wide up to the global per-kind caps via rng rejection-sampling.
-  spawnCars(state, map, rng);
+  // 2. Spawn peds/flocks map-wide up to the caps. Cars are NOT spawned here — they are
+  //    the sim's O-D trips, ingested via ingestTrips on the traffic cadence (cars=trips).
   spawnPeds(state, map, rng);
   spawnFlocks(state, map, rng);
 
-  // 3. Move. Cars/peds follow the grid; flocks flock. A mover boxed in by its own
-  //    recent path (or isolated) despawns here rather than circling/freezing.
+  // 3. Move. A trip-car follows its committed path (pathStep) and despawns on arrival;
+  //    a path-less car (a test fixture) falls back to the grid wander. Peds wander on
+  //    substrate; flocks flock.
   state.cars = state.cars.filter((c) =>
-    advanceMover(c, CAR_SPEED, map, (x, y, fromDir, recent) => nextRoadStep(map, x, y, fromDir, rng, recent)),
+    advanceMover(
+      c,
+      CAR_SPEED,
+      map,
+      c.path !== undefined
+        ? (x, y) => pathStep(map, c, x, y)
+        : (x, y, fromDir, recent) => nextRoadStep(map, x, y, fromDir, rng, recent),
+    ),
   );
   state.peds = state.peds.filter((p) =>
     advanceMover(p, PED_SPEED, map, (x, y, fromDir) => nextPedStep(map, x, y, fromDir, rng)),

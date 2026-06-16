@@ -18,7 +18,7 @@ import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
-import { createAmbientState, stepAmbient } from './ui/ambientContent';
+import { createAmbientState, stepAmbient, ingestTrips } from './ui/ambientContent';
 import { attachInput } from './ui/input';
 import { statLines, eraHeadline, challengeText, ecologyStatLine } from './ui/openingContent';
 import { overlayTint, legendLine, type OverlayView } from './ui/ecoOverlayContent';
@@ -460,6 +460,12 @@ export function main(): void {
     currentTick = tick;
     const r = simTick(deps, tick);
     simChanged = true; // effort accrued / grants may have moved → re-sync next frame
+    if (r.trafficTicked) {
+      // Cars ARE trips: the traffic cadence published this round's O-D trips → hand them
+      // to the ambient renderer, whose cars drive the committed paths and despawn on
+      // arrival. Renderer-side + deterministic (paths come from the sim).
+      ingestTrips(ambientState, deps.trips ?? [], world.map);
+    }
     if (r.ecoTicked && activeOverlay?.kind === 'eco') {
       // biodiversity is derived → recompute + re-push; soil/flora/fauna read the
       // live layers and need no recompute.

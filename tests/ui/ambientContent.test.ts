@@ -14,6 +14,7 @@ import { simTick, type SimDeps } from '../../src/civic/compose';
 import {
   createAmbientState,
   stepAmbient,
+  ingestTrips,
   carWeightForRoad,
   isCarRoad,
   isPedSubstrate,
@@ -37,30 +38,9 @@ function gridMap(): GameMap {
   return map;
 }
 
-// Four isolated, equal-length rows — one per road class — for the spawn-ratio pin.
-function classRowsMap(): GameMap {
-  const map = new GameMap(32, 16);
-  for (let x = 1; x < 31; x++) {
-    map.built[map.idx(x, 2)] = BuiltKind.RoadHighway;
-    map.built[map.idx(x, 5)] = BuiltKind.RoadAvenue;
-    map.built[map.idx(x, 8)] = BuiltKind.RoadStreet;
-    map.built[map.idx(x, 11)] = BuiltKind.QuietStreet;
-  }
-  return map;
-}
-
 const ambientFork = (seed: string): ReturnType<typeof createRng> =>
   createRng(seed).fork('ambient');
 
-// Fixed-seed characterization of the emergent spawn ordering (seed 'cars-order',
-// 60 substeps). Locked at GREEN so a future motion/spawn tweak that changes the
-// realized mix is a conscious update, not a silent drift. The load-bearing contract
-// is carWeightForRoad (exact 3/2/1/0, above); this pins the integration. Droppable
-// if it proves brittle — never weakened to pass.
-// Re-characterized 2026-06-16: anti-loop routing (recent-tile avoidance + despawn-
-// when-boxed) makes a car despawn at a dead-end row's far side instead of bouncing
-// back, shifting the realized mix (was 35/12/5). The ordering contract is unchanged.
-const EXPECTED_CAR_COUNTS = { hwy: 28, ave: 14, st: 5, quiet: 0 };
 
 describe('ambient determinism', () => {
   it('is identical across two independently-constructed, identically-seeded forks', () => {
@@ -143,26 +123,38 @@ describe('isCarRoad (the traversability predicate — closes the spawn-vs-move g
   });
 });
 
-describe('car class spawn ordering (emergent, fixed-seed)', () => {
-  it('realizes hwy > avenue > street > quiet = 0', () => {
-    const map = classRowsMap();
+describe('ingestTrips (cars ARE the sim O-D trips)', () => {
+  it('spawns a car per trip that follows its committed path and despawns on arrival', () => {
+    const map = new GameMap(16, 8);
+    for (let x = 2; x <= 8; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadStreet;
     const state = createAmbientState();
-    const rng = ambientFork('cars-order');
-    for (let i = 0; i < 60; i++) stepAmbient(state, map, rng, 50);
-    const counts = { hwy: 0, ave: 0, st: 0, quiet: 0 };
-    for (const c of state.cars) {
-      const k = map.built[map.idx(Math.round(c.x), Math.round(c.y))];
-      if (k === BuiltKind.RoadHighway) counts.hwy++;
-      else if (k === BuiltKind.RoadAvenue) counts.ave++;
-      else if (k === BuiltKind.RoadStreet) counts.st++;
-      else if (k === BuiltKind.QuietStreet) counts.quiet++;
+    const path = [map.idx(2, 4), map.idx(3, 4), map.idx(4, 4), map.idx(5, 4)];
+    ingestTrips(state, [{ path }], map);
+    expect(state.cars.length).toBe(1);
+    const car = state.cars[0]!;
+    expect(car.x).toBe(2); // starts at the path origin
+    const rng = ambientFork('trip');
+    let maxX = car.x;
+    let steps = 0;
+    while (state.cars.length > 0 && steps < 200) {
+      maxX = Math.max(maxX, car.x);
+      stepAmbient(state, map, rng, 50);
+      steps++;
     }
-    expect(counts.quiet).toBe(0);
-    expect(counts.hwy).toBeGreaterThan(counts.ave);
-    expect(counts.ave).toBeGreaterThan(counts.st);
-    expect(counts.st).toBeGreaterThan(0);
-    // Characterization lock (fixed seed 'cars-order', 60 substeps) — added at GREEN.
-    expect(counts).toEqual(EXPECTED_CAR_COUNTS);
+    expect(maxX).toBeGreaterThanOrEqual(4); // drove along the path toward the destination
+    expect(state.cars.length).toBe(0); // despawned on arrival (path exhausted), not stuck
+  });
+
+  it('ignores degenerate trips and respects CAR_CAP, deterministically', () => {
+    const map = new GameMap(16, 8);
+    for (let x = 0; x < 16; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadStreet;
+    const trip = { path: [map.idx(2, 4), map.idx(3, 4), map.idx(4, 4)] };
+    const a = createAmbientState();
+    const b = createAmbientState();
+    ingestTrips(a, [{ path: [map.idx(1, 4)] }, trip], map); // first trip too short → skipped
+    ingestTrips(b, [{ path: [map.idx(1, 4)] }, trip], map);
+    expect(a.cars.length).toBe(1);
+    expect(a.cars).toEqual(b.cars); // deterministic
   });
 });
 
@@ -494,35 +486,6 @@ describe('freeway routing (outer one-way, no weaving, turn only at a true juncti
     expect(counts.east).toBeGreaterThan(counts.ramp); // but mostly stays on the freeway
   });
 
-  it('never spawns or routes a car onto the median; each lane is unidirectional', () => {
-    const m = freewayH();
-    const state = createAmbientState();
-    const rng = ambientFork('fw-spawn');
-    for (let i = 0; i < 300; i++) stepAmbient(state, m, rng, 50);
-    expect(state.cars.length).toBeGreaterThan(0);
-    for (const c of state.cars) {
-      const row = Math.round(c.y);
-      expect(row).not.toBe(6); // never on the median row
-      if (row === 5) expect(c.dir).toBe(3); // north lane westbound
-      if (row === 7) expect(c.dir).toBe(1); // south lane eastbound
-    }
-  });
-});
-
-describe('cars never enter quiet streets (movement, not just spawn)', () => {
-  it('a car on a street adjacent to a quiet street never occupies the quiet tile', () => {
-    const map = new GameMap(16, 8);
-    for (let x = 0; x < 16; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadStreet;
-    map.built[map.idx(8, 3)] = BuiltKind.QuietStreet; // quiet branch above the street row
-    const state = createAmbientState();
-    const rng = ambientFork('quiet');
-    for (let i = 0; i < 200; i++) stepAmbient(state, map, rng, 50);
-    for (const c of state.cars) {
-      expect(Math.round(c.y)).not.toBe(3); // never on the quiet row
-      const k = map.built[map.idx(Math.round(c.x), Math.round(c.y))];
-      expect(k).not.toBe(BuiltKind.QuietStreet);
-    }
-  });
 });
 
 describe('isPedSubstrate', () => {
