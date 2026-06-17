@@ -42,3 +42,5 @@ yarn-error.log*
 # Worktrees (parallel sessions)
 # Git worktrees are created outside this directory, but ignore any local artifacts
 *.worktree
+
+.playwright-mcp/

@@ -664,6 +664,19 @@ export class Renderer {
     }
     ctx.globalAlpha = 1;
 
+    // Air pollution: cars smog the tiles they drive — a grey haze thickening with the live field,
+    // drawn over the ground overlays but under the sprites/pips (they read through the haze).
+    for (const [tile, poll] of ambient.pollution) {
+      const px = tile % mapW;
+      const py = (tile - px) / mapW;
+      const { sx, sy } = camera.worldToScreen(px, py);
+      if (sx < -ts || sx > w + ts || sy < -ts || sy > h + ts) continue;
+      ctx.globalAlpha = 0.5 * (poll / 255);
+      ctx.fillStyle = '#5a5750';
+      ctx.fillRect(Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
+    }
+    ctx.globalAlpha = 1;
+
     // Building health: a bright corner PIP on each home its citizens' trips have marked —
     // green when thriving, red when suffering, growing with magnitude. A distinct badge (not
     // a tile tint) so it reads against any building colour. The visible output of the

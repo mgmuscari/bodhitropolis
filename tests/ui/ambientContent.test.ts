@@ -32,6 +32,8 @@ import {
   nextRoadStep,
   laneOffset,
   freewayLane,
+  pollutionEmit,
+  pedCost,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -582,6 +584,59 @@ describe('ambient despawn', () => {
     stepAmbient(state, map, rng, 50);
     const after = state.birds.length === 0 ? 0 : state.birds[0]!.birds.length;
     expect(after).toBeLessThan(before);
+  });
+});
+
+describe('pollution: cars emit on the tiles they drive (agent-driven air layer)', () => {
+  // The EMISSION contract (pure decision seam): a car emits base pollution on a surface road,
+  // more on a freeway (higher throughput/speed), and more where it idles in congestion.
+  it('emits a positive base amount on a surface road', () => {
+    expect(pollutionEmit(false, 0)).toBeGreaterThan(0);
+  });
+
+  it('emits more on a freeway than a surface road', () => {
+    expect(pollutionEmit(true, 0)).toBeGreaterThan(pollutionEmit(false, 0));
+  });
+
+  it('emits more in heavy congestion than free-flow', () => {
+    expect(pollutionEmit(false, 1)).toBeGreaterThan(pollutionEmit(false, 0));
+  });
+
+  // The WIRING: a driving owned car actually lays the field along its route.
+  it('lays a live pollution field along a driven route', () => {
+    const map = new GameMap(20, 6);
+    for (let x = 2; x <= 14; x++) map.built[map.idx(x, 3)] = BuiltKind.RoadStreet;
+    const path: number[] = [];
+    for (let x = 2; x <= 14; x++) path.push(map.idx(x, 3));
+    const state = createAmbientState();
+    state.cars.push({ x: 2, y: 3, dir: 1, tx: 3, ty: 3, owned: true, id: 1, path, leg: 1 });
+    // A driving ped rides hidden; real boarding leaves walkTo set (its substrate-despawn exemption).
+    state.peds.push({ x: 2, y: 3, dir: 1, tx: 2, ty: 3, phase: 'driving', carId: 1, walkTo: { x: 2, y: 3 } });
+    const rng = ambientFork('pollution-emit');
+    for (let i = 0; i < 30; i++) stepAmbient(state, map, rng, 50);
+    let total = 0;
+    for (const v of state.pollution.values()) total += v;
+    expect(state.pollution.size).toBeGreaterThan(0);
+    expect(total).toBeGreaterThan(0);
+  });
+
+  it('decays the pollution field back toward zero when driving stops', () => {
+    const map = new GameMap(8, 8);
+    const state = createAmbientState();
+    state.pollution.set(map.idx(3, 3), 50);
+    const rng = ambientFork('pollution-decay');
+    for (let i = 0; i < 5; i++) stepAmbient(state, map, rng, 50);
+    expect(state.pollution.get(map.idx(3, 3)) ?? 0).toBeLessThan(50);
+  });
+});
+
+describe('pollution: pedestrians shun smoggy tiles (pedCost feedback)', () => {
+  it('costs more to walk a polluted tile than the same clean tile', () => {
+    const map = new GameMap(8, 8); // (3,3) is empty ground — walkable
+    const i = map.idx(3, 3);
+    const clean = pedCost(map, 3, 3, undefined, undefined, undefined);
+    const smoggy = pedCost(map, 3, 3, undefined, undefined, new Map([[i, 255]]));
+    expect(smoggy).toBeGreaterThan(clean);
   });
 });
 
