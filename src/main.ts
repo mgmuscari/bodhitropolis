@@ -53,6 +53,7 @@ import { computeNeighborhoods } from './civic/neighborhoods';
 import { createCivicState } from './civic/state';
 import { simTick, type SimDeps } from './civic/compose';
 import { stepRevival } from './growth/revival';
+import { computePowerGrid, plantOutput, isPowerConsumer } from './growth/power';
 
 const DEFAULT_SEED = 'bodhitropolis';
 const SIM_TICK_MS = 100;
@@ -149,6 +150,22 @@ export function main(): void {
   };
   refreshHouseholds();
 
+  // Power grid: a live DERIVED field (flood-fill from plants over the built layer,
+  // capacity vs demand → which consumers are powered). Recomputed on placement + the
+  // civic cadence; published to the renderer (unpowered consumers get a red pip) and
+  // read by inspect. Derived from the hashed built layer → never hashed itself.
+  let powerGrid = computePowerGrid(world.map, world.parcels);
+  let powerSig = `${powerGrid.capacity}/${powerGrid.demand}/${powerGrid.poweredAnchors.size}`;
+  const recomputePower = (): boolean => {
+    powerGrid = computePowerGrid(world.map, world.parcels);
+    renderer.setPowerGrid(powerGrid.poweredAnchors);
+    const sig = `${powerGrid.capacity}/${powerGrid.demand}/${powerGrid.poweredAnchors.size}`;
+    const changed = sig !== powerSig;
+    powerSig = sig;
+    return changed;
+  };
+  renderer.setPowerGrid(powerGrid.poweredAnchors);
+
   // The city starts BLIGHTED: a century of car-culture has already trampled the urban ground
   // into desire paths and polluted the shorelines, before the player arrives to heal it.
   seedBlight(ambientState, world.map);
@@ -168,6 +185,7 @@ export function main(): void {
     world,
     ambient: ambientState,
     tech,
+    power: () => powerGrid,
   };
 
   // Opening challenge overlay. Computed from the same world, mounted over the
@@ -447,10 +465,18 @@ export function main(): void {
         pollution: ambientState.pollution.get(i),
       });
       if (live) line += ` · ${live}`;
+      // Power status: a plant shows its output; a consumer shows powered/unpowered.
+      const builtHere = world.map.built[i];
+      const out = builtHere ? plantOutput(builtHere) : 0;
+      if (out > 0) line += ` · output ${out}`;
+      else if (pid && isPowerConsumer(world.parcels.kindAt(pid - 1))) {
+        line += powerGrid.poweredAnchors.has(anchor) ? ' · powered' : ' · UNPOWERED';
+      }
       toolbar.setStatus(line);
       return;
     }
     if (r.ok) {
+      recomputePower(); // built layer changed → re-derive the grid (a new plant lights its district)
       markDirty(); // mutated the built/parcel layer → rebuild the cached base
       // Effort changed → dock affordability + (if open) tech-panel affordability.
       // Refresh directly and snapshot both signatures so the next sim-gated check
@@ -551,7 +577,8 @@ export function main(): void {
       const revived = stepRevival(world, (tile) => ambientState.occupancy.get(tile), revivalRng);
       refreshParkingLots(); // the player may have rezoned a lot → refresh the storage set
       refreshHouseholds(); // homes may have grown/decayed → refresh who's out living their day
-      if (revived > 0) markDirty(); // condition/density changed → glyphs + tiers → rebuild base
+      const powerChanged = recomputePower(); // density shifts move demand → re-derive the grid
+      if (revived > 0 || powerChanged) markDirty(); // stock/grid changed → rebuild base
     }
   });
   let last = performance.now();

@@ -15,6 +15,7 @@ import { Camera, BASE_TILE } from './camera';
 import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 import { parcelGlyph } from './glyphContent';
+import { isPowerConsumer } from '../growth/power';
 import { laneOffset, curbParkOffset, pedCurbOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
 import { TravelMode } from '../citizens/modes';
@@ -462,6 +463,9 @@ export class Renderer {
   private cssHeight = 0;
   private preview: readonly PreviewTile[] | null = null;
   private overlay: OverlaySource | null = null;
+  // Anchor tiles of POWERED consumer parcels (the live power grid). A consumer not
+  // in this set draws an "unpowered" pip. null = grid unknown (no marks).
+  private powered: Set<number> | null = null;
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
@@ -478,6 +482,12 @@ export class Renderer {
   /** Set (or clear) the ecology heatmap overlay drawn under the preview. */
   setOverlay(source: OverlaySource | null): void {
     this.overlay = source;
+  }
+
+  /** Publish the live power grid (powered consumer anchor tiles). Unpowered consumers
+   *  get a red pip. The host calls invalidateBase after this so the marks redraw. */
+  setPowerGrid(poweredAnchors: Set<number> | null): void {
+    this.powered = poweredAnchors;
   }
 
   resize(cssWidth: number, cssHeight: number, dpr: number): void {
@@ -517,6 +527,10 @@ export class Renderer {
 
     const ts = camera.tileSize;
     const range = camera.visibleTileRange();
+    // Per-parcel anchor marks (glyph + unpowered pip) are COLLECTED during the tile
+    // loop and drawn in a second pass below — a multi-tile footprint's later tiles
+    // would otherwise paint over a mark drawn at the anchor tile (z-order fix).
+    const marks: { dx: number; dy: number; w: number; h: number; kind: number; density: number; unpowered: boolean }[] = [];
     for (let ty = range.y0; ty <= range.y1; ty++) {
       for (let tx = range.x0; tx <= range.x1; tx++) {
         const i = map.idx(tx, ty);
@@ -562,26 +576,14 @@ export class Renderer {
             }
           }
 
-          // SNES-style legibility glyph: one letter per parcel (R1/C2/I/civic),
-          // stamped once at the footprint's anchor tile and centered over the whole
-          // footprint, skipped when zoomed out (GLYPH_MIN_TS). The DECISION
-          // (which glyph) is pure (glyphContent.ts); the draw is the thin shell.
-          if (!isT && pid !== 0 && ts >= GLYPH_MIN_TS) {
+          // Collect this parcel's anchor mark (glyph + unpowered pip) for the
+          // second pass; the decisions are pure (glyphContent / isPowerConsumer).
+          if (!isT && pid !== 0) {
             const pp = parcels.get(pid - 1);
             if (tx === pp.x && ty === pp.y) {
-              const glyph = parcelGlyph(pp.kind, pp.density);
-              if (glyph) {
-                const gx = dx + (pp.width * ts) / 2;
-                const gy = dy + (pp.height * ts) / 2;
-                ctx.font = `bold ${Math.max(8, Math.floor(ts * 0.55))}px "Courier New", ui-monospace, monospace`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.lineWidth = Math.max(2, ts * 0.12);
-                ctx.strokeStyle = 'rgba(12, 10, 18, 0.85)';
-                ctx.strokeText(glyph, gx, gy);
-                ctx.fillStyle = 'rgba(240, 236, 214, 0.92)';
-                ctx.fillText(glyph, gx, gy);
-              }
+              const unpowered =
+                this.powered !== null && isPowerConsumer(pp.kind) && !this.powered.has(i);
+              marks.push({ dx, dy, w: pp.width, h: pp.height, kind: pp.kind, density: pp.density, unpowered });
             }
           }
         }
@@ -594,6 +596,33 @@ export class Renderer {
             ctx.fillStyle = `rgba(${t[0]}, ${t[1]}, ${t[2]}, ${t[3]})`;
             ctx.fillRect(dx, dy, ts, ts);
           }
+        }
+      }
+    }
+
+    // Second pass: parcel anchor marks ON TOP of every tile + the overlay, so a
+    // multi-tile footprint's own tiles (and the heatmap tint) can't hide them.
+    // The unpowered pip sits in the footprint's top-right; the legibility glyph is
+    // centered over the whole footprint (skipped below GLYPH_MIN_TS).
+    for (const m of marks) {
+      if (m.unpowered) {
+        const pip = Math.max(2, ts * 0.18);
+        ctx.fillStyle = 'rgba(232, 72, 60, 0.95)';
+        ctx.fillRect(m.dx + m.w * ts - pip - 1, m.dy + 1, pip, pip);
+      }
+      if (ts >= GLYPH_MIN_TS) {
+        const glyph = parcelGlyph(m.kind as BuiltKind, m.density);
+        if (glyph) {
+          const gx = m.dx + (m.w * ts) / 2;
+          const gy = m.dy + (m.h * ts) / 2;
+          ctx.font = `bold ${Math.max(8, Math.floor(ts * 0.55))}px "Courier New", ui-monospace, monospace`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.lineWidth = Math.max(2, ts * 0.12);
+          ctx.strokeStyle = 'rgba(12, 10, 18, 0.85)';
+          ctx.strokeText(glyph, gx, gy);
+          ctx.fillStyle = 'rgba(240, 236, 214, 0.92)';
+          ctx.fillText(glyph, gx, gy);
         }
       }
     }
