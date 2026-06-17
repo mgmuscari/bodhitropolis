@@ -421,6 +421,49 @@ describe('era2MotorAge — legacy dirty power, sited by grade', () => {
   });
 });
 
+describe('era2MotorAge — industry concentration by grade', () => {
+  const parcelMeanGrade = (world: WorldState, i: number): number => {
+    const { map, parcels } = world;
+    const e = parcels.get(i);
+    let sum = 0;
+    let n = 0;
+    for (let dy = 0; dy < e.height; dy++) {
+      for (let dx = 0; dx < e.width; dx++) {
+        sum += map.redline[map.idx(e.x + dx, e.y + dy)]!;
+        n++;
+      }
+    }
+    return sum / n;
+  };
+
+  it('industry picks the worst-graded of the rail/water frontage cohort', () => {
+    // Controls for the floodplain confound (rail/water frontage is near water, so
+    // it already skews worse-graded): compare industry against OTHER parcels that
+    // are ALSO near rail/water. Industry is grade-sorted to pick the worst of that
+    // shared cohort, so its mean grade exceeds the rest. Aggregate across seeds.
+    let indSum = 0;
+    let indN = 0;
+    let cohortSum = 0;
+    let cohortN = 0;
+    for (const seed of SEEDS) {
+      const { world } = runEras(seed, 2);
+      const { map, parcels } = world;
+      for (const i of parcels.aliveIndices()) {
+        if (!nearRailOrWater(map, parcels, i, P.industryFrontage)) continue;
+        const g = parcelMeanGrade(world, i);
+        if (parcels.kindAt(i) === BuiltKind.Industrial) {
+          indSum += g;
+          indN++;
+        } else {
+          cohortSum += g;
+          cohortN++;
+        }
+      }
+    }
+    expect(indSum / indN).toBeGreaterThan(cohortSum / cohortN);
+  });
+});
+
 describe('placeParkingField (all-or-nothing, unit)', () => {
   it('places cols*rows lots on a fully-free region as one contiguous field', () => {
     const map = new GameMap(20, 20);

@@ -821,12 +821,14 @@ export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state:
     return Math.abs(x - siteX) + Math.abs(y - siteY);
   };
 
-  // 3. Industry on rail/water frontage beyond the core. Sorted nearest-first so
-  //    placements cluster on the streetcar/freight spine and the waterfront.
+  // 3. Industry on rail/water frontage beyond the core. Sorted by GRADE first
+  //    (discrimination-first: industry concentrates in the most redlined districts)
+  //    then nearest rail/water, so it still clusters on the freight/water spine —
+  //    the accept filter below keeps every parcel on real rail/water frontage.
   const railWaterDist = distanceField(map, (i) => map.built[i] === BuiltKind.Rail || map.water[i] !== Water.None);
   const indCands = roadTiles
     .filter((i) => toCore(i) > p.coreRadius)
-    .sort((a, b) => railWaterDist[a]! - railWaterDist[b]! || a - b);
+    .sort((a, b) => map.redline[b]! - map.redline[a]! || railWaterDist[a]! - railWaterDist[b]! || a - b);
   let industry = 0;
   for (const i of indCands) {
     if (industry >= p.era2Industry) break;
