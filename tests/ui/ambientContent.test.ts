@@ -12,11 +12,13 @@ import { createTechState } from '../../src/tech/state';
 import { TECH_TREE } from '../../src/tech/tree';
 import { simTick, type SimDeps } from '../../src/civic/compose';
 import { parkingLots, parkingStalls } from '../../src/ui/parkingContent';
+import { StopCategory } from '../../src/citizens/itinerary';
 import {
   createAmbientState,
   stepAmbient,
   ingestTrips,
   setParkingLots,
+  setHouseholds,
   curbParkOffset,
   isWearable,
   seedBlight,
@@ -1279,5 +1281,90 @@ describe('citizen fuel economy (spend on terrain, refuel at good plots — Maddy
     const industrial = reachInside(BuiltKind.Industrial); // visitValue −4 → ~no refuel
     expect(healing).toBeGreaterThan(100); // restorative plot tops the tank up past where it started
     expect(healing).toBeGreaterThan(industrial); // refuel scales with plot status/use
+  });
+});
+
+describe('citizen daily itinerary (home → work → shop → lifestyle → home — Maddy directive)', () => {
+  it('walks the full round in order, banks each stop at home, then returns home', () => {
+    const map = new GameMap(24, 8); // empty = walkable everywhere
+    map.built[map.idx(2, 4)] = BuiltKind.HouseSingle; // home
+    map.built[map.idx(6, 4)] = BuiltKind.Industrial; // work
+    map.built[map.idx(10, 4)] = BuiltKind.CommercialStrip; // shop
+    map.built[map.idx(14, 4)] = BuiltKind.HealingCommons; // lifestyle
+    const state = createAmbientState();
+    state.peds.push({
+      x: 3, y: 4, dir: 1, tx: 3, ty: 4,
+      walkTo: { x: 6, y: 4 }, phase: 'to-building', building: { x: 6, y: 4 },
+      homeTile: map.idx(2, 4),
+      itinerary: [StopCategory.Work, StopCategory.Shop, StopCategory.Lifestyle], itinStep: 0,
+    });
+    const rng = ambientFork('round');
+    const visited: string[] = [];
+    let last = '';
+    let peakHome = 0;
+    for (let i = 0; i < 4000 && state.peds.length > 0; i++) {
+      stepAmbient(state, map, rng, 50);
+      const p = state.peds[0];
+      if (p && p.phase === 'inside' && p.building) {
+        const key = `${p.building.x},${p.building.y}`;
+        if (key !== last) { visited.push(key); last = key; }
+      }
+      peakHome = Math.max(peakHome, state.buildingHealth.get(map.idx(2, 4)) ?? 0);
+    }
+    expect(visited).toEqual(['6,4', '10,4', '14,4']); // work, then shop, then lifestyle, in order
+    expect(peakHome).toBeGreaterThan(0); // the round's good stops banked wellbeing at home
+    expect(state.peds.length).toBe(0); // round done → walked home → despawned
+  });
+
+  it('skips a stop category that has no reachable plot, keeping the rest of the round', () => {
+    const map = new GameMap(24, 8);
+    map.built[map.idx(2, 4)] = BuiltKind.HouseSingle; // home
+    map.built[map.idx(6, 4)] = BuiltKind.Industrial; // work — present
+    // no shop anywhere
+    map.built[map.idx(12, 4)] = BuiltKind.HealingCommons; // lifestyle — present
+    const state = createAmbientState();
+    state.peds.push({
+      x: 3, y: 4, dir: 1, tx: 3, ty: 4,
+      walkTo: { x: 6, y: 4 }, phase: 'to-building', building: { x: 6, y: 4 },
+      homeTile: map.idx(2, 4),
+      itinerary: [StopCategory.Work, StopCategory.Shop, StopCategory.Lifestyle], itinStep: 0,
+    });
+    const rng = ambientFork('skip');
+    const visited: string[] = [];
+    let last = '';
+    for (let i = 0; i < 4000 && state.peds.length > 0; i++) {
+      stepAmbient(state, map, rng, 50);
+      const p = state.peds[0];
+      if (p && p.phase === 'inside' && p.building) {
+        const key = `${p.building.x},${p.building.y}`;
+        if (key !== last) { visited.push(key); last = key; }
+      }
+    }
+    expect(visited).toEqual(['6,4', '12,4']); // work then lifestyle — the absent shop was skipped
+    expect(state.peds.length).toBe(0);
+  });
+
+  it('census citizens spawn from homes and set off on their daily round', () => {
+    const map = new GameMap(24, 8);
+    map.built[map.idx(2, 4)] = BuiltKind.HouseSingle; // a home
+    map.built[map.idx(8, 4)] = BuiltKind.Industrial; // a workplace in range
+    const state = createAmbientState();
+    setHouseholds(state, [{ x: 2, y: 4, count: 3 }]); // published from the residential census
+    const rng = ambientFork('census');
+    for (let i = 0; i < 30; i++) stepAmbient(state, map, rng, 50);
+    const citizens = state.peds.filter((p) => p.itinerary !== undefined);
+    expect(citizens.length).toBeGreaterThan(0); // the census produced walking citizens
+    expect(citizens.every((p) => p.homeTile === map.idx(2, 4))).toBe(true); // tagged with their home
+    expect(citizens.some((p) => p.phase === 'to-building' && p.building)).toBe(true); // off toward a stop
+  });
+
+  it('does not spawn census citizens when no household is published', () => {
+    const map = new GameMap(24, 8);
+    map.built[map.idx(2, 4)] = BuiltKind.HouseSingle;
+    map.built[map.idx(8, 4)] = BuiltKind.Industrial;
+    const state = createAmbientState(); // no setHouseholds
+    const rng = ambientFork('nocensus');
+    for (let i = 0; i < 30; i++) stepAmbient(state, map, rng, 50);
+    expect(state.peds.every((p) => p.itinerary === undefined)).toBe(true); // only ambient wanderers, no citizens
   });
 });

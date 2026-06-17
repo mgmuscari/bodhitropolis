@@ -18,7 +18,8 @@ import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
-import { createAmbientState, stepAmbient, ingestTrips, setParkingLots, seedBlight } from './ui/ambientContent';
+import { createAmbientState, stepAmbient, ingestTrips, setParkingLots, setHouseholds, seedBlight } from './ui/ambientContent';
+import { residentialCensus } from './citizens/census';
 import { parkingLots, parkingStalls } from './ui/parkingContent';
 import { attachInput } from './ui/input';
 import { statLines, eraHeadline, challengeText, ecologyStatLine } from './ui/openingContent';
@@ -134,6 +135,13 @@ export function main(): void {
     );
   };
   refreshParkingLots();
+
+  // The residential census the ambient layer spawns daily-itinerary citizens from. Recomputed
+  // at startup and on each civic tick so it tracks homes as the city grows/decays.
+  const refreshHouseholds = (): void => {
+    setHouseholds(ambientState, residentialCensus(world.parcels));
+  };
+  refreshHouseholds();
 
   // The city starts BLIGHTED: a century of car-culture has already trampled the urban ground
   // into desire paths and polluted the shorelines, before the player arrives to heal it.
@@ -504,6 +512,7 @@ export function main(): void {
       pulseDock.set(pulseLine(wb, prevWellbeing));
       prevWellbeing = wb;
       refreshParkingLots(); // the player may have rezoned a lot → refresh the storage set
+      refreshHouseholds(); // homes may have grown/decayed → refresh who's out living their day
     }
   });
   let last = performance.now();
