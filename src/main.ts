@@ -574,10 +574,18 @@ export function main(): void {
       // ruin (reversibly). Runs HERE on the slow civic cadence (sim side), never in
       // stepAmbient (which must leave the world hash untouched) and never in simTick
       // (the N=120 gate pins its stock byte-stable). markDirty only on a real change.
-      const revived = stepRevival(world, (tile) => ambientState.occupancy.get(tile), revivalRng);
+      // Re-derive the grid FIRST so revival reads the current power state, then run
+      // the seam: a powered home heals/densifies by occupancy; an unpowered one is
+      // hard-gated (no growth, slow decay) until the player restores power.
+      const powerChanged = recomputePower();
+      const revived = stepRevival(
+        world,
+        (tile) => ambientState.occupancy.get(tile),
+        revivalRng,
+        (tile) => powerGrid.poweredAnchors.has(tile),
+      );
       refreshParkingLots(); // the player may have rezoned a lot → refresh the storage set
       refreshHouseholds(); // homes may have grown/decayed → refresh who's out living their day
-      const powerChanged = recomputePower(); // density shifts move demand → re-derive the grid
       if (revived > 0 || powerChanged) markDirty(); // stock/grid changed → rebuild base
     }
   });

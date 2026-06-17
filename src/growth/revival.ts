@@ -33,6 +33,9 @@ export interface RevivalParams {
   densifyChance: number;
   /** density ceiling (R1..R3). */
   maxDensity: number;
+  /** condition decay per pass for an UNPOWERED home (gentler than the occupancy
+   *  decay — a dark block fades slowly, giving the player time to build generation). */
+  powerlessStep: number;
 }
 
 export const DEFAULT_REVIVAL_PARAMS: RevivalParams = {
@@ -42,6 +45,7 @@ export const DEFAULT_REVIVAL_PARAMS: RevivalParams = {
   densifyCondition: 210,
   densifyChance: 0.12,
   maxDensity: 3,
+  powerlessStep: 7,
 };
 
 export interface RevivalWorld {
@@ -62,11 +66,13 @@ export function occupancySignalFor(occupancy: number, density: number): number {
 }
 
 /**
- * The pure per-home decision: next (condition, density) from the current state and
- * the occupancy signal. Thriving (signal ≥ growThreshold) heals condition and, when
- * already in good repair, may densify (one rng draw). Struggling (signal ≤
- * -decayThreshold) decays condition toward 0 (the ruin floor). In between, hold.
- * Reversible by construction — a ruined home heals back when occupancy returns.
+ * The pure per-home decision: next (condition, density) from the current state, the
+ * occupancy signal, and whether the home is on the power grid. An UNPOWERED home is
+ * hard-gated — it cannot grow and decays gently (powerlessStep), regardless of
+ * occupancy (no power → no thriving). A POWERED home follows the occupancy signal:
+ * thriving (≥ growThreshold) heals + may densify (one rng draw); struggling (≤
+ * -decayThreshold) decays toward 0; else holds. Reversible — restore power (or
+ * occupancy) and the home heals back. `powered` defaults true (no-power-system case).
  */
 export function revivalStep(
   condition: number,
@@ -74,7 +80,12 @@ export function revivalStep(
   signal: number,
   rng: Rng,
   p: RevivalParams = DEFAULT_REVIVAL_PARAMS,
+  powered = true,
 ): { condition: number; density: number } {
+  if (!powered) {
+    const decayed = condition - p.powerlessStep;
+    return { condition: decayed < 0 ? 0 : decayed, density }; // dark block fades, never grows
+  }
   if (signal >= p.growThreshold) {
     const healed = condition + p.conditionStep;
     const nextCond = healed > 255 ? 255 : healed;
@@ -93,15 +104,18 @@ export function revivalStep(
 
 /**
  * Run one revival pass over every alive residential parcel, sampling its live
- * occupancy (occAt(anchorTile) → the live value, or undefined when unknown → hold)
- * into the hashed stock via setCondition/setDensity. Returns how many parcels
- * changed (so the host can skip a base-cache rebuild on a no-op pass). Deterministic
- * in (world, occAt, rng): aliveIndices is a stable ascending order.
+ * occupancy (occAt(anchorTile) → the live value, or undefined when unknown) and its
+ * power state (poweredAt(anchorTile)) into the hashed stock via setCondition/
+ * setDensity. An unpowered home decays (the hard gate) even with no occupancy
+ * reading; a powered home with no reading holds. Returns how many parcels changed
+ * (so the host can skip a base-cache rebuild on a no-op pass). Deterministic in
+ * (world, occAt, poweredAt, rng): aliveIndices is a stable ascending order.
  */
 export function stepRevival(
   world: RevivalWorld,
   occAt: (tile: number) => number | undefined,
   rng: Rng,
+  poweredAt: (tile: number) => boolean = () => true,
   p: RevivalParams = DEFAULT_REVIVAL_PARAMS,
 ): number {
   const { map, parcels } = world;
@@ -109,10 +123,14 @@ export function stepRevival(
   for (const i of parcels.aliveIndices()) {
     if (zoneTypeOf(parcels.kindAt(i)) !== ZoneType.Residential) continue;
     const parcel = parcels.get(i);
-    const occ = occAt(map.idx(parcel.x, parcel.y));
-    if (occ === undefined) continue; // no live signal yet → hold
-    const signal = occupancySignalFor(occ, parcel.density);
-    const next = revivalStep(parcel.condition, parcel.density, signal, rng, p);
+    const anchor = map.idx(parcel.x, parcel.y);
+    const powered = poweredAt(anchor);
+    const occ = occAt(anchor);
+    // An unpowered home decays even with no occupancy reading (the dark-block gate);
+    // a powered home with no live signal yet holds.
+    if (occ === undefined && powered) continue;
+    const signal = occ === undefined ? 0 : occupancySignalFor(occ, parcel.density);
+    const next = revivalStep(parcel.condition, parcel.density, signal, rng, p, powered);
     if (next.condition !== parcel.condition) {
       parcels.setCondition(i, next.condition);
       changed++;
