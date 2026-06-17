@@ -1409,15 +1409,24 @@ describe('multimodal travel (mode sets a citizen’s route + speed — Maddy /go
   });
 });
 
-describe('mode choice (close → walk; build transit → citizens ride it; drive last)', () => {
+describe('mode choice (close → walk; car-dependent until calm/transit infra; then it shifts)', () => {
   it('walks a short leg', () => {
     const map = new GameMap(40, 40);
     expect(chooseMode(map, 5, 5, 12, 5)).toBe(TravelMode.Walk); // d=7, within walking range
   });
 
-  it('bikes a medium leg when no transit serves it', () => {
-    const map = new GameMap(40, 40);
-    expect(chooseMode(map, 5, 5, 25, 5)).toBe(TravelMode.Bike); // d=20, no rail/tram
+  it('DRIVES a medium leg when only car infra (stroads) serves it — the car-dependent start', () => {
+    const map = new GameMap(40, 10);
+    for (let x = 0; x < 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet; // only roads
+    expect(chooseMode(map, 5, 5, 25, 5)).toBe(TravelMode.Drive); // d=20, no bike/transit infra → drive
+  });
+
+  it('BIKES that same medium leg once bike-friendly infra serves both ends — the shift', () => {
+    const map = new GameMap(40, 10);
+    for (let x = 0; x < 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(6, 5)] = BuiltKind.BikePath; // a calm/bike tile near the origin
+    map.built[map.idx(24, 5)] = BuiltKind.QuietStreet; // and near the destination
+    expect(chooseMode(map, 5, 5, 25, 5)).toBe(TravelMode.Bike); // d=20, now bike-friendly at both ends
   });
 
   it('drives a long leg when only roads connect it', () => {

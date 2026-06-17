@@ -80,9 +80,10 @@ const HEALTH_DECAY = 0.02;
 const WALK_RANGE = 10;
 
 /** How far a citizen on a daily round will look for the next stop's plot (a workplace, shop, or
- *  third place). Larger than a last-mile radius — a citizen ranges across its district — but the
- *  FUEL economy is what really bounds reach: a stop too far to walk burns the citizen out. */
-const CITIZEN_TRIP_RADIUS = 24;
+ *  third place). A citizen ranges across the city for a far stop (a commute) — wider than BIKE_RANGE
+ *  so the longest legs genuinely warrant driving/transit, exercising the full mode spectrum. The
+ *  FUEL economy still bounds reach: a stop too far to reach burns the citizen out. */
+const CITIZEN_TRIP_RADIUS = 40;
 
 /** Mode choice: a leg up to BIKE_RANGE tiles can be cycled (bikes need no special infra — bike
  *  paths just speed them); a transit/road mode is "available" only when its network is within
@@ -932,17 +933,41 @@ function infraNear(map: GameMap, cx: number, cy: number, mode: TravelMode): bool
   return false;
 }
 
-/** Choose a citizen's travel MODE for a leg origin→dest: WALK if close; else the best available
- *  premium mode — transit (rail, then streetcar) when a line serves BOTH ends, a BIKE for medium
- *  distances (bikes need no special infra — bike paths just speed them), and DRIVE only for a long
- *  leg with no transit. So a player's transit build / road-diet shifts citizens off cars (the
- *  congestion → mode-shift → bloom loop). Falls back to walking when nothing else fits. */
+/** Calm, bike-friendly infrastructure — a citizen will cycle a leg only when one of these serves
+ *  both ends (a dedicated path, or a calmed street / promenade pleasant to ride). A stroad-only
+ *  district is NOT bike-friendly, so its citizens drive until the player calms it. */
+const BIKE_FRIENDLY: ReadonlySet<number> = new Set<number>([
+  BuiltKind.BikePath,
+  BuiltKind.QuietStreet,
+  BuiltKind.Promenade,
+]);
+
+/** Is bike-friendly infrastructure within MODE_INFRA_RADIUS of (cx, cy)? */
+function bikeFriendlyNear(map: GameMap, cx: number, cy: number): boolean {
+  for (let y = cy - MODE_INFRA_RADIUS; y <= cy + MODE_INFRA_RADIUS; y++) {
+    for (let x = cx - MODE_INFRA_RADIUS; x <= cx + MODE_INFRA_RADIUS; x++) {
+      if (!map.inBounds(x, y)) continue;
+      if (BIKE_FRIENDLY.has(map.built[map.idx(x, y)]!)) return true;
+    }
+  }
+  return false;
+}
+
+/** Choose a citizen's travel MODE for a leg origin→dest, after Maddy's rule — drive only when it
+ *  is far AND no transit/bike/ped infrastructure serves it. WALK if close; else the best available
+ *  active/transit mode whose network serves BOTH ends — rail, then streetcar, then a BIKE for a
+ *  medium leg with calm/bike infra at both ends — and DRIVE as the fallback when only car infra
+ *  exists. So the car-dependent blighted start (stroads) shifts to bikes/transit as the player
+ *  builds them: the congestion → mode-shift → bloom loop. Walks if nothing else fits. */
 export function chooseMode(map: GameMap, ox: number, oy: number, dx: number, dy: number): TravelMode {
   const d = Math.abs(ox - dx) + Math.abs(oy - dy);
   if (d <= WALK_RANGE) return TravelMode.Walk;
   for (const mode of MODE_CHOICE_ORDER) {
     if (mode === TravelMode.Bike) {
-      if (d <= BIKE_RANGE) return TravelMode.Bike;
+      // bikeable only on a medium leg the player has made calm/bike-friendly at both ends.
+      if (d <= BIKE_RANGE && bikeFriendlyNear(map, ox, oy) && bikeFriendlyNear(map, dx, dy)) {
+        return TravelMode.Bike;
+      }
       continue;
     }
     // rail / streetcar / drive: available when their network serves BOTH ends of the leg.
