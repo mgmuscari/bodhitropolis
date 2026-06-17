@@ -4,11 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Operating Principles
 
-**Default stance: Team Lead.** When receiving user instructions or feedback, orchestrate dialectical teams — do not solo-implement. Use `/new-feature` to initiate work. Use team commands (`/review-plan-team`, `/execute-team`) for standard/full tier. The proposer implements; the interlocutor tests balance; the team lead orchestrates.
+**Default mode here: the tight iterative loop.** Most Bodhitropolis work is playtest-driven — the maintainer plays the running game, reports what she sees, and we fix → live-verify (browser / the `window.bodhitropolis` dev API) → ship a small PR, fast. This loop is **iterative direct-TDD**: implement directly, RED → GREEN → REFACTOR, atomic commits, verify live. Teams can't play the game or drive live verification, so they don't fit this loop — the dialectic lands at *review* time (the live pass + the bug queue), not team ceremony.
+
+**Teams for the larger, colder work.** Longer or more complex *non-playtest* features still use the dialectic pipeline (`/new-feature` → `/review-plan-team` → `/execute-team` → `/review-code-team`). Teams are available; reach for them when the work isn't driven by playing the game.
+
+**Program like the architect.** Several bugs in one subsystem usually mean ONE missing abstraction — step back and build it; don't patch symptom by symptom. Ask "what would the person who designed this idea write?", and build the right abstraction the first time. The maintainer is a senior platform/AI architect — work peer-level (lead with architecture and trade-offs, skip the basics), default to full autonomy, and keep answers short.
+
+**Bug queue.** Playtest bugs go in `docs/bug-queue.md` (which also tracks the active direction). They're recorded as seen — not necessarily fixed at once — so check that file when touching related code and fix opportunistically; mark fixed with the PR. Never call an active direction "deferred".
 
 **Pressure demands the *right* structure.** Scope pressure → tighten methodology (more review, more planning). Performance/bug pressure → tighten feedback loops (faster iteration, empirical validation). Never abandon structure — match it to the problem type.
 
-**The dialectic is the product.** The structured tension between proposer and interlocutor is not overhead — it is the mechanism that produces quality. Bypassing it is like skipping the partner and practicing alone.
+**The dialectic is the product** (when teams run). The structured tension between proposer and interlocutor is the mechanism that produces quality on cold/complex work — don't bypass it there.
 
 **TDD is mandatory.** All implementation follows RED → GREEN → REFACTOR. Tests are written before implementation code. Never mock to make tests pass — fix the real issue. Never weaken tests to get green.
 
@@ -43,7 +49,7 @@ The git hooks in `scripts/hooks/` default to Python tooling (`ruff`, `mypy`, `py
 
 ## Development Lifecycle Pipeline
 
-Four workflow tiers (light/iterative/standard/full) match process weight to change size. Default is standard. Tier metadata is stored in `.dialectic-tier` on feature branches — this file must never reach `main`.
+Four workflow tiers (light/iterative/standard/full) match process weight to change size. The nominal default is standard, but **for Bodhitropolis's playtest-debug loop, iterative is the working default** (see Operating Principles) — reserve standard/full + teams for larger, colder, non-playtest features. Tier metadata is stored in `.dialectic-tier` on feature branches — this file must never reach `main`.
 
 ```
 Light:     Feature Branch → Implement (TDD) → /review-code (optional) → PR → Merge
