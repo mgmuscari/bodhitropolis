@@ -75,6 +75,22 @@ describe('revivalStep', () => {
     const forcing = { ...P, densifyCondition: 0, densifyChance: 1 };
     expect(revivalStep(255, 1, -1, rng(), forcing).density).toBe(1);
   });
+
+  it('hard-gates an UNPOWERED home: decays + never grows, even when thriving', () => {
+    // signal +1 (thriving) but powered=false → still decays by powerlessStep, no densify
+    const forcing = { ...P, densifyCondition: 0, densifyChance: 1 };
+    const out = revivalStep(200, 1, 1, rng(), forcing, false);
+    expect(out.condition).toBe(200 - P.powerlessStep);
+    expect(out.density).toBe(1);
+  });
+
+  it('floors unpowered decay at 0', () => {
+    expect(revivalStep(3, 1, 1, rng(), P, false).condition).toBe(0);
+  });
+
+  it('powered=true (default) preserves the occupancy-driven behavior', () => {
+    expect(revivalStep(100, 1, 1, rng(), P, true).condition).toBe(100 + P.conditionStep);
+  });
 });
 
 function world(): RevivalWorld {
@@ -90,7 +106,7 @@ describe('stepRevival (pass over the stock)', () => {
     const w = world();
     const homeTile = w.map.idx(4, 4);
     const occ = new Map<number, number>([[homeTile, 9]]); // density 1 baseline 3 → thriving
-    const changed = stepRevival(w, (t) => occ.get(t), createRng('a'), P);
+    const changed = stepRevival(w, (t) => occ.get(t), createRng('a'), () => true, P);
     expect(changed).toBeGreaterThan(0);
     expect(w.parcels.conditionAt(0)).toBe(120 + P.conditionStep); // home healed
     expect(w.parcels.conditionAt(1)).toBe(120); // shop untouched (not residential)
@@ -100,13 +116,13 @@ describe('stepRevival (pass over the stock)', () => {
     const w = world();
     const homeTile = w.map.idx(4, 4);
     const occ = new Map<number, number>([[homeTile, 0]]);
-    stepRevival(w, (t) => occ.get(t), createRng('a'), P);
+    stepRevival(w, (t) => occ.get(t), createRng('a'), () => true, P);
     expect(w.parcels.conditionAt(0)).toBe(120 - P.conditionStep);
   });
 
   it('holds homes with no live occupancy signal', () => {
     const w = world();
-    const changed = stepRevival(w, () => undefined, createRng('a'), P);
+    const changed = stepRevival(w, () => undefined, createRng('a'), () => true, P);
     expect(changed).toBe(0);
     expect(w.parcels.conditionAt(0)).toBe(120);
   });
@@ -115,19 +131,36 @@ describe('stepRevival (pass over the stock)', () => {
     const occ = (w: RevivalWorld) => new Map<number, number>([[w.map.idx(4, 4), 12]]);
     const a = world();
     const b = world();
-    stepRevival(a, (t) => occ(a).get(t), createRng('seed'), P);
-    stepRevival(b, (t) => occ(b).get(t), createRng('seed'), P);
+    stepRevival(a, (t) => occ(a).get(t), createRng('seed'), () => true, P);
+    stepRevival(b, (t) => occ(b).get(t), createRng('seed'), () => true, P);
     expect(a.parcels.snapshotBytes()).toEqual(b.parcels.snapshotBytes());
+  });
+
+  it('hard-gates on power: an unpowered home decays even when occupancy is thriving', () => {
+    const w = world();
+    const homeTile = w.map.idx(4, 4);
+    const occ = new Map<number, number>([[homeTile, 30]]); // thriving occupancy...
+    // ...but unpowered → decays anyway
+    stepRevival(w, (t) => occ.get(t), createRng('a'), () => false, P);
+    expect(w.parcels.conditionAt(0)).toBe(120 - P.powerlessStep);
+  });
+
+  it('powered + thriving still heals (gate open)', () => {
+    const w = world();
+    const homeTile = w.map.idx(4, 4);
+    const occ = new Map<number, number>([[homeTile, 30]]);
+    stepRevival(w, (t) => occ.get(t), createRng('a'), () => true, P);
+    expect(w.parcels.conditionAt(0)).toBe(120 + P.conditionStep);
   });
 
   it('is reversible: a ruined home heals back when occupancy returns', () => {
     const w = world();
     const homeTile = w.map.idx(4, 4);
     // drain it to ruin
-    for (let i = 0; i < 20; i++) stepRevival(w, () => 0, createRng('x'), P);
+    for (let i = 0; i < 20; i++) stepRevival(w, () => 0, createRng('x'), () => true, P);
     expect(w.parcels.conditionAt(0)).toBe(0);
     // heal it back
-    for (let i = 0; i < 20; i++) stepRevival(w, (t) => (t === homeTile ? 12 : undefined), createRng('y'), P);
+    for (let i = 0; i < 20; i++) stepRevival(w, (t) => (t === homeTile ? 12 : undefined), createRng('y'), () => true, P);
     expect(w.parcels.conditionAt(0)).toBe(255);
   });
 });
