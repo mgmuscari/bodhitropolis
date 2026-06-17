@@ -20,6 +20,7 @@ import {
   ingestTrips,
   setParkingLots,
   setHouseholds,
+  setPlantEmitters,
   chooseMode,
   roadPath,
   curbParkOffset,
@@ -1813,5 +1814,26 @@ describe('liveInspectLine (inspect live-sample formatting)', () => {
     expect(liveInspectLine({ pollution: 1, occupancy: 2, traffic: 3 })).toBe(
       'pop 2 · traffic 3 · smog 1',
     );
+  });
+});
+
+describe('setPlantEmitters (dirty-plant smog into the live pollution field)', () => {
+  it('lays pollution at an emitter tile on a stepAmbient pass', () => {
+    const map = gridMap();
+    const state = createAmbientState();
+    const rng = createRng('plant').fork('ambient');
+    const tile = map.idx(4, 3);
+    setPlantEmitters(state, [{ tile, amount: 6 }]);
+    stepAmbient(state, map, rng, 50);
+    expect(state.pollution.get(tile) ?? 0).toBeGreaterThan(0);
+  });
+
+  it('lays nothing with no emitters published', () => {
+    const map = gridMap();
+    const state = createAmbientState();
+    const rng = createRng('plant2').fork('ambient');
+    const tile = map.idx(4, 3);
+    stepAmbient(state, map, rng, 50);
+    expect(state.pollution.get(tile) ?? 0).toBe(0);
   });
 });
