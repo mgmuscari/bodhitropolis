@@ -26,6 +26,9 @@ describe('GameMap dimensions', () => {
     expect(m.floraVitality.length).toBe(n);
     expect(m.faunaPresence).toBeInstanceOf(Uint8Array);
     expect(m.faunaPresence.length).toBe(n);
+    // Redline grade: the hashed discriminatory social geography, zero-initialised.
+    expect(m.redline).toBeInstanceOf(Uint8Array);
+    expect(m.redline.length).toBe(n);
   });
 
   it('honours custom dimensions', () => {
@@ -160,6 +163,10 @@ describe('GameMap snapshot', () => {
     const fa = make();
     fa.setFaunaPresence(10, 10, 1);
     expect(fa.snapshot()).not.toBe(base);
+
+    const rl = make();
+    rl.setRedline(10, 10, 1);
+    expect(rl.snapshot()).not.toBe(base);
   });
 
   it('distinguishes maps of different dimensions', () => {

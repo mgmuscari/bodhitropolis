@@ -28,6 +28,7 @@ import {
 } from '../engine/fabric';
 import type { Rng } from '../engine/rng';
 import { distanceField, boxDensity, landRun, type Axis } from './fields';
+import { gradeRedline } from './redline';
 import type { WorldgenStage, WorldState } from './pipeline';
 
 // --- Parameters ----------------------------------------------------------
@@ -1496,10 +1497,12 @@ export function era5Disinvestment(world: WorldState, rng: Rng, p: MosesParams, s
 // --- Stage assembly ------------------------------------------------------
 
 /**
- * The Moses-century worldgen stage: founding & streetcar town → motor age →
- * highways & urban renewal → suburban flight → disinvestment, threading one
- * MosesState and forking each era's rng stream by name. On an all-water map era
- * 1 logs "no viable site" and every later era no-ops on the empty state.
+ * The Moses-century worldgen stage: the redline grade is drawn FIRST (the
+ * discriminatory social geography every later burden keys off — see
+ * worldgen/redline), then founding & streetcar town → motor age → highways &
+ * urban renewal → suburban flight → disinvestment, threading one MosesState and
+ * forking each era's rng stream by name. On an all-water map era 1 logs "no
+ * viable site" and every later era no-ops on the empty state.
  */
 export function mosesCenturyStage(params: Partial<MosesParams> = {}): WorldgenStage {
   const p: MosesParams = { ...DEFAULT_MOSES_PARAMS, ...params };
@@ -1507,6 +1510,7 @@ export function mosesCenturyStage(params: Partial<MosesParams> = {}): WorldgenSt
     name: 'moses-century',
     apply(world, rng) {
       const state = createMosesState();
+      gradeRedline(world.map, rng.fork('redline'));
       era1Founding(world, rng.fork('era1'), p, state);
       era2MotorAge(world, rng.fork('era2'), p, state);
       era3Highways(world, rng.fork('era3'), p, state);
