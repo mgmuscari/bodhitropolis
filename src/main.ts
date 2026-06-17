@@ -52,6 +52,7 @@ import { metaButtons } from './ui/dockContent';
 import { computeNeighborhoods } from './civic/neighborhoods';
 import { createCivicState } from './civic/state';
 import { simTick, type SimDeps } from './civic/compose';
+import { stepRevival } from './growth/revival';
 
 const DEFAULT_SEED = 'bodhitropolis';
 const SIM_TICK_MS = 100;
@@ -120,6 +121,9 @@ export function main(): void {
   let ambientOn = true;
   const ambientState = createAmbientState();
   const ambientRng = createRng(seed).fork('ambient');
+  // Revival/decay rng: a stable stream for the slow-cadence growth seam (densify
+  // draws). Forked off the world seed, independent of the ambient + sim streams.
+  const revivalRng = createRng(seed).fork('revival');
   let lastAmbient = performance.now();
 
   // The parking lots that STORE the moving cars: a trip-car parks in the nearest one on
@@ -539,8 +543,15 @@ export function main(): void {
       const wb = wellbeingNow();
       pulseDock.set(pulseLine(wb, prevWellbeing));
       prevWellbeing = wb;
+      // Revival/decay seam: sample the LIVE occupancy into the hashed stock — thriving
+      // homes heal + densify (R1→R2→R3), struggling ones crumble toward a derelict
+      // ruin (reversibly). Runs HERE on the slow civic cadence (sim side), never in
+      // stepAmbient (which must leave the world hash untouched) and never in simTick
+      // (the N=120 gate pins its stock byte-stable). markDirty only on a real change.
+      const revived = stepRevival(world, (tile) => ambientState.occupancy.get(tile), revivalRng);
       refreshParkingLots(); // the player may have rezoned a lot → refresh the storage set
       refreshHouseholds(); // homes may have grown/decayed → refresh who's out living their day
+      if (revived > 0) markDirty(); // condition/density changed → glyphs + tiers → rebuild base
     }
   });
   let last = performance.now();

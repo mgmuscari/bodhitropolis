@@ -42,6 +42,11 @@ const civicDir = path.join(root, 'src/civic');
 // (no DOM) and transcendental-free. Traffic imports only engine; it must not import
 // civic/ecology/worldgen/ui (it is upstream of growth, sibling to ecology/civic).
 const trafficDir = path.join(root, 'src/traffic');
+// src/growth is scanned fail-closed: the revival/decay seam samples the live
+// occupancy into the hashed stock and must stay headless (no DOM) and
+// transcendental-free. Occupancy arrives via an injected accessor, so growth
+// imports only engine + citizens — never ui/civic/ecology/worldgen.
+const growthDir = path.join(root, 'src/growth');
 
 // DOM globals that must never appear in headless layers.
 const FORBIDDEN_DOM = /\b(window|document|HTMLCanvasElement|requestAnimationFrame|navigator|localStorage)\b/;
@@ -81,6 +86,7 @@ const toolsFiles = tsFiles(toolsDir);
 const ecologyFiles = tsFiles(ecologyDir);
 const civicFiles = tsFiles(civicDir);
 const trafficFiles = tsFiles(trafficDir);
+const growthFiles = tsFiles(growthDir);
 
 // Pure-ui allowlist: ui modules that carry NO DOM and NO transcendental Math, so
 // they can be headless-tested like the engine/worldgen layers. The src/ui dir as
@@ -124,6 +130,7 @@ describe('architecture guard: headless + deterministic', () => {
     ...ecologyFiles,
     ...civicFiles,
     ...trafficFiles,
+    ...growthFiles,
   ]) {
     const rel = path.relative(root, file);
     it(`${rel} is DOM-free, ui-free, and transcendental-Math-free`, () => {
@@ -301,6 +308,38 @@ describe('architecture guard: src/traffic scanned fail-closed', () => {
     const rel = path.relative(root, file);
     it(`${rel} (traffic) does not import from civic/ecology/worldgen`, () => {
       const code = stripComments(fs.readFileSync(file, 'utf8'));
+      expect(CIVIC_IMPORT.test(code), `${rel} imports from civic`).toBe(false);
+      expect(ECOLOGY_IMPORT.test(code), `${rel} imports from ecology`).toBe(false);
+      expect(WORLDGEN_IMPORT.test(code), `${rel} imports from worldgen`).toBe(false);
+    });
+  }
+});
+
+describe('architecture guard: src/growth scanned fail-closed', () => {
+  it('scans src/growth and finds at least one file', () => {
+    expect(growthFiles.length).toBeGreaterThan(0);
+  });
+
+  it('discovers and flags a synthetic transcendental violation dropped into src/growth', () => {
+    const probe = path.join(growthDir, '__guard_probe__.ts');
+    fs.writeFileSync(probe, 'export const x = Math.random();\n');
+    try {
+      const discovered = tsFiles(growthDir);
+      expect(discovered, 'scan did not discover the probe file').toContain(probe);
+      const code = stripComments(fs.readFileSync(probe, 'utf8'));
+      expect(FORBIDDEN_MATH.test(code), 'scan did not flag the transcendental token').toBe(true);
+    } finally {
+      fs.unlinkSync(probe);
+    }
+  });
+
+  // Growth (the revival/decay seam) reads live occupancy via an injected accessor;
+  // it imports only engine + citizens, never ui/civic/ecology/worldgen.
+  for (const file of growthFiles) {
+    const rel = path.relative(root, file);
+    it(`${rel} (growth) does not import from ui/civic/ecology/worldgen`, () => {
+      const code = stripComments(fs.readFileSync(file, 'utf8'));
+      expect(UI_IMPORT.test(code), `${rel} imports from ui`).toBe(false);
       expect(CIVIC_IMPORT.test(code), `${rel} imports from civic`).toBe(false);
       expect(ECOLOGY_IMPORT.test(code), `${rel} imports from ecology`).toBe(false);
       expect(WORLDGEN_IMPORT.test(code), `${rel} imports from worldgen`).toBe(false);
