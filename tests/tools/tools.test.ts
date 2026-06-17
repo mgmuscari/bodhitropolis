@@ -368,17 +368,17 @@ describe('applyTool: rezone (building-target) dispatch', () => {
 });
 
 describe('inspectReadout (pure tile readout)', () => {
-  it('reports an empty tile', () => {
-    expect(inspectReadout(freshWorld(), 3, 3)).toBe('(3, 3) empty');
+  it('reports an empty tile as open land', () => {
+    expect(inspectReadout(freshWorld(), 3, 3)).toBe('Open land · (3, 3)');
   });
 
-  it('reports a transport tile by kind', () => {
+  it('names a transport tile', () => {
     const world = freshWorld();
     placeTransport(world.map, 2, 2, BuiltKind.RoadStreet);
-    expect(inspectReadout(world, 2, 2)).toBe('(2, 2) transport kind 1');
+    expect(inspectReadout(world, 2, 2)).toBe('Street · (2, 2)');
   });
 
-  it('reports a building tile with its parcel id and condition', () => {
+  it('names a building tile with zone, density, and condition percent', () => {
     const world = freshWorld();
     const pid = placeParcel(world.map, world.parcels, {
       x: 4,
@@ -387,12 +387,25 @@ describe('inspectReadout (pure tile readout)', () => {
       height: 1,
       kind: BuiltKind.HouseSingle,
     });
-    world.parcels.setCondition(pid, 100);
-    expect(inspectReadout(world, 4, 4)).toBe(`(4, 4) building kind 16 · parcel ${pid + 1} · condition 100`);
+    world.parcels.setCondition(pid, 128); // 128/255 ≈ 50%
+    expect(inspectReadout(world, 4, 4)).toBe('Single-family Home · Residential · density 1 · 50% · (4, 4)');
+  });
+
+  it('omits zone/density for a non-zone building (greens)', () => {
+    const world = freshWorld();
+    const pid = placeParcel(world.map, world.parcels, {
+      x: 6,
+      y: 6,
+      width: 1,
+      height: 1,
+      kind: BuiltKind.Parklet,
+    });
+    world.parcels.setCondition(pid, 255);
+    expect(inspectReadout(world, 6, 6)).toBe('Parklet · 100% · (6, 6)');
   });
 
   it('reports an out-of-bounds tile', () => {
-    expect(inspectReadout(freshWorld(), -1, 0)).toBe('(-1, 0) out of bounds');
+    expect(inspectReadout(freshWorld(), -1, 0)).toBe('Out of bounds · (-1, 0)');
   });
 
   it('is pure: equal inputs, equal output, no mutation', () => {

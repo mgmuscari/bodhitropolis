@@ -1494,6 +1494,31 @@ export function spawnTargetFor(totalOccupancy: number): number {
   return t > CITIZEN_MAX_OUT ? CITIZEN_MAX_OUT : t;
 }
 
+/** The LIVE sample values the inspector appends to its readout — each undefined when the tile
+ *  carries no such field (a road has traffic/smog but no population; a home the reverse). */
+export interface LiveSamples {
+  occupancy?: number;
+  landValue?: number;
+  health?: number;
+  traffic?: number;
+  pollution?: number;
+}
+
+/**
+ * Format the live-layer samples for the inspect readout — `pop 12 · land value 64 · traffic 30 ·
+ * smog 8`, in a fixed order, omitting any field the tile doesn't carry. Returns '' when nothing is
+ * present (so the host appends nothing). Pure: rounds for display, reads only its argument.
+ */
+export function liveInspectLine(s: LiveSamples): string {
+  const parts: string[] = [];
+  if (s.occupancy !== undefined) parts.push(`pop ${Math.round(s.occupancy)}`);
+  if (s.landValue !== undefined) parts.push(`land value ${Math.round(s.landValue)}`);
+  if (s.health !== undefined) parts.push(`health ${Math.round(s.health)}`);
+  if (s.traffic !== undefined) parts.push(`traffic ${Math.round(s.traffic)}`);
+  if (s.pollution !== undefined) parts.push(`smog ${Math.round(s.pollution)}`);
+  return parts.join(' · ');
+}
+
 /** Re-evaluate every home's occupancy from the live conditions at its tile (land value, smog, the
  *  wellbeing its citizens bring home), drifting it toward capacity or empty. Seeded lazily from the
  *  census baseline; rebuilt fresh over the current homes each pass so a demolished home drops out.
