@@ -34,6 +34,9 @@ import {
   freewayLane,
   pollutionEmit,
   pedCost,
+  landValueAt,
+  recomputeLandValue,
+  nearestOfCategory,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -637,6 +640,90 @@ describe('pollution: pedestrians shun smoggy tiles (pedCost feedback)', () => {
     const clean = pedCost(map, 3, 3, undefined, undefined, undefined);
     const smoggy = pedCost(map, 3, 3, undefined, undefined, new Map([[i, 255]]));
     expect(smoggy).toBeGreaterThan(clean);
+  });
+});
+
+describe('land value: derived from amenities minus live nuisances', () => {
+  it('is higher next to an amenity than far from one', () => {
+    const map = new GameMap(8, 8);
+    map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
+    map.built[map.idx(3, 4)] = BuiltKind.Park; // amenity neighbour
+    const withPark = landValueAt(map, 3, 3);
+    map.built[map.idx(3, 4)] = BuiltKind.None;
+    const without = landValueAt(map, 3, 3);
+    expect(withPark).toBeGreaterThan(without);
+  });
+
+  it('is lower under heavy pollution', () => {
+    const map = new GameMap(8, 8);
+    map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
+    const i = map.idx(3, 3);
+    const clean = landValueAt(map, 3, 3);
+    const smoggy = landValueAt(map, 3, 3, new Map([[i, 255]]));
+    expect(smoggy).toBeLessThan(clean);
+  });
+
+  it('is lower under heavy traffic', () => {
+    const map = new GameMap(8, 8);
+    map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
+    const i = map.idx(3, 3);
+    const quiet = landValueAt(map, 3, 3);
+    const busy = landValueAt(map, 3, 3, undefined, new Map([[i, 255]]));
+    expect(busy).toBeLessThan(quiet);
+  });
+
+  it('clamps to [0, 255]', () => {
+    const map = new GameMap(8, 8);
+    map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
+    map.floraVitality.fill(255);
+    map.faunaPresence.fill(255);
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      map.built[map.idx(3 + dx, 3 + dy)] = BuiltKind.Park;
+    }
+    expect(landValueAt(map, 3, 3)).toBeLessThanOrEqual(255);
+    const i = map.idx(3, 3);
+    const bad = landValueAt(map, 3, 3, new Map([[i, 255]]), new Map([[i, 255]]), new Map([[i, 255]]));
+    expect(bad).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('land value: recomputed over inhabited plots on a cadence', () => {
+  it('values each zone plot, reflects amenities, and skips non-zone tiles', () => {
+    const map = new GameMap(12, 12);
+    map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
+    map.built[map.idx(3, 4)] = BuiltKind.Park; // good neighbour for (3,3)
+    map.built[map.idx(8, 8)] = BuiltKind.HouseSingle; // plain
+    const state = createAmbientState();
+    const rng = ambientFork('lv');
+    for (let i = 0; i < 40; i++) stepAmbient(state, map, rng, 50); // > LV_CADENCE
+    const good = state.landValue.get(map.idx(3, 3)) ?? -1;
+    const plain = state.landValue.get(map.idx(8, 8)) ?? -1;
+    expect(good).toBeGreaterThan(0);
+    expect(plain).toBeGreaterThan(0);
+    expect(good).toBeGreaterThan(plain);
+    expect(state.landValue.has(map.idx(3, 4))).toBe(false); // the park is not a zone plot
+  });
+
+  it('drops a demolished plot on the next recompute (rebuilt fresh)', () => {
+    const map = new GameMap(8, 8);
+    map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
+    const state = createAmbientState();
+    recomputeLandValue(state, map);
+    expect(state.landValue.has(map.idx(3, 3))).toBe(true);
+    map.built[map.idx(3, 3)] = BuiltKind.None;
+    recomputeLandValue(state, map);
+    expect(state.landValue.has(map.idx(3, 3))).toBe(false);
+  });
+});
+
+describe('land value steers citizen destination choice', () => {
+  it('prefers a higher-value plot over a nearer drab one within the pull margin', () => {
+    const map = new GameMap(40, 12);
+    map.built[map.idx(10, 5)] = BuiltKind.CommercialStrip; // near, drab
+    map.built[map.idx(16, 5)] = BuiltKind.CommercialStrip; // far, prized
+    const lv = new Map([[map.idx(10, 5), 10], [map.idx(16, 5), 255]]);
+    expect(nearestOfCategory(map, 8, 5, StopCategory.Shop, lv)).toEqual({ x: 16, y: 5 });
+    expect(nearestOfCategory(map, 8, 5, StopCategory.Shop)).toEqual({ x: 10, y: 5 }); // no LV → nearest
   });
 });
 
