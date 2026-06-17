@@ -14,6 +14,7 @@ import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
+import { parcelGlyph } from './glyphContent';
 import { laneOffset, curbParkOffset, pedCurbOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
 import { TravelMode } from '../citizens/modes';
@@ -55,6 +56,11 @@ const CAR_COLORS = ['#a8483c', '#3f6e86', '#cfc8b4', '#5a7d4e', '#9a8466', '#464
 // spacing in decoration.ts so each pole's wire reaches the next pole, reading as a
 // continuous line. Purely cosmetic (the placement decision is poleWireDirs').
 const POLE_WIRE_REACH = 4;
+
+// Below this on-screen tile size (px) the SNES-style parcel glyphs (R1/C2/I/civic)
+// are skipped — they would be an unreadable smear when zoomed out. Above it, one
+// glyph is stamped per footprint, centered, with a dark halo for contrast.
+const GLYPH_MIN_TS = 16;
 
 // Dharmapunk-warm terrain palette: [base, accent] per tile kind. The accent is
 // dithered in for subtle texture (deep/shallow water, gold-green meadows).
@@ -542,6 +548,29 @@ export class Renderer {
               ctx.moveTo(cx, cy);
               ctx.lineTo(cx + ox * ts * POLE_WIRE_REACH, cy + oy * ts * POLE_WIRE_REACH);
               ctx.stroke();
+            }
+          }
+
+          // SNES-style legibility glyph: one letter per parcel (R1/C2/I/civic),
+          // stamped once at the footprint's anchor tile and centered over the whole
+          // footprint, skipped when zoomed out (GLYPH_MIN_TS). The DECISION
+          // (which glyph) is pure (glyphContent.ts); the draw is the thin shell.
+          if (!isT && pid !== 0 && ts >= GLYPH_MIN_TS) {
+            const pp = parcels.get(pid - 1);
+            if (tx === pp.x && ty === pp.y) {
+              const glyph = parcelGlyph(pp.kind, pp.density);
+              if (glyph) {
+                const gx = dx + (pp.width * ts) / 2;
+                const gy = dy + (pp.height * ts) / 2;
+                ctx.font = `bold ${Math.max(8, Math.floor(ts * 0.55))}px "Courier New", ui-monospace, monospace`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.lineWidth = Math.max(2, ts * 0.12);
+                ctx.strokeStyle = 'rgba(12, 10, 18, 0.85)';
+                ctx.strokeText(glyph, gx, gy);
+                ctx.fillStyle = 'rgba(240, 236, 214, 0.92)';
+                ctx.fillText(glyph, gx, gy);
+              }
             }
           }
         }

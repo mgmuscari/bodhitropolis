@@ -104,6 +104,7 @@ const PURE_UI_ALLOWLIST = [
   'src/ui/dockContent.ts',
   'src/ui/ambientContent.ts',
   'src/ui/parkingContent.ts',
+  'src/ui/glyphContent.ts',
 ];
 
 describe('architecture guard: headless + deterministic', () => {
