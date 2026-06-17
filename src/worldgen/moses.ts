@@ -77,8 +77,8 @@ export interface MosesParams {
   era4DeclineMin: number; // min condition lost by a declining inner-city parcel
   era4DeclineMax: number; // max condition lost by a declining inner-city parcel
   // Era 5 disinvestment
-  maxDecay: number; // condition lost at a highway tile (d = 0)
-  decayK: number; // k in the rational decay falloff 1/(1 + k*d) (redlining-shaped)
+  maxDecay: number; // condition lost by a fully redlined parcel (grade 255)
+  decayK: number; // legacy: highway-distance falloff k (decay now follows the grade)
   decayNoise: number; // extra random condition loss (0..decayNoise)
   abandonThreshold: number; // a parcel below this after decay is abandoned
   craterChance: number; // fraction of abandoned parcels that become parking craters
@@ -133,7 +133,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era4DeclineRadius: 24,
   era4DeclineMin: 20,
   era4DeclineMax: 60,
-  maxDecay: 200,
+  maxDecay: 340,
   decayK: 0.15,
   decayNoise: 20,
   abandonThreshold: 40,
@@ -1433,45 +1433,49 @@ export function eraSatellites(world: WorldState, rng: Rng, p: MosesParams, state
 
 // --- Era 5: disinvestment ------------------------------------------------
 
-/** Minimum value of `field` over parcel `i`'s footprint (>= 0 entries only). */
-function parcelFieldMin(map: GameMap, parcels: ParcelStore, i: number, field: Int32Array): number {
+/** Mean redline grade (0..255) over parcel `i`'s footprint. */
+function parcelMeanRedline(map: GameMap, parcels: ParcelStore, i: number): number {
   const e = parcels.get(i);
-  let lo = Infinity;
+  let sum = 0;
+  let n = 0;
   for (let dy = 0; dy < e.height; dy++) {
     for (let dx = 0; dx < e.width; dx++) {
-      const v = field[map.idx(e.x + dx, e.y + dy)]!;
-      if (v >= 0 && v < lo) lo = v;
+      sum += map.redline[map.idx(e.x + dx, e.y + dy)]!;
+      n++;
     }
   }
-  return lo === Infinity ? -1 : lo;
+  return n > 0 ? sum / n : 0;
 }
 
 /**
  * Era 5 — disinvestment. Two passes (yield point 6): pass 1 decays every parcel
- * by a redlining-shaped rational falloff of highway distance (steepest beside
- * the expressway) plus rng noise, collecting those that fall below the
- * abandonment threshold; pass 2 demolishes that pre-collected list (so aliveness
- * is never mutated mid-iteration), turning craterChance of them into vacant
- * parking lots on the cleared footprint. No-ops if never founded.
+ * by its REDLINE GRADE (the most redlined districts lose the most condition) plus
+ * rng noise, collecting those that fall below the abandonment threshold; pass 2
+ * demolishes that pre-collected list (so aliveness is never mutated mid-iteration),
+ * turning craterChance of them into vacant parking lots on the cleared footprint.
+ *
+ * Decay no longer keys off highway distance directly: highways are routed THROUGH
+ * redlined districts (era 3), so the near-expressway decay gradient re-emerges as a
+ * CONSEQUENCE of the grade, not its cause — the inversion that names the policy
+ * instead of naturalizing the wound. The neutral live result is "decay". No-ops if
+ * never founded.
  */
 export function era5Disinvestment(world: WorldState, rng: Rng, p: MosesParams, state: MosesState): void {
   if (!state.founded) return;
   const { map, parcels } = world;
 
   state.preEra5Alive = parcels.aliveCount();
-  const highwayDist = distanceField(map, (i) => map.built[i] === BuiltKind.RoadHighway);
-  const farDist = map.width + map.height; // for parcels with no highway anywhere
 
-  // Pass 1: decay all (pre-collected snapshot; no demolition here).
+  // Pass 1: decay all (pre-collected snapshot; no demolition here). Loss scales
+  // with the redline grade — greenlined (grade 0) loses only noise; redlined
+  // (grade 255) loses the full maxDecay.
   const snapshot = parcels.aliveIndices();
   const decayRng = rng.fork('decay');
   const doomed: number[] = [];
   let decayed = 0;
   for (const idx of snapshot) {
-    const dRaw = parcelFieldMin(map, parcels, idx, highwayDist);
-    const d = dRaw >= 0 ? dRaw : farDist;
-    const falloff = 1 / (1 + p.decayK * d); // rational, redlining-shaped
-    const loss = Math.floor(p.maxDecay * falloff) + decayRng.nextInt(p.decayNoise + 1);
+    const grade = parcelMeanRedline(map, parcels, idx); // 0..255
+    const loss = Math.floor((p.maxDecay * grade) / 255) + decayRng.nextInt(p.decayNoise + 1);
     parcels.setCondition(idx, parcels.conditionAt(idx) - loss);
     decayed++;
     if (parcels.conditionAt(idx) < p.abandonThreshold) doomed.push(idx);

@@ -819,46 +819,46 @@ describe('era4Suburbs', () => {
   }
 });
 
-// Min highway distance over parcel `i`'s footprint, using a precomputed field.
-function parcelHighwayDist(map: GameMap, parcels: WorldState['parcels'], i: number, field: Int32Array): number {
+// Mean redline grade (0..255) over parcel `i`'s footprint.
+function parcelMeanRedlineT(map: GameMap, parcels: WorldState['parcels'], i: number): number {
   const e = parcels.get(i);
-  let lo = Infinity;
+  let sum = 0;
+  let n = 0;
   for (let yy = e.y; yy < e.y + e.height; yy++) {
     for (let xx = e.x; xx < e.x + e.width; xx++) {
-      const v = field[map.idx(xx, yy)]!;
-      if (v >= 0 && v < lo) lo = v;
+      sum += map.redline[map.idx(xx, yy)]!;
+      n++;
     }
   }
-  return lo;
+  return n > 0 ? sum / n : 0;
 }
 
-// Runs eras 1-4, partitions the parcels alive at the START of era 5 by highway
-// distance (near <= 8 / far >= 16), snapshots parking count, then runs era 5.
-// Cohorts are fixed pre-era-5 and outcomes count abandoned parcels at condition
-// 0 — the survivorship-bias-free blight measure (yield point 3).
+// Runs eras 1-4, partitions the parcels alive at the START of era 5 by REDLINE
+// GRADE (redlined >= 176 / greenlined <= 80), snapshots parking count, then runs
+// era 5. Cohorts are fixed pre-era-5 and outcomes count abandoned parcels at
+// condition 0 — the survivorship-bias-free decay measure (yield point 3).
 function runEra5(seed: string) {
   const { world, state } = runEras(seed, 4);
   const { map, parcels } = world;
-  const highwayDist = distanceField(map, (i) => map.built[i] === BuiltKind.RoadHighway);
   const preAlive = parcels.aliveIndices();
-  const near = preAlive.filter((i) => parcelHighwayDist(map, parcels, i, highwayDist) <= 8);
-  const far = preAlive.filter((i) => parcelHighwayDist(map, parcels, i, highwayDist) >= 16);
+  const redlined = preAlive.filter((i) => parcelMeanRedlineT(map, parcels, i) >= 176);
+  const greenlined = preAlive.filter((i) => parcelMeanRedlineT(map, parcels, i) <= 80);
   const parkingBefore = aliveKindCount(world, BuiltKind.ParkingLot);
   era5Disinvestment(world, createRng(seed).fork('era5'), P, state);
-  return { world, state, near, far, parkingBefore };
+  return { world, state, redlined, greenlined, parkingBefore };
 }
 
-describe('era5Disinvestment blight & abandonment', () => {
+describe('era5Disinvestment decay & abandonment', () => {
   for (const seed of SEEDS) {
-    it(`seed "${seed}": blight gradient holds without survivorship bias (yield point 3)`, () => {
-      const { world, near, far } = runEra5(seed);
+    it(`seed "${seed}": decay follows the redline grade (no survivorship bias)`, () => {
+      const { world, redlined, greenlined } = runEra5(seed);
       const { parcels } = world;
-      expect(near.length).toBeGreaterThanOrEqual(5); // non-vacuous cohorts
-      expect(far.length).toBeGreaterThanOrEqual(5);
+      expect(redlined.length).toBeGreaterThanOrEqual(5); // non-vacuous cohorts
+      expect(greenlined.length).toBeGreaterThanOrEqual(5);
       // Outcome: surviving condition, or 0 for an abandoned (demolished) parcel.
       const outcome = (i: number) => (parcels.isAlive(i) ? parcels.conditionAt(i) : 0);
       const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
-      expect(mean(near.map(outcome))).toBeLessThan(mean(far.map(outcome)));
+      expect(mean(redlined.map(outcome))).toBeLessThan(mean(greenlined.map(outcome)));
     });
 
     it(`seed "${seed}": >= 10% of the standing city is abandoned (chronicle matches store)`, () => {
@@ -880,17 +880,17 @@ describe('era5Disinvestment blight & abandonment', () => {
 
 describe('era5Disinvestment crater fields (urban-density Task 7)', () => {
   it('a crater expands into a parking field on cleared land; balance stays exact', () => {
-    // Constructed fixture (seed-independent): a highway tile + an adjacent
-    // low-condition house with open land around it, so era-5 decay dooms the
-    // house and the crater FIELD has contiguous room to form. Pins the wiring
-    // (placeParkingField reused on the cleared footprint, count summed into
-    // craters) without relying on fragile organic clustering on moses-1/2/3.
+    // Constructed fixture (seed-independent): a REDLINED low-condition house with
+    // open land around it, so grade-driven era-5 decay dooms it and the crater
+    // FIELD has contiguous room to form. Pins the wiring (placeParkingField reused
+    // on the cleared footprint, count summed into craters) without relying on
+    // fragile organic clustering on moses-1/2/3.
     const map = new GameMap(24, 24);
     const parcels = new ParcelStore();
-    map.built[map.idx(10, 5)] = BuiltKind.RoadHighway;
     placeParcel(map, parcels, {
       x: 10, y: 6, width: 1, height: 1, kind: BuiltKind.HouseSingle, density: 1, condition: 45,
     });
+    map.redline[map.idx(10, 6)] = 255; // fully redlined → grade-driven decay dooms it
     const world: WorldState = { seed: 'crater-field', map, parcels, log: [] };
     const state = createMosesState();
     state.founded = true;
