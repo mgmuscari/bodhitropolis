@@ -2,10 +2,23 @@ import { describe, it, expect } from 'vitest';
 import { metaButtons } from '../../src/ui/dockContent';
 
 describe('metaButtons', () => {
-  it('has fixed labels in tech/eco/civic/life order', () => {
+  it('has fixed labels in tech/eco/civic/redline/life order', () => {
     const bs = metaButtons(false, null, false);
-    expect(bs.map((b) => b.id)).toEqual(['tech', 'eco', 'civic', 'life']);
-    expect(bs.map((b) => b.label)).toEqual(['Tech (T)', 'Eco (E)', 'Civic (C)', 'Life (L)']);
+    expect(bs.map((b) => b.id)).toEqual(['tech', 'eco', 'civic', 'redline', 'life']);
+    expect(bs.map((b) => b.label)).toEqual([
+      'Tech (T)',
+      'Eco (E)',
+      'Civic (C)',
+      'Redline (R)',
+      'Life (L)',
+    ]);
+  });
+
+  it('marks Redline active iff the redline overlay is up (others not)', () => {
+    const bs = metaButtons(false, { kind: 'redline' }, false);
+    expect(bs.find((b) => b.id === 'redline')!.active).toBe(true);
+    expect(bs.find((b) => b.id === 'eco')!.active).toBe(false);
+    expect(bs.find((b) => b.id === 'civic')!.active).toBe(false);
   });
 
   it('marks none active when the panel is closed, no overlay is up, and ambient is off', () => {

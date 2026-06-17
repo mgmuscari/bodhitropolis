@@ -90,17 +90,28 @@ describe('cycleComposite: E/C exclusivity truth table', () => {
     // C-then-E clears civic → eco-soil
     expect(cycleComposite(civic('voice'), 'eco')).toEqual(eco('soil'));
   });
+
+  it('redline is a single-view kind that off-wraps and obeys exclusivity', () => {
+    const redline = (view: string): CompositeState => ({ kind: 'redline', view });
+    expect(cycleComposite(null, 'redline')).toEqual(redline('grade'));
+    expect(cycleComposite(redline('grade'), 'redline')).toBeNull(); // one view → off-wrap
+    // exclusivity both ways
+    expect(cycleComposite(civic('voice'), 'redline')).toEqual(redline('grade'));
+    expect(cycleComposite(redline('grade'), 'eco')).toEqual(eco('soil'));
+  });
 });
 
-describe('compositeKeyFor: shared E/C gate', () => {
-  it('maps e/E → eco, c/C → civic, suppressed under the opening overlay', () => {
+describe('compositeKeyFor: shared E/C/R gate', () => {
+  it('maps e/E → eco, c/C → civic, r/R → redline, suppressed under the opening overlay', () => {
     expect(compositeKeyFor('e', false)).toBe('eco');
     expect(compositeKeyFor('E', false)).toBe('eco');
     expect(compositeKeyFor('c', false)).toBe('civic');
     expect(compositeKeyFor('C', false)).toBe('civic');
+    expect(compositeKeyFor('r', false)).toBe('redline');
+    expect(compositeKeyFor('R', false)).toBe('redline');
     expect(compositeKeyFor('t', false)).toBeNull();
     expect(compositeKeyFor('Enter', false)).toBeNull();
-    expect(compositeKeyFor('e', true)).toBeNull(); // opening active suppresses both
-    expect(compositeKeyFor('c', true)).toBeNull();
+    expect(compositeKeyFor('e', true)).toBeNull(); // opening active suppresses all
+    expect(compositeKeyFor('r', true)).toBeNull();
   });
 });
