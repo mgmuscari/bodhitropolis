@@ -18,7 +18,7 @@ import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
-import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, seedBlight } from './ui/ambientContent';
+import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, seedBlight, liveInspectLine } from './ui/ambientContent';
 import { residentialCensus } from './citizens/census';
 import { parkingLots, parkingStalls } from './ui/parkingContent';
 import { attachInput } from './ui/input';
@@ -414,7 +414,26 @@ export function main(): void {
     // Inspect is free + non-mutating: surface its readout to the dock status line
     // (PRD: a minimal console-free line in the dock) without the mutate-path churn.
     if (def.id === 'inspect') {
-      if (r.info !== undefined) toolbar.setStatus(r.info);
+      // The pure readout NAMES the seeded tile; append the LIVE samples the ambient
+      // layer carries. Population/health/land-value are keyed by the parcel ANCHOR
+      // (resolve through the parcel store); traffic/smog by the clicked tile itself.
+      let line = r.info ?? '';
+      const i = world.map.idx(tx, ty);
+      const pid = world.map.parcel[i];
+      let anchor = i;
+      if (pid) {
+        const p = world.parcels.get(pid - 1);
+        anchor = world.map.idx(p.x, p.y);
+      }
+      const live = liveInspectLine({
+        occupancy: ambientState.occupancy.get(anchor),
+        landValue: ambientState.landValue.get(anchor),
+        health: ambientState.buildingHealth.get(anchor),
+        traffic: ambientState.traffic.get(i),
+        pollution: ambientState.pollution.get(i),
+      });
+      if (live) line += ` · ${live}`;
+      toolbar.setStatus(line);
       return;
     }
     if (r.ok) {

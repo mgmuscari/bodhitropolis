@@ -22,6 +22,8 @@ import {
   demolishParcel,
   demolishTransportAt,
 } from '../engine/fabric';
+import { builtKindName } from '../engine/builtNames';
+import { ZoneType, zoneTypeOf } from '../engine/zone';
 import type { GameMap } from '../engine/map';
 import type { TechState } from '../tech/state';
 
@@ -247,22 +249,37 @@ export function previewTool(
   return { valid: true };
 }
 
+/** Human label for a parcel's RCI zone class (empty for non-zone greens/parking). */
+const ZONE_LABEL: Readonly<Record<number, string>> = {
+  [ZoneType.Residential]: 'Residential',
+  [ZoneType.Commercial]: 'Commercial',
+  [ZoneType.Industrial]: 'Industrial',
+  [ZoneType.Civic]: 'Civic',
+};
+
 /**
- * Minimal inspect readout for the dock status line (PRD: a console-free line
- * showing kind / condition / parcel info; the full inspector is a later feature).
- * Pure — reads the map + parcel store, mutates nothing, costs nothing — and
- * exported so the formatting is unit-tested directly rather than only via applyTool.
+ * Human-readable inspect readout for the dock status line: NAMES what's under the
+ * cursor and gives real info instead of an id number. Open land, named transport,
+ * or — for a building — its name, zone class, density tier, and condition percent.
+ * The host appends LIVE samples (population / land value / traffic / smog) it reads
+ * from the ambient layer; this pure core covers the seeded world. Pure — reads the
+ * map + parcel store, mutates nothing — and exported so the formatting is unit-tested.
  */
 export function inspectReadout(world: ToolWorld, x: number, y: number): string {
   const { map, parcels } = world;
-  if (!map.inBounds(x, y)) return `(${x}, ${y}) out of bounds`;
+  if (!map.inBounds(x, y)) return `Out of bounds · (${x}, ${y})`;
   const i = map.idx(x, y);
   const built = map.built[i]!;
-  if (built === 0) return `(${x}, ${y}) empty`;
-  if (isTransportKind(built)) return `(${x}, ${y}) transport kind ${built}`;
+  if (built === 0) return `Open land · (${x}, ${y})`;
+  if (isTransportKind(built)) return `${builtKindName(built as BuiltKind)} · (${x}, ${y})`;
+
   const pid = map.parcel[i]!;
-  const cond = pid !== 0 ? parcels.conditionAt(pid - 1) : 255;
-  return `(${x}, ${y}) building kind ${built} · parcel ${pid} · condition ${cond}`;
+  const name = builtKindName(built as BuiltKind);
+  const pct = pid !== 0 ? Math.round((parcels.conditionAt(pid - 1) / 255) * 100) : 100;
+  const zone = ZONE_LABEL[zoneTypeOf(built)];
+  if (zone === undefined) return `${name} · ${pct}% · (${x}, ${y})`; // greens / parking
+  const density = pid !== 0 ? parcels.densityAt(pid - 1) : 1;
+  return `${name} · ${zone} · density ${density} · ${pct}% · (${x}, ${y})`;
 }
 
 /**
