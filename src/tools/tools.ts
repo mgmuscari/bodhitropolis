@@ -89,6 +89,17 @@ interface BuildEntry {
 }
 
 const BUILD_TABLE: Readonly<Record<number, BuildEntry>> = {
+  // Classic primitives — always buildable (the original city tools), see
+  // CLASSIC_BUILD_KINDS. Roads/rail are transport (drag-paint lines, no
+  // footprint); R/C/I/Civic plop a density-1 base parcel the sim then grows.
+  [BuiltKind.RoadStreet]: { label: 'Street', cost: 2 },
+  [BuiltKind.RoadAvenue]: { label: 'Avenue', cost: 3 },
+  [BuiltKind.RoadHighway]: { label: 'Highway', cost: 5 },
+  [BuiltKind.Rail]: { label: 'Rail', cost: 4 },
+  [BuiltKind.HouseSingle]: { label: 'Residential', cost: 4, footprint: { w: 1, h: 1 } },
+  [BuiltKind.CommercialStrip]: { label: 'Commercial', cost: 6, footprint: { w: 1, h: 1 } },
+  [BuiltKind.Industrial]: { label: 'Industrial', cost: 6, footprint: { w: 1, h: 1 } },
+  [BuiltKind.Civic]: { label: 'Civic', cost: 12, footprint: { w: 2, h: 2 } },
   // Transit (transport tools)
   [BuiltKind.BikePath]: { label: 'Bike Path', cost: 3 },
   [BuiltKind.Streetcar]: { label: 'Streetcar', cost: 6 },
@@ -137,6 +148,21 @@ const CONVERT_TARGETS: readonly number[] = Object.keys(CONVERT_TABLE)
   .map(Number)
   .sort((a, b) => a - b);
 
+// The classic city primitives — always buildable regardless of tech, in stable
+// layout order: the four roads/rail, then the R/C/I/Civic base zones. These are
+// the "original" tools; the tech tree LAYERS its kinds on top (availableTools).
+const CLASSIC_BUILD_KINDS: readonly BuiltKind[] = [
+  BuiltKind.RoadStreet,
+  BuiltKind.RoadAvenue,
+  BuiltKind.RoadHighway,
+  BuiltKind.Rail,
+  BuiltKind.HouseSingle,
+  BuiltKind.CommercialStrip,
+  BuiltKind.Industrial,
+  BuiltKind.Civic,
+];
+const CLASSIC_BUILD_SET: ReadonlySet<number> = new Set(CLASSIC_BUILD_KINDS);
+
 /** True iff `to` is a tech-granted transit kind (5..9) vs a classic kind (1..4). */
 function isTechTarget(to: number): boolean {
   return to >= 5 && to <= 9;
@@ -167,8 +193,9 @@ export function toolDef(id: ToolId): ToolDef | undefined {
 
 /**
  * The tools available given `tech`'s grants, in a stable order: inspect, bulldoze,
- * then one build tool per granted kind (ascending kind), then the conversion tools
- * (ascending target). Conversion gating is three-branch: a building target (the
+ * the always-on CLASSIC primitives (roads/rail + R/C/I/Civic base zones), then one
+ * build tool per granted kind (ascending kind, classics de-duped), then the
+ * conversion tools (ascending target). Conversion gating is three-branch: a building target (the
  * rezoning greens 61/62) needs its kind granted; a tech transit target (5..9) needs
  * its kind granted; a classic road target (1..4) needs the `road-diets` capability
  * (the PRD road diet / boulevard reversal the tree never grants as a kind).
@@ -176,8 +203,14 @@ export function toolDef(id: ToolId): ToolDef | undefined {
 export function availableTools(tech: TechState): ToolDef[] {
   const out: ToolDef[] = [toolDef('inspect')!, toolDef('bulldoze')!];
 
+  // Classic primitives first — always present, in their fixed layout order.
+  for (const k of CLASSIC_BUILD_KINDS) out.push(toolDef(`build-${k}`)!);
+
+  // Then the tech-granted build kinds (ascending), skipping any classic kind a
+  // node might also grant (none today) so a kind never appears twice.
   const granted = [...tech.grantedKinds()].sort((a, b) => a - b);
   for (const k of granted) {
+    if (CLASSIC_BUILD_SET.has(k)) continue;
     const def = toolDef(`build-${k}`);
     if (def) out.push(def);
   }

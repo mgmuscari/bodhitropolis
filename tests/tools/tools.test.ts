@@ -16,6 +16,7 @@ import {
   checkParcelAgreement,
 } from '../../src/engine/fabric';
 import { GameMap, Water } from '../../src/engine/map';
+import { isLineTool } from '../../src/ui/lineTools';
 import { createTechState, type TechState } from '../../src/tech/state';
 import { TECH_TREE } from '../../src/tech/tree';
 
@@ -126,6 +127,53 @@ describe('availableTools reflects grants', () => {
       t.unlock('parklets');
     }
     expect(availableTools(a)).toEqual(availableTools(b));
+  });
+});
+
+describe('classic primitives (always buildable)', () => {
+  it('resolves the classic road/rail build tools as transport (no footprint)', () => {
+    expect(toolDef('build-1')!.name).toBe('Street');
+    expect(toolDef('build-1')!.kind).toBe(BuiltKind.RoadStreet);
+    expect(toolDef('build-1')!.footprint).toBeUndefined();
+    expect(toolDef('build-2')!.name).toBe('Avenue');
+    expect(toolDef('build-3')!.name).toBe('Highway');
+    expect(toolDef('build-4')!.name).toBe('Rail');
+  });
+
+  it('resolves the classic R/C/I/Civic zone build tools with footprints', () => {
+    expect(toolDef('build-16')!.name).toBe('Residential');
+    expect(toolDef('build-16')!.kind).toBe(BuiltKind.HouseSingle);
+    expect(toolDef('build-16')!.footprint).toEqual({ w: 1, h: 1 });
+    expect(toolDef('build-19')!.name).toBe('Commercial');
+    expect(toolDef('build-21')!.name).toBe('Industrial');
+    expect(toolDef('build-23')!.name).toBe('Civic');
+    expect(toolDef('build-23')!.footprint).toEqual({ w: 2, h: 2 });
+  });
+
+  it('offers every classic primitive with NOTHING unlocked', () => {
+    const list = ids(freshTech(0));
+    for (const id of ['build-1', 'build-2', 'build-3', 'build-4', 'build-16', 'build-19', 'build-21', 'build-23']) {
+      expect(list).toContain(id);
+    }
+  });
+
+  it('places a classic Street on empty land and a Residential parcel', () => {
+    const world = freshWorld();
+    const tech = freshTech(1000);
+    const street = applyTool(world, tech, toolDef('build-1')!, 5, 5);
+    expect(street.ok).toBe(true);
+    expect(world.map.built[world.map.idx(5, 5)]).toBe(BuiltKind.RoadStreet);
+
+    const res = applyTool(world, tech, toolDef('build-16')!, 8, 8);
+    expect(res.ok).toBe(true);
+    expect(world.map.built[world.map.idx(8, 8)]).toBe(BuiltKind.HouseSingle);
+  });
+
+  it('classifies classic roads as line tools, classic zones as point tools', () => {
+    expect(isLineTool(toolDef('build-1')!)).toBe(true);
+    expect(isLineTool(toolDef('build-4')!)).toBe(true);
+    expect(isLineTool(toolDef('build-16')!)).toBe(false);
+    expect(isLineTool(toolDef('build-23')!)).toBe(false);
   });
 });
 
