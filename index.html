@@ -232,6 +232,22 @@
 
       /* Categorized dock (v2): top-level modes + category tiles in one row; the
          open category's tools in a flyout above. Pictorial icons + pixel labels. */
+      /* Drag grip: the only surface that moves the dock (tool clicks must not). */
+      .toolbar-grip {
+        align-self: stretch;
+        text-align: center;
+        font-size: 0.66rem;
+        letter-spacing: 0.18em;
+        color: #6f6b84;
+        cursor: move;
+        user-select: none;
+        padding: 0.1rem 0 0.25rem;
+        margin-bottom: 0.1rem;
+        border-bottom: 1px solid #2a2840;
+      }
+      .toolbar-grip:hover {
+        color: #c8c264;
+      }
       .toolbar-main {
         display: flex;
         flex-wrap: wrap;

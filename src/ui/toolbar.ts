@@ -16,6 +16,7 @@
 
 import type { ToolMenuView, ToolCategory } from './toolMenuContent';
 import type { MetaButton } from './dockContent';
+import { clampDockPosition } from './dockLayout';
 
 export interface ToolbarDeps {
   /** Re-derive the current dock view (assembled in main.ts from pure modules). */
@@ -44,6 +45,7 @@ export interface ToolbarHandle {
 const FLASH_CLASS = 'toolbar-tool-flash';
 const FLASH_MS = 1000;
 const META_IDS: ReadonlySet<string> = new Set(['tech', 'eco', 'civic', 'life']);
+const DOCK_POS_KEY = 'bodhi-dock-pos';
 
 function modeButton(icon: string, label: string, selected: boolean): HTMLButtonElement {
   const btn = document.createElement('button');
@@ -62,6 +64,14 @@ function modeButton(icon: string, label: string, selected: boolean): HTMLButtonE
 export function mountToolbar(container: HTMLElement, deps: ToolbarDeps): ToolbarHandle {
   const dock = document.createElement('div');
   dock.className = 'toolbar';
+
+  // Drag grip: the dock's fixed bottom-center spot blocks the lower map once techs
+  // unlock, so the player drags it out of the way. The grip is the only drag
+  // surface (tool clicks must not move the dock); positioning math is the pure,
+  // unit-tested clampDockPosition. The position persists across reloads.
+  const grip = document.createElement('div');
+  grip.className = 'toolbar-grip';
+  grip.textContent = '⠿ drag';
 
   const flyout = document.createElement('div');
   flyout.className = 'toolbar-flyout';
@@ -85,8 +95,57 @@ export function mountToolbar(container: HTMLElement, deps: ToolbarDeps): Toolbar
   status.className = 'toolbar-status';
   status.hidden = true;
 
-  dock.append(flyout, mainRow, meta, status);
+  dock.append(grip, flyout, mainRow, meta, status);
   container.appendChild(dock);
+
+  // Switch the dock from its default bottom-center anchor (CSS) to an absolute
+  // top-left position. Called the first time it's dragged (or on restore).
+  function applyPosition(x: number, y: number): void {
+    dock.style.left = `${x}px`;
+    dock.style.top = `${y}px`;
+    dock.style.bottom = 'auto';
+    dock.style.transform = 'none';
+  }
+
+  function persist(x: number, y: number): void {
+    try {
+      window.localStorage.setItem(DOCK_POS_KEY, JSON.stringify({ x, y }));
+    } catch {
+      /* storage may be unavailable (private mode) — dragging still works this session */
+    }
+  }
+
+  // Grip drag: anchor the pointer offset within the dock, then move the dock to the
+  // clamped pointer position on each move. window-level move/up so the drag survives
+  // the pointer leaving the grip.
+  let dragOffX = 0;
+  let dragOffY = 0;
+  const onMove = (e: PointerEvent): void => {
+    const r = dock.getBoundingClientRect();
+    const { x, y } = clampDockPosition(
+      e.clientX - dragOffX,
+      e.clientY - dragOffY,
+      r.width,
+      r.height,
+      window.innerWidth,
+      window.innerHeight,
+    );
+    applyPosition(x, y);
+  };
+  const onUp = (): void => {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    const r = dock.getBoundingClientRect();
+    persist(r.left, r.top);
+  };
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const r = dock.getBoundingClientRect();
+    dragOffX = e.clientX - r.left;
+    dragOffY = e.clientY - r.top;
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  });
 
   const metaButtonEls = new Map<string, HTMLButtonElement>();
 
@@ -191,6 +250,20 @@ export function mountToolbar(container: HTMLElement, deps: ToolbarDeps): Toolbar
 
   render();
   refreshMeta();
+
+  // Restore a persisted position (clamped to the current viewport — the window may
+  // have been resized since). Done after the first render so the dock has a size.
+  try {
+    const saved = window.localStorage.getItem(DOCK_POS_KEY);
+    if (saved) {
+      const { x, y } = JSON.parse(saved) as { x: number; y: number };
+      const r = dock.getBoundingClientRect();
+      const c = clampDockPosition(x, y, r.width, r.height, window.innerWidth, window.innerHeight);
+      applyPosition(c.x, c.y);
+    }
+  } catch {
+    /* malformed/unavailable storage — keep the default bottom-center anchor */
+  }
 
   return { refresh: render, setStatus, refreshMeta, flash };
 }
