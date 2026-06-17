@@ -29,9 +29,15 @@ layer (non-deterministic).
   weighted, MINUS the worst nearby pollution/traffic/blight). Steers citizen destinations
   (`nearestOfCategory` pulled toward value) and renders as a slate→gold overlay. Live-verified range
   0–96 in the blighted start (slate near arterials/freeway); climbs as the player heals. Non-hashed.
-- 🔴 **Next layer:** population — a LIVE per-household occupancy quantity bounded by seeded building
-  capacity, grows/shrinks on land-value/pollution/jobs/wellbeing, drives the spawn target. NEVER
-  writes the hash (buildings changing = the deferred deterministic-growth seam).
+- ✅ **Population is now agent-emergent** (PR #50): a LIVE per-home `state.occupancy`, seeded from the
+  census baseline, drifting on a slow cadence toward its building capacity (`capacityOf`) where the
+  land is prized/clean/healthy and toward empty where it's blighted/smoggy (`occupancySignal` +
+  `occupancyStep`). Total occupancy drives the spawn target (`spawnTargetFor`) and home weighting.
+  Live-verified: the blighted car-city net-declines under its own traffic/pollution (465→350 over 25s,
+  homes emptying near the worst blight) — metastable, reversible by healing. Non-hashed; the seeded
+  building stock is untouched (buildings appearing/disappearing = the deferred deterministic-growth
+  seam). **Arc complete: traffic → pollution → land value → population are all agent-emergent.**
+  Tuning (OCC_RATE / OCC_LV_NEUTRAL / OCC_OUT_FRACTION) is provisional — dial during playtest.
 
 ## Open
 

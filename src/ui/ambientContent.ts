@@ -152,11 +152,36 @@ const AMENITY_KINDS: ReadonlySet<number> = new Set([
   BuiltKind.CompostHub,
 ]);
 
-/** Target number of itinerary citizens to keep out living their daily round at once. Below the
- *  ped cap, so there's still room for ambient wanderers, last-mile walkers, and respawned citizens.
- *  CITIZEN_SPAWN_PER_SUBSTEP tops the population up gently rather than all at once. */
-const CITIZEN_POP_TARGET = 120;
+/** Hard CAP on itinerary citizens out at once (perf): the live spawn target tracks total occupancy
+ *  but never exceeds this. Below the ped cap, so there's still room for ambient wanderers, last-mile
+ *  walkers, and respawned citizens. CITIZEN_SPAWN_PER_SUBSTEP tops up gently rather than all at once. */
+const CITIZEN_MAX_OUT = 120;
 const CITIZEN_SPAWN_PER_SUBSTEP = 2;
+
+/** AGENT-EMERGENT POPULATION (live, never hashed). Each residential home carries a live OCCUPANCY —
+ *  how many people actually live there now — seeded from the deterministic census baseline, then
+ *  drifting on a slow cadence: toward its building's capacity where the land is prized/clean/healthy,
+ *  toward empty where it's blighted/smoggy. The seeded worldgen fixes the building STOCK (hashed);
+ *  only how many inhabit it is live. Total occupancy drives the spawn target + home weighting, closing
+ *  the loop: more people → more trips → more traffic/pollution → lower land value → decline; healing
+ *  reverses it. (Buildings actually appearing/disappearing is the deferred deterministic-growth seam.) */
+const OCC_CADENCE = 20; // re-evaluate occupancy every ~1s (a slow demographic drift)
+const OCC_RATE = 0.25; // people/cadence occupancy moves toward the ceiling / floor at a full signal (gentle)
+const OCC_LV_NEUTRAL = 75; // land value at which a home holds steady (≈ the blighted start's mean, so it is
+//                            metastable — bleeding slowly, not collapsing — and healing clearly reverses it)
+const OCC_POLL_W = 0.5; // how strongly local smog pushes residents out
+const OCC_HEALTH_SCALE = 36; // building-health magnitude counting as a full ±0.5 of signal
+const OCC_OUT_FRACTION = 0.4; // fraction of residents out on a round at once (before the cap)
+/** Per-kind growth HEADROOM: how far above its seeded baseline a home's occupancy can climb when it
+ *  thrives. A single house barely densifies; apartments / projects / co-ops / communes hold far more. */
+const OCC_HEADROOM: ReadonlyMap<number, number> = new Map([
+  [BuiltKind.HouseSingle, 1.5],
+  [BuiltKind.ADU, 1.3],
+  [BuiltKind.Apartments, 3],
+  [BuiltKind.Projects, 3],
+  [BuiltKind.CoopHousing, 2.5],
+  [BuiltKind.Commune, 2.5],
+]);
 
 /** Wellbeing a walking citizen loses per substep spent trudging along a road/stroad — a long
  *  road walk brings home less (the unpleasant commute). Promenades/quiet streets/green cost
@@ -448,6 +473,12 @@ export interface AmbientState {
   landValue: Map<number, number>;
   /** Substep counter gating the (whole-map) land-value recompute to LV_CADENCE. */
   lvTick: number;
+  /** Live AGENT-EMERGENT population, keyed by residential home tile: how many people actually live
+   *  there now. Seeded from the census baseline, drifts toward capacity (prized/clean/healthy) or
+   *  empty (blighted/smoggy) on a cadence. Drives the spawn target + home weighting. Never hashed. */
+  occupancy: Map<number, number>;
+  /** Substep counter gating the occupancy re-evaluation to OCC_CADENCE. */
+  occTick: number;
   /** The residential homes citizens are spawned from (the census), published by the host via
    *  setHouseholds. Each spawn picks a home weighted by its citizen count (denser → more people
    *  out), so the daily-itinerary population reflects the built city. Renderer-side, never hashed. */
@@ -468,6 +499,8 @@ export function createAmbientState(): AmbientState {
     pollution: new Map(),
     landValue: new Map(),
     lvTick: 0,
+    occupancy: new Map(),
+    occTick: 0,
   };
 }
 
@@ -1420,24 +1453,86 @@ function citizenCount(state: AmbientState): number {
   return n;
 }
 
-/** Top the daily-itinerary population up from the residential census: pick a home (weighted by its
- *  citizen count, so denser buildings send out more people) and send a citizen out as a PED on its
- *  round. Each leg the ped picks its own mode (walk/bike/transit/drive); a drive leg makes it walk
- *  to its OWNED car (lazily acquired), drive, park, and walk on — so the same citizen mixes modes
- *  across the day. Census citizens are PRIMARY — spawned before the ambient wanderers. */
+/** A residential building's occupancy CEILING (pure decision seam): its seeded baseline lifted by a
+ *  per-kind headroom — a single house barely densifies, an apartment block holds far more. So a
+ *  thriving home fills up toward this without the building itself changing (the deterministic stock
+ *  is fixed); a derelict (zero baseline) holds nobody. */
+export function capacityOf(kind: number, baseCount: number): number {
+  return baseCount * (OCC_HEADROOM.get(kind) ?? 1.5);
+}
+
+/** The pull on a home's population (pure): land value above OCC_LV_NEUTRAL attracts residents, below
+ *  it sheds them; nearby smog repels; the wellbeing its citizens carry home (building health) tips it
+ *  either way. Sign drives grow vs shrink, magnitude scales the rate. */
+export function occupancySignal(landValue: number, pollution: number, health: number): number {
+  let s = (landValue - OCC_LV_NEUTRAL) / 255;
+  s -= (pollution / POLL_MAX) * OCC_POLL_W;
+  const h = health / OCC_HEALTH_SCALE;
+  s += h < -0.5 ? -0.5 : h > 0.5 ? 0.5 : h;
+  return s;
+}
+
+/** One occupancy drift step (pure): nudge toward the ceiling on a positive signal, toward empty on a
+ *  negative one, clamped to [0, capacity]. */
+export function occupancyStep(occ: number, capacity: number, signal: number): number {
+  const next = occ + signal * OCC_RATE;
+  return next < 0 ? 0 : next > capacity ? capacity : next;
+}
+
+/** How many citizens to keep out on their round, from the live total occupancy: a fraction of the
+ *  residents, capped at CITIZEN_MAX_OUT (perf). So a thriving city saturates the cap while a
+ *  declining one visibly empties the streets — the population loop made legible. */
+export function spawnTargetFor(totalOccupancy: number): number {
+  const t = Math.round(totalOccupancy * OCC_OUT_FRACTION);
+  return t > CITIZEN_MAX_OUT ? CITIZEN_MAX_OUT : t;
+}
+
+/** Re-evaluate every home's occupancy from the live conditions at its tile (land value, smog, the
+ *  wellbeing its citizens bring home), drifting it toward capacity or empty. Seeded lazily from the
+ *  census baseline; rebuilt fresh over the current homes each pass so a demolished home drops out.
+ *  Gated to OCC_CADENCE by the caller. Live layer — reads the other live fields, writes only occupancy. */
+export function stepOccupancy(state: AmbientState, map: GameMap): void {
+  const homes = state.households;
+  if (!homes || homes.length === 0) {
+    state.occupancy.clear();
+    return;
+  }
+  const next = new Map<number, number>();
+  for (const h of homes) {
+    const t = map.idx(h.x, h.y);
+    const cap = capacityOf(map.built[t]!, h.count);
+    const cur = state.occupancy.get(t) ?? h.count; // seed lazily at the census baseline
+    const signal = occupancySignal(
+      sampleField(state.landValue, t),
+      sampleField(state.pollution, t),
+      state.buildingHealth.get(t) ?? 0,
+    );
+    next.set(t, occupancyStep(cur, cap, signal));
+  }
+  state.occupancy = next;
+}
+
+/** Top the daily-itinerary population up from the LIVE occupancy: the spawn target tracks total
+ *  occupancy (a declining city empties its streets), and a home is picked weighted by its occupancy
+ *  (a fuller home sends proportionally more people out, an emptied one none). Occupancy is seeded
+ *  lazily from the census baseline, so before the first occupancy pass this matches the old
+ *  density-weighting. Each leg the ped picks its own mode (walk/bike/transit/drive); a drive leg
+ *  makes it walk to its OWNED car, drive, park, and walk on. Census citizens are PRIMARY. */
 function spawnCitizens(state: AmbientState, map: GameMap, rng: Rng): void {
   const homes = state.households;
   if (!homes || homes.length === 0) return;
+  const occAt = (h: Household): number => state.occupancy.get(map.idx(h.x, h.y)) ?? h.count;
   let total = 0;
-  for (const h of homes) total += h.count;
+  for (const h of homes) total += occAt(h);
   if (total <= 0) return;
+  const target = spawnTargetFor(total);
   for (let s = 0; s < CITIZEN_SPAWN_PER_SUBSTEP; s++) {
-    if (citizenCount(state) >= CITIZEN_POP_TARGET) return;
-    // Density-weighted pick: a home of count c is c× as likely to send someone out.
-    let r = rng.nextInt(total);
+    if (citizenCount(state) >= target) return;
+    // Occupancy-weighted pick: a home with more residents is proportionally likelier to send one out.
+    let r = rng.next() * total;
     let home = homes[0]!;
     for (const cand of homes) {
-      r -= cand.count;
+      r -= occAt(cand);
       if (r < 0) {
         home = cand;
         break;
@@ -2102,6 +2197,12 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   //    amenities minus the live nuisances. A readout over the other layers — derived, not laid.
   state.lvTick += 1;
   if (state.lvTick % LV_CADENCE === 0) recomputeLandValue(state, map);
+
+  // 8. Population: on a slow cadence, drift each home's occupancy toward its capacity (prized/clean/
+  //    healthy) or empty (blighted/smoggy). Runs AFTER land value so it reads the fresh field. The
+  //    spawn target + home weighting follow this — closing the agent-emergent population loop.
+  state.occTick += 1;
+  if (state.occTick % OCC_CADENCE === 0) stepOccupancy(state, map);
 }
 
 /** One water-runoff pass: every water tile with ground neighbours collects their runoff
