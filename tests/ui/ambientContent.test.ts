@@ -1450,3 +1450,46 @@ describe('mode choice (close → walk; car-dependent until calm/transit infra; t
     expect(chooseMode(map, 3, 6, 50, 6)).toBe(TravelMode.Streetcar);
   });
 });
+
+describe('citizen vehicle ownership (a driver parks a persistent car — Maddy: cars must not vanish)', () => {
+  it('a driving citizen parks a real car at its destination and banks the visit home', () => {
+    const map = new GameMap(50, 10);
+    for (let x = 2; x <= 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet; // a long arterial
+    map.built[map.idx(2, 4)] = BuiltKind.HouseSingle; // home, fronts the road
+    map.built[map.idx(38, 4)] = BuiltKind.Industrial; // a FAR workplace → a car commute (no bike/transit)
+    const state = createAmbientState();
+    setHouseholds(state, [{ x: 2, y: 4, count: 3 }]);
+    const rng = ambientFork('owncar');
+    let parkedNearWork = false;
+    let banked = false;
+    for (let i = 0; i < 1500; i++) {
+      stepAmbient(state, map, rng, 50);
+      // a persistent car PARKS at the plot (it does not vanish on arrival)
+      if (state.cars.some((c) => c.parked && Math.abs(Math.round(c.x) - 38) <= 3 && Math.abs(Math.round(c.y) - 5) <= 3)) {
+        parkedNearWork = true;
+      }
+      if ((state.buildingHealth.get(map.idx(2, 4)) ?? 0) !== 0) banked = true;
+      if (parkedNearWork && banked) break;
+    }
+    expect(parkedNearWork).toBe(true); // the car parked at the workplace — it didn't disappear
+    expect(banked).toBe(true);
+    expect(state.buildingHealth.get(map.idx(2, 4))!).toBeLessThan(0); // industrial visit → negative at home
+  });
+
+  it('census drivers are cars carrying an itinerary, not pedestrians rendered as cars', () => {
+    const map = new GameMap(50, 10);
+    for (let x = 2; x <= 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(2, 4)] = BuiltKind.HouseSingle;
+    map.built[map.idx(38, 4)] = BuiltKind.Industrial;
+    const state = createAmbientState();
+    setHouseholds(state, [{ x: 2, y: 4, count: 3 }]);
+    const rng = ambientFork('owncar2');
+    let sawCitizenCar = false;
+    for (let i = 0; i < 400; i++) {
+      stepAmbient(state, map, rng, 50);
+      if (state.cars.some((c) => c.itinerary !== undefined)) sawCitizenCar = true;
+    }
+    expect(sawCitizenCar).toBe(true); // a driver is a Car entity with an itinerary
+    expect(state.peds.every((p) => p.mode !== TravelMode.Drive)).toBe(true); // no ped is ever "a car"
+  });
+});
