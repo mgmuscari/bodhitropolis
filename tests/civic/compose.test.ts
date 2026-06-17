@@ -132,7 +132,7 @@ describe('simTick: traffic fires at the cadence (rng enters the sim)', () => {
     };
   }
 
-  it('lays traffic density + publishes trips through simTick, deterministically', () => {
+  it('no longer lays a deterministic traffic field (agent-driven now); seeded world stays identical', () => {
     const drive = (d: SimDeps): void => {
       for (let t = 1; t <= 30; t++) simTick(d, t);
     };
@@ -142,9 +142,8 @@ describe('simTick: traffic fires at the cadence (rng enters the sim)', () => {
     drive(b);
     let total = 0;
     for (let i = 0; i < a.world.map.traffic.length; i++) total += a.world.map.traffic[i]!;
-    expect(total).toBeGreaterThan(0); // generateTraffic fired through the sim wiring
-    expect((a.trips ?? []).length).toBeGreaterThan(0); // trips published for the renderer
-    expect(a.world.map.snapshot()).toBe(b.world.map.snapshot()); // deterministic incl. traffic
+    expect(total).toBe(0); // the deterministic O-D generator is retired — traffic is agent-driven (live layer)
+    expect(a.world.map.snapshot()).toBe(b.world.map.snapshot()); // seeded world still byte-identical
   });
 });
 

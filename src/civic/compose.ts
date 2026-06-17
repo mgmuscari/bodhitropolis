@@ -15,14 +15,11 @@
 
 import type { GameMap } from '../engine/map';
 import type { ParcelStore } from '../engine/fabric';
-import { createRng } from '../engine/rng';
 import { accrue } from '../tech/effort';
 import type { TechState } from '../tech/state';
 import { ECO_CADENCE } from '../ecology/influence';
 import { ecologyTick } from '../ecology/tick';
 import { ecologyReport } from '../ecology/report';
-import { decayTraffic } from '../traffic/density';
-import { generateTraffic } from '../traffic/generate';
 import type { Trip } from '../traffic/trip';
 import { computeNeighborhoods, type NeighborhoodMap } from './neighborhoods';
 import type { CivicState } from './state';
@@ -93,16 +90,12 @@ export function simTick(deps: SimDeps, tick: number): SimTickResult {
     1,
   );
 
-  // 2. Traffic cadence → decay the field, then generate this cadence's O-D trips
-  //    (lay density along found paths, publish the trips). First rng in the sim:
-  //    a fresh per-tick-stamped fork keeps the N-tick double-run byte-identical.
-  let trafficTicked = false;
-  if (tick > 0 && tick % TRAFFIC_CADENCE === 0) {
-    const trafficRng = createRng(deps.seed).fork(`traffic:${tick}`);
-    decayTraffic(deps.world.map);
-    deps.trips = generateTraffic(deps.world.map, deps.world.parcels, trafficRng);
-    trafficTicked = true;
-  }
+  // 2. Traffic is AGENT-DRIVEN now (the 1989 aggregate field is retired): the live travelers
+  //    (citizen cars in the ambient layer) lay a live traffic density as they actually drive, route
+  //    AROUND it, and pedestrians shun it. The deterministic O-D generator no longer runs — the
+  //    seeded WORLD stays reproducible (it no longer depends on traffic) while the dynamic traffic
+  //    layer emerges from the agents. See docs/decisions/live-agent-layer.md.
+  const trafficTicked = false;
 
   // 3. Ecology cadence → tick + recompute means.
   let ecoTicked = false;
