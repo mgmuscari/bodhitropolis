@@ -18,6 +18,7 @@ import {
   era2MotorAge,
   era3Highways,
   era4Suburbs,
+  eraSatellites,
   era5Disinvestment,
   mosesCenturyStage,
   placeParkingField,
@@ -64,6 +65,18 @@ function aliveKindCount(world: WorldState, kind: number): number {
   let c = 0;
   for (const i of parcels.aliveIndices()) if (parcels.kindAt(i) === kind) c++;
   return c;
+}
+
+// Runs terrain + era1-4 + eraSatellites, forking each stream the way the stage does.
+function runSatellites(seed: string, width = 128, height = 128): { world: WorldState; state: MosesState } {
+  const world = runPipeline({ seed, width, height }, [terrainStage()]);
+  const state = createMosesState();
+  era1Founding(world, createRng(seed).fork('era1'), P, state);
+  era2MotorAge(world, createRng(seed).fork('era2'), P, state);
+  era3Highways(world, createRng(seed).fork('era3'), P, state);
+  era4Suburbs(world, createRng(seed).fork('era4'), P, state);
+  eraSatellites(world, createRng(seed).fork('satellites'), P, state);
+  return { world, state };
 }
 
 // Road-tile connectivity over the DRIVABLE graph. Parking lots are CONNECTORS — cars
@@ -889,5 +902,69 @@ describe('era1Founding on a degenerate map', () => {
     for (let i = 0; i < world.map.built.length; i++) if (world.map.built[i] !== 0) built++;
     expect(built).toBe(0);
     expect(world.parcels.count()).toBe(0);
+  });
+});
+
+describe('eraSatellites — exurbs/suburbs with their own grids, freeway-linked', () => {
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": founds satellite settlements out beyond the core`, () => {
+      const { state } = runSatellites(seed);
+      expect(state.satellites.length).toBeGreaterThanOrEqual(2); // non-vacuous
+      expect(state.satellites.length).toBeLessThanOrEqual(P.satelliteCount);
+      for (const s of state.satellites) {
+        const d = Math.abs(s.x - state.siteX) + Math.abs(s.y - state.siteY);
+        expect(d).toBeGreaterThanOrEqual(P.satelliteMinCoreDist); // a separate settlement, not infill
+      }
+    });
+
+    it(`seed "${seed}": each satellite has its own street grid`, () => {
+      const { world, state } = runSatellites(seed);
+      const { map } = world;
+      for (const s of state.satellites) {
+        let roads = 0;
+        const r = P.satelliteSpan;
+        for (let y = s.y - r; y <= s.y + r; y++) {
+          for (let x = s.x - r; x <= s.x + r; x++) {
+            if (map.inBounds(x, y) && isRoadKind(map.built[map.idx(x, y)]!)) roads++;
+          }
+        }
+        expect(roads).toBeGreaterThanOrEqual(8); // a mini grid, not a lone tile
+      }
+    });
+
+    it(`seed "${seed}": a freeway reaches each satellite`, () => {
+      const { world, state } = runSatellites(seed);
+      const { map } = world;
+      for (const s of state.satellites) {
+        let near = false;
+        const r = P.satelliteSpan + 3;
+        for (let y = s.y - r; y <= s.y + r && !near; y++) {
+          for (let x = s.x - r; x <= s.x + r && !near; x++) {
+            if (map.inBounds(x, y) && map.built[map.idx(x, y)] === BuiltKind.RoadHighway) near = true;
+          }
+        }
+        expect(near).toBe(true);
+      }
+    });
+
+    it(`seed "${seed}": the road network stays one connected component (freeways link the exurbs)`, () => {
+      const net = roadNetwork(runSatellites(seed).world.map);
+      expect(net.largestComponent).toBe(net.total);
+    });
+
+    it(`seed "${seed}": adds suburban houses beyond the era-4 city`, () => {
+      const before = runEras(seed, 4).world.parcels.aliveCount();
+      const after = runSatellites(seed).world.parcels.aliveCount();
+      expect(after).toBeGreaterThan(before);
+    });
+
+    it(`seed "${seed}": tiles still agree with the store`, () => {
+      const { world } = runSatellites(seed);
+      expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
+    });
+  }
+
+  it('is deterministic for the same seed', () => {
+    expect(hashWorld(runSatellites('moses-1').world)).toBe(hashWorld(runSatellites('moses-1').world));
   });
 });

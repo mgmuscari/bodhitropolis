@@ -10,12 +10,13 @@ Status: 🔴 open · 🟡 in progress · ✅ fixed (note the PR)
 The decline spiral "feels fairly accurate" (Detroit) — KEEP it; the game is decline ↔ **revival**.
 Revival = make a pocket worth living in (greens + calm → land value → occupancy → spreads). Build order:
 
-1. 🟡 **Bigger generated city / fill the map** — first increment SHIPPED (PR pending): ~2× the city
-   (alive parcels ~150→335) by scaling the GROWTH eras (era2 rings 2→6 + era2Parcels 90→200, era4
-   spurs 10→24 + houses 55→140), leaving era1 founding/site UNCHANGED (its params drive site scoring →
-   moving them clips the grid; learned the hard way). Core density left original so era4 offices keep
-   their room. Still ~half the map is green — can push rings/spurs further. Stretch (not done):
-   **satellite grids / density pockets connected by freeways**.
+1. ✅ **Bigger generated city / fill the map** — (a) PR #52: ~2× the city (alive ~150→335) by scaling
+   the GROWTH eras (era1 founding/site left UNCHANGED — its params drive site scoring, moving them
+   clips the grid). (b) PR pending: **satellite exurbs/suburbs** — a new `eraSatellites` (between era4
+   and era5) founds up to 4 outlying mini-grids (own arterials + houses), each FREEWAY-linked to the
+   core by a BFS connector over open-land/road (paved before the exurb's houses so they can't block
+   it). Alive ~335→488; the post-stage road network stays ONE connected component (exurbs are
+   genuinely reachable). Could push count/size further; deterministic, N=120 gate intact.
 2. 🔴 **Legibility quick-wins** (cheap, high value — she's flying blind): plot LETTERS SNES-style
    (R1/R2/R3, C, I, civic glyphs) on each parcel; inspect tool NAMES the thing + gives real info
    (currently just an id number); fix the TOOLBAR — fixed bottom location blocks the lower map after

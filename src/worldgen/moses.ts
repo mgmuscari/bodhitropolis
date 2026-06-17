@@ -77,6 +77,13 @@ export interface MosesParams {
   decayNoise: number; // extra random condition loss (0..decayNoise)
   abandonThreshold: number; // a parcel below this after decay is abandoned
   craterChance: number; // fraction of abandoned parcels that become parking craters
+  // Satellites — exurbs/suburbs: small outlying core grids, freeway-linked to the main city
+  satelliteCount: number; // how many satellite settlements to attempt
+  satelliteSpan: number; // each satellite's arterial span (smaller than the founding grid)
+  satelliteBlocks: number; // parallel streets each side of each satellite arterial
+  satelliteParcels: number; // houses (a few strips) filling each satellite's frontage
+  satelliteMinCoreDist: number; // a satellite must be at least this far (Manhattan) from the main core
+  satelliteSpacing: number; // satellites must be at least this far from each other
 }
 
 export const DEFAULT_MOSES_PARAMS: MosesParams = {
@@ -123,6 +130,12 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   decayNoise: 20,
   abandonThreshold: 40,
   craterChance: 0.5,
+  satelliteCount: 4,
+  satelliteSpan: 16,
+  satelliteBlocks: 2,
+  satelliteParcels: 40,
+  satelliteMinCoreDist: 34,
+  satelliteSpacing: 22,
 };
 
 // --- Shared state --------------------------------------------------------
@@ -139,6 +152,7 @@ export interface MosesState {
   gridY1: number; // grid bounding box (extent of era-1 road tiles)
   railPeak: number; // era-1 rail tile count (for the era-3 chronicle)
   preEra5Alive: number; // set by era 5 before abandonment
+  satellites: Array<{ x: number; y: number }>; // founded exurb/suburb crossroads (eraSatellites)
 }
 
 /** A fresh MosesState: not yet founded, all fields zeroed. */
@@ -155,6 +169,7 @@ export function createMosesState(): MosesState {
     gridY1: 0,
     railPeak: 0,
     preEra5Alive: 0,
+    satellites: [],
   };
 }
 
@@ -1231,6 +1246,144 @@ export function era4Suburbs(world: WorldState, rng: Rng, p: MosesParams, state: 
   );
 }
 
+// --- Satellites: exurbs/suburbs with their own grids, freeway-linked ------
+
+/** Lay a small SUBURB grid centred on (sx, sy): two short arterials + a couple of parallel streets
+ *  each side, then fill the frontage with houses (the occasional strip). A miniature of the era-1
+ *  founding grid, clipped to land. */
+function laySatellite(map: GameMap, parcels: ParcelStore, sx: number, sy: number, p: MosesParams, rng: Rng): void {
+  const bbox: BBox = { x0: sx, y0: sy, x1: sx, y1: sy };
+  const half = p.satelliteSpan >> 1;
+  roadAt(map, sx, sy, BuiltKind.RoadStreet, bbox);
+  const eRow = growArm(map, sx, sy, 1, 0, half, BuiltKind.RoadStreet, bbox);
+  const wRow = growArm(map, sx, sy, -1, 0, half, BuiltKind.RoadStreet, bbox);
+  const sCol = growArm(map, sx, sy, 0, 1, half, BuiltKind.RoadStreet, bbox);
+  const nCol = growArm(map, sx, sy, 0, -1, half, BuiltKind.RoadStreet, bbox);
+  for (let k = 1; k <= p.satelliteBlocks; k++) {
+    const off = k * p.blockSpacing;
+    if (off <= nCol) {
+      roadAt(map, sx, sy - off, BuiltKind.RoadStreet, bbox);
+      growArm(map, sx, sy - off, 1, 0, eRow, BuiltKind.RoadStreet, bbox);
+      growArm(map, sx, sy - off, -1, 0, wRow, BuiltKind.RoadStreet, bbox);
+    }
+    if (off <= sCol) {
+      roadAt(map, sx, sy + off, BuiltKind.RoadStreet, bbox);
+      growArm(map, sx, sy + off, 1, 0, eRow, BuiltKind.RoadStreet, bbox);
+      growArm(map, sx, sy + off, -1, 0, wRow, BuiltKind.RoadStreet, bbox);
+    }
+    if (off <= eRow) {
+      roadAt(map, sx + off, sy, BuiltKind.RoadStreet, bbox);
+      growArm(map, sx + off, sy, 0, 1, sCol, BuiltKind.RoadStreet, bbox);
+      growArm(map, sx + off, sy, 0, -1, nCol, BuiltKind.RoadStreet, bbox);
+    }
+    if (off <= wRow) {
+      roadAt(map, sx - off, sy, BuiltKind.RoadStreet, bbox);
+      growArm(map, sx - off, sy, 0, 1, sCol, BuiltKind.RoadStreet, bbox);
+      growArm(map, sx - off, sy, 0, -1, nCol, BuiltKind.RoadStreet, bbox);
+    }
+  }
+  // Suburb fabric: mostly single houses, a scattered commercial strip, core-first for tidy fill.
+  const roadTiles = collectRoadTiles(map, bbox.x0, bbox.y0, bbox.x1, bbox.y1);
+  const suburbKind = (i: number): BuiltKind =>
+    i % 7 === 0 ? BuiltKind.CommercialStrip : BuiltKind.HouseSingle;
+  fillFrontage(map, parcels, roadTiles, rng.fork('fill'), p.satelliteParcels, suburbKind);
+}
+
+/** A freeway route from an exurb at (sx,sy) to the core (cx,cy): the OPEN-LAND tile indices to pave as
+ *  RoadHighway so the exurb joins the core's drivable network, or null if no route exists. A
+ *  breadth-first search over {open land ∪ existing road} (a highway can't be laid on water / rail /
+ *  buildings — see canPlaceTransport), so the shortest such corridor is found even when it must bend
+ *  around terrain; the open-land cells beyond the exurb footprint (its grid handles the rest) are the
+ *  freeway. Deterministic: fixed neighbour order, parent reconstruction by index. */
+function freewayRoute(map: GameMap, sx: number, sy: number, cx: number, cy: number, half: number): number[] | null {
+  const W = map.width;
+  const H = map.height;
+  const N = W * H;
+  const start = sy * W + sx;
+  const goal = cy * W + cx;
+  const passable = (i: number): boolean =>
+    map.water[i] === Water.None && (map.built[i] === 0 || isRoadKind(map.built[i]!));
+  if (!passable(start) || !passable(goal)) return null;
+  const prev = new Int32Array(N).fill(-1);
+  const seen = new Uint8Array(N);
+  const queue = [start];
+  seen[start] = 1;
+  let head = 0;
+  let found = false;
+  while (head < queue.length) {
+    const i = queue[head++]!;
+    if (i === goal) {
+      found = true;
+      break;
+    }
+    const x = i % W;
+    const y = (i - x) / W;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+      const ni = ny * W + nx;
+      if (!seen[ni] && passable(ni)) {
+        seen[ni] = 1;
+        prev[ni] = i;
+        queue.push(ni);
+      }
+    }
+  }
+  if (!found) return null;
+  // Pave every OPEN-LAND cell on the path (existing roads on it are already drivable). Paving runs
+  // right from the exurb crossroads, so the corridor is gap-free: the grid's centre connects to the
+  // first paved cell, then on to the core network. (`half` is unused now — kept for the call site.)
+  void half;
+  const lay: number[] = [];
+  for (let i = goal; i !== start && i !== -1; i = prev[i]!) {
+    if (map.built[i] === 0) lay.push(i);
+  }
+  return lay;
+}
+
+/**
+ * Satellites — exurbs & suburbs. Beyond the main city, found a few smaller settlements (each its own
+ * little core grid + housing) and link each back to the core with a freeway. Sites reuse the founding
+ * score (flat, open land), then are kept only if FAR from the core, SPACED from each other, clear of
+ * the built city, AND reachable by an unbroken (all-land) freeway L. Runs after era 4 so the main city
+ * is whole; era 5 disinvestment then decays the exurbs alongside everything else.
+ */
+export function eraSatellites(world: WorldState, rng: Rng, p: MosesParams, state: MosesState): void {
+  if (!state.founded) return;
+  const { map, parcels } = world;
+  const half = p.satelliteSpan >> 1;
+  const dist = (ax: number, ay: number, bx: number, by: number): number =>
+    Math.abs(ax - bx) + Math.abs(ay - by);
+  const hasRoadNear = (cx: number, cy: number, r: number): boolean => {
+    for (let y = cy - r; y <= cy + r; y++) {
+      for (let x = cx - r; x <= cx + r; x++) {
+        if (map.inBounds(x, y) && isRoadKind(map.built[map.idx(x, y)]!)) return true;
+      }
+    }
+    return false;
+  };
+
+  const before = parcels.aliveCount();
+  let n = 0;
+  // Each satellite is laid before the next is scored, so spacing + freeway routing see prior exurbs.
+  for (const s of scoreSites(map, p)) {
+    if (state.satellites.length >= p.satelliteCount) break;
+    if (dist(s.x, s.y, state.siteX, state.siteY) < p.satelliteMinCoreDist) continue; // a separate town
+    if (state.satellites.some((c) => dist(c.x, c.y, s.x, s.y) < p.satelliteSpacing)) continue; // spaced
+    if (hasRoadNear(s.x, s.y, half + 2)) continue; // open land + room for the freeway to start
+    const route = freewayRoute(map, s.x, s.y, state.siteX, state.siteY, half);
+    if (!route) continue; // no drivable corridor to the core network
+    // Pave the freeway BEFORE the exurb's houses, so fillFrontage can't drop a building onto a
+    // corridor cell and break the link (a highway can't be laid over a parcel — canPlaceTransport).
+    for (const i of route) placeTransport(map, i % map.width, (i - (i % map.width)) / map.width, BuiltKind.RoadHighway);
+    laySatellite(map, parcels, s.x, s.y, p, rng.fork(`sat${n}`));
+    state.satellites.push({ x: s.x, y: s.y });
+    n++;
+  }
+  world.log.push(`satellites: ${state.satellites.length} exurbs, +${parcels.aliveCount() - before} parcels`);
+}
+
 // --- Era 5: disinvestment ------------------------------------------------
 
 /** Minimum value of `field` over parcel `i`'s footprint (>= 0 entries only). */
@@ -1338,6 +1491,7 @@ export function mosesCenturyStage(params: Partial<MosesParams> = {}): WorldgenSt
       era2MotorAge(world, rng.fork('era2'), p, state);
       era3Highways(world, rng.fork('era3'), p, state);
       era4Suburbs(world, rng.fork('era4'), p, state);
+      eraSatellites(world, rng.fork('satellites'), p, state);
       era5Disinvestment(world, rng.fork('era5'), p, state);
     },
   };
