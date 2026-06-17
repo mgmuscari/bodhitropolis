@@ -25,7 +25,7 @@ import {
   roadPath,
   curbParkOffset,
   isWearable,
-  seedBlight,
+  seedDecay,
   carWeightForRoad,
   isCarRoad,
   isPedSubstrate,
@@ -753,7 +753,7 @@ describe('population: occupancy signal (attract vs decline)', () => {
   it('is positive in a prized, clean, healthy spot', () => {
     expect(occupancySignal(220, 0, 40)).toBeGreaterThan(0);
   });
-  it('is negative in a blighted, smoggy, unhealthy spot', () => {
+  it('is negative in a decayed, smoggy, unhealthy spot', () => {
     expect(occupancySignal(10, 255, -40)).toBeLessThan(0);
   });
   it('falls as pollution rises (smog repels residents)', () => {
@@ -801,7 +801,7 @@ describe('population: occupancy evolves with conditions (agent-emergent)', () =>
     expect(state.occupancy.get(t)!).toBeLessThanOrEqual(capacityOf(BuiltKind.Apartments, 9));
   });
 
-  it('shrinks below baseline for a home in a blighted, smoggy spot', () => {
+  it('shrinks below baseline for a home in a decayed, smoggy spot', () => {
     const map = new GameMap(8, 8);
     map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
     const t = map.idx(3, 3);
@@ -811,7 +811,7 @@ describe('population: occupancy evolves with conditions (agent-emergent)', () =>
     state.pollution.set(t, 255);
     for (let i = 0; i < 80; i++) stepOccupancy(state, map);
     expect(state.occupancy.get(t)!).toBeLessThan(9);
-    expect(state.occupancy.get(t)!).toBeGreaterThan(0); // floored — a blighted home thins but never empties
+    expect(state.occupancy.get(t)!).toBeGreaterThan(0); // floored — a decayed home thins but never empties
   });
 });
 
@@ -1260,29 +1260,29 @@ describe('desire-path wear (pedestrians trample wild green into brown + trash)',
     expect(state.wear.get(map.idx(4, 4)) ?? 0).toBeLessThan(60); // eased back toward green
   });
 
-  it('seedBlight starts the city degraded — trampled urban ground + polluted shores', () => {
+  it('seedDecay starts the city degraded — trampled urban ground + polluted shores', () => {
     const map = new GameMap(16, 16);
     for (let x = 4; x <= 8; x++) map.built[map.idx(x, 6)] = BuiltKind.RoadStreet; // a street pair
     for (let x = 4; x <= 8; x++) map.built[map.idx(x, 8)] = BuiltKind.RoadStreet; // with an empty gap at y=7
     for (let y = 0; y < 16; y++) map.water[map.idx(12, y)] = 1; // a shoreline
     map.built[map.idx(11, 6)] = BuiltKind.RoadStreet; // urban tile on the shore
     const state = createAmbientState();
-    seedBlight(state, map);
+    seedDecay(state, map);
     expect(state.wear.get(map.idx(6, 7)) ?? 0).toBeGreaterThan(0); // hemmed-in gap is pre-trampled
     expect(state.waterPollution.get(map.idx(12, 6)) ?? 0).toBeGreaterThan(0); // shore pre-polluted
     expect(state.wear.get(map.idx(0, 0)) ?? 0).toBe(0); // open wild ground starts clean/green
   });
 
-  it('seedBlight precomputes home wellbeing from nearby plots (good → positive, industry → negative)', () => {
+  it('seedDecay precomputes home wellbeing from nearby plots (good → positive, industry → negative)', () => {
     const map = new GameMap(24, 16);
     map.built[map.idx(5, 5)] = BuiltKind.HouseSingle; // a home by a healing commons
     map.built[map.idx(5, 7)] = BuiltKind.HealingCommons;
     map.built[map.idx(16, 5)] = BuiltKind.HouseSingle; // a home by heavy industry
     map.built[map.idx(16, 7)] = BuiltKind.Industrial;
     const state = createAmbientState();
-    seedBlight(state, map);
+    seedDecay(state, map);
     expect(state.buildingHealth.get(map.idx(5, 5))!).toBeGreaterThan(0); // starts healthy
-    expect(state.buildingHealth.get(map.idx(16, 5))!).toBeLessThan(0); // starts blighted
+    expect(state.buildingHealth.get(map.idx(16, 5))!).toBeLessThan(0); // starts decayed
   });
 
   it('a short trip whose route uses a freeway DRIVES (a pedestrian cannot cross a freeway)', () => {

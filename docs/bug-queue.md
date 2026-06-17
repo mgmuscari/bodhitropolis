@@ -76,15 +76,15 @@ layer (non-deterministic).
   behind wear / water-pollution / traffic / air-pollution, so each layer is a thin lay/decay/read.
 - ✅ **Land value is now agent-emergent** (PR #49): a DERIVED live field `state.landValue` recomputed
   on a slow cadence over inhabited plots (`landValueAt`: healed land + amenity proximity, distance-
-  weighted, MINUS the worst nearby pollution/traffic/blight). Steers citizen destinations
+  weighted, MINUS the worst nearby pollution/traffic/decay). Steers citizen destinations
   (`nearestOfCategory` pulled toward value) and renders as a slate→gold overlay. Live-verified range
-  0–96 in the blighted start (slate near arterials/freeway); climbs as the player heals. Non-hashed.
+  0–96 in the decayed start (slate near arterials/freeway); climbs as the player heals. Non-hashed.
 - ✅ **Population is now agent-emergent** (PR #50): a LIVE per-home `state.occupancy`, seeded from the
   census baseline, drifting on a slow cadence toward its building capacity (`capacityOf`) where the
-  land is prized/clean/healthy and toward empty where it's blighted/smoggy (`occupancySignal` +
+  land is prized/clean/healthy and toward empty where it's decayed/smoggy (`occupancySignal` +
   `occupancyStep`). Total occupancy drives the spawn target (`spawnTargetFor`) and home weighting.
-  Live-verified: the blighted car-city net-declines under its own traffic/pollution (465→350 over 25s,
-  homes emptying near the worst blight) — metastable, reversible by healing. Non-hashed; the seeded
+  Live-verified: the decayed car-city net-declines under its own traffic/pollution (465→350 over 25s,
+  homes emptying near the worst decay) — metastable, reversible by healing. Non-hashed; the seeded
   building stock is untouched (buildings appearing/disappearing = the deferred deterministic-growth
   seam). **Arc complete: traffic → pollution → land value → population are all agent-emergent.**
   Tuning (OCC_RATE / OCC_LV_NEUTRAL / OCC_OUT_FRACTION) is provisional — dial during playtest.
@@ -93,7 +93,7 @@ layer (non-deterministic).
 
 - ✅ **Ghost town: population spiralled to empty** (PR pending) — occupancy declined monotonically to
   ~0 (no populated equilibrium). Root cause (diagnosed live): building-HEALTH dominated the occupancy
-  signal (≈half the homes negative, ~none positive in the blighted car-city → bad trips → negative
+  signal (≈half the homes negative, ~none positive in the decayed car-city → bad trips → negative
   health → decline → fewer trips that stay bad → spiral), overwhelming the self-correcting land-value
   term. Fix (architectural): land value is the ANCHOR, building-health a minor bounded nudge; add a
   per-home population FLOOR (a city thins but never fully empties); re-anchor OCC_LV_NEUTRAL at the

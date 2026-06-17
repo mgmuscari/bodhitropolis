@@ -3,7 +3,10 @@
 // One stage, five era sub-steps, that grows a coherent city on the terrain and
 // then wrecks it — founding & streetcar town, motor age, highways & urban
 // renewal, suburban flight, disinvestment — emitting a chronicle into the world
-// log and leaving the blighted start state. Era functions are exported
+// log and leaving the decayed, disinvested start state the player must repair.
+// (This stage IS the oppressive-planning history; "blight" appears critically in
+// its harm report — see worldgen/report.ts — while the neutral condition is "decay".)
+// Era functions are exported
 // individually with a uniform signature so tests can run prefixes of history
 // and measure between eras (yield point 4). All share a MosesState threaded by
 // the stage and a MosesParams of design budgets/thresholds.
@@ -1131,7 +1134,7 @@ function nearestRoadIndex(map: GameMap, cx: number, cy: number): number {
  * the highways* into open land beyond suburbRadius, then fills suburban houses
  * on far-road frontage farthest-from-highway first (so the suburbs spread off
  * the expressway, not along it — which is also what gives era 5 a far cohort to
- * contrast against the blighted core). Every placed house is road-adjacent and
+ * contrast against the disinvested core). Every placed house is road-adjacent and
  * beyond suburbRadius in road-network distance. Adds downtown offices near the
  * crossroads and declines inner-city residential condition. No-ops if never
  * founded.

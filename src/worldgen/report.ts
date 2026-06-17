@@ -1,5 +1,12 @@
-// Blight report: a pure, deterministic read over the final WorldState that the
-// opening overlay turns into the player's first situation briefing.
+// Blight report — the term used CRITICALLY here, scoped to the Moses-century
+// planning mode it indicts. "Blight" was the legal pretext (the redevelopment
+// "blight finding") that authorized clearance + displacement — in West Oakland and
+// across Alameda County, the word that turned racist disinvestment into an eminent-
+// domain order. This is the deterministic read of the HARM that apparatus left: the
+// wounds (abandonment, clearance craters, the core→periphery gradient) the player
+// inherits and must AMELIORATE. Elsewhere the neutral live condition is "decay", not
+// "blight" — the term lives only where the game names the policy that weaponized it.
+// The opening overlay turns this into the player's first situation briefing.
 //
 // Two deliberate design choices, both from plan review:
 //   1. The era-5 wound counts (abandoned / craters / preEra5Standing) are
