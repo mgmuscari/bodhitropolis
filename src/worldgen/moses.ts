@@ -57,6 +57,7 @@ export interface MosesParams {
   era2GrowthRings: number; // extra grid rings beyond the founding blocks
   era2Industry: number; // industrial parcels on rail/water frontage
   industryFrontage: number; // an industrial footprint must be within this of rail/water
+  era2Power: number; // legacy coal/gas plants sited on the most redlined frontage
   era2Parking: number; // parking lots near the crossroads
   era2ParkingFields: number; // full 2x2-lot parking fields laid in the open fringe
   era2Parcels: number; // extra houses/strips filling new frontage
@@ -113,6 +114,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era2GrowthRings: 6,
   era2Industry: 8,
   industryFrontage: 2,
+  era2Power: 4,
   era2Parking: 3,
   era2ParkingFields: 3,
   era2Parcels: 4000, // FILL-ALL: exceed the grown grid's frontage so every ring block fills, not half
@@ -253,6 +255,9 @@ type AttrGen = (rng: Rng) => { density: number; condition: number };
 const HEALTHY_ATTRS: AttrGen = (rng) => ({ density: 1 + rng.nextInt(2), condition: 200 + rng.nextInt(56) });
 /** Urban-renewal projects: built dense and cheap (condition 140..180). */
 const PROJECT_ATTRS: AttrGen = (rng) => ({ density: 3 + rng.nextInt(2), condition: 140 + rng.nextInt(41) });
+// Legacy power plants: density 1 (plants are not density-scaled), still-running
+// but aging condition. Two-nextInt draw shape matches HEALTHY_ATTRS.
+const PLANT_ATTRS: AttrGen = (rng) => ({ density: 1, condition: 170 + rng.nextInt(50) });
 /**
  * Dense near-core construction (Apartments): density 2..3, pristine-ish condition.
  * Same TWO-nextInt draw shape as HEALTHY_ATTRS, so swapping it in inside
@@ -832,6 +837,25 @@ export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state:
     if (placeAdjacent(map, parcels, x, y, 3, 3, BuiltKind.Industrial, fabRng, accept) !== -1) industry++;
   }
 
+  // 3b. Legacy dirty power, SITED BY GRADE (discrimination-first): coal/gas plants
+  //     drop on the most redlined road frontage, so the redlined districts host the
+  //     smog. They seed the starting grid — enough to power PART of the city, not
+  //     all of it — so the rest starts dark until the player builds clean power.
+  //     A dedicated rng fork keeps era-2's other streams byte-stable. The plants
+  //     ARE "redlining" made physical; the neutral live result is decay.
+  const powerRng = rng.fork('power');
+  const powerCands = roadTiles
+    .filter((i) => toCore(i) > p.coreRadius)
+    .sort((a, b) => map.redline[b]! - map.redline[a]! || railWaterDist[a]! - railWaterDist[b]! || a - b);
+  let power = 0;
+  for (const i of powerCands) {
+    if (power >= p.era2Power) break;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const kind = power % 2 === 0 ? BuiltKind.CoalPlant : BuiltKind.GasPlant;
+    if (placeAdjacent(map, parcels, x, y, 3, 3, kind, powerRng, undefined, PLANT_ATTRS) !== -1) power++;
+  }
+
   // 4. Parking near the crossroads.
   const byCore = [...roadTiles].sort((a, b) => toCore(a) - toCore(b) || a - b);
   let parking = 0;
@@ -896,7 +920,7 @@ export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state:
   }
 
   world.log.push(
-    `era2: motor age — ${avenues} avenue tiles, ${industry} industry, ${parking} parking, ` +
+    `era2: motor age — ${avenues} avenue tiles, ${industry} industry, ${power} power, ${parking} parking, ` +
       `${fields} fields (${fieldLots} lots), ${filled} infill`,
   );
 }

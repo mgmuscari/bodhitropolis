@@ -28,6 +28,8 @@ import {
   type MosesState,
 } from '../../src/worldgen/moses';
 import { boxDensity, distanceField } from '../../src/worldgen/fields';
+import { gradeRedline } from '../../src/worldgen/redline';
+import { computePowerGrid } from '../../src/growth/power';
 import { wideRoadAt } from '../../src/ui/decoration';
 
 const SEEDS = ['moses-1', 'moses-2', 'moses-3'];
@@ -43,6 +45,8 @@ function runFullStage(seed: string, width = 128, height = 128): WorldState {
 }
 
 // Runs terrain, then the first `n` eras, forking each era rng like the stage.
+// Draws the redline grade first (as mosesCenturyStage does) so eras that key
+// burdens off the grade see the real discriminatory geography in prefix runs.
 function runEras(
   seed: string,
   n: number,
@@ -51,6 +55,7 @@ function runEras(
   params: MosesParams = P,
 ): { world: WorldState; state: MosesState } {
   const world = runPipeline({ seed, width, height }, [terrainStage()]);
+  gradeRedline(world.map, createRng(seed).fork('redline'));
   const state = createMosesState();
   for (let k = 0; k < n; k++) ERAS[k]!(world, createRng(seed).fork(ERA_NAMES[k]!), params, state);
   return { world, state };
@@ -71,6 +76,7 @@ function aliveKindCount(world: WorldState, kind: number): number {
 function runSatellites(seed: string, width = 128, height = 128): { world: WorldState; state: MosesState } {
   const world = runPipeline({ seed, width, height }, [terrainStage()]);
   const state = createMosesState();
+  gradeRedline(world.map, createRng(seed).fork('redline'));
   era1Founding(world, createRng(seed).fork('era1'), P, state);
   era2MotorAge(world, createRng(seed).fork('era2'), P, state);
   era3Highways(world, createRng(seed).fork('era3'), P, state);
@@ -354,6 +360,65 @@ describe('era2MotorAge', () => {
       expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
     });
   }
+});
+
+describe('era2MotorAge — legacy dirty power, sited by grade', () => {
+  const PLANTS = new Set<number>([BuiltKind.CoalPlant, BuiltKind.GasPlant]);
+  const parcelMeanGrade = (world: WorldState, i: number): number => {
+    const { map, parcels } = world;
+    const e = parcels.get(i);
+    let sum = 0;
+    let n = 0;
+    for (let dy = 0; dy < e.height; dy++) {
+      for (let dx = 0; dx < e.width; dx++) {
+        sum += map.redline[map.idx(e.x + dx, e.y + dy)]!;
+        n++;
+      }
+    }
+    return sum / n;
+  };
+  const isPlant = (world: WorldState, i: number): boolean => PLANTS.has(world.parcels.kindAt(i));
+
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": sites legacy coal/gas plants`, () => {
+      const { world } = runEras(seed, 2);
+      const plants = world.parcels.aliveIndices().filter((i) => isPlant(world, i));
+      expect(plants.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it(`seed "${seed}": the seeded grid powers part of the city (not all dark)`, () => {
+      const { world } = runEras(seed, 2);
+      const grid = computePowerGrid(world.map, world.parcels);
+      expect(grid.capacity).toBeGreaterThan(0);
+      expect(grid.poweredAnchors.size).toBeGreaterThan(0);
+    });
+  }
+
+  it('plants concentrate in worse-graded districts than the average building', () => {
+    // An ensemble property, not a per-seed guarantee: a map whose redlined core is
+    // fully built-out leaves no 3x3 room, so plants spill to the redlined EDGE.
+    // Across seeds the dirty power still sits on worse-graded ground than the
+    // average developed parcel. Baseline = developed (non-plant) parcels, since
+    // an all-tiles mean is inflated by undeveloped floodplain/redlined periphery.
+    let plantSum = 0;
+    let plantN = 0;
+    let devSum = 0;
+    let devN = 0;
+    for (const seed of SEEDS) {
+      const { world } = runEras(seed, 2);
+      for (const i of world.parcels.aliveIndices()) {
+        const g = parcelMeanGrade(world, i);
+        if (isPlant(world, i)) {
+          plantSum += g;
+          plantN++;
+        } else {
+          devSum += g;
+          devN++;
+        }
+      }
+    }
+    expect(plantSum / plantN).toBeGreaterThan(devSum / devN);
+  });
 });
 
 describe('placeParkingField (all-or-nothing, unit)', () => {
