@@ -25,7 +25,7 @@ import { visitValue } from '../citizens/plots';
 import { stopCategoryOf, DAILY_ITINERARY, type StopCategory } from '../citizens/itinerary';
 import { TravelMode, modeSpec, modeRidesNetwork, modeSpeedMult, MODE_CHOICE_ORDER } from '../citizens/modes';
 import type { Household } from '../citizens/census';
-import { layField, decayField } from '../citizens/field';
+import { layField, decayField, sampleField } from '../citizens/field';
 import type { Rng } from '../engine/rng';
 
 /** Maximum elapsed time honoured in a single stepAmbient call, mirroring
@@ -107,6 +107,18 @@ const TRAFFIC_DECAY = 1; // live traffic eases back this much per substep when n
 const CONGESTION_WEIGHT = 3; // how strongly the pathfinder/peds avoid a fully-congested tile
 /** A* search bound — a car-agent's route is the committed least-cost path; abandon past this. */
 const ROAD_PATH_MAX_ITERS = 4000;
+
+/** Live, AGENT-DRIVEN air pollution (0..POLL_MAX), keyed by tile: cars EMIT it on the tiles they
+ *  drive (heavier on freeways and where they idle in congestion), and it lingers as smog, decaying
+ *  slower than traffic clears. Peds shun it (a term in pedCost); its human cost reaches the city
+ *  through land value (it drags a tile down). Live layer, never hashed — the smog is emergent from
+ *  the actual vehicles, not an aggregate field. */
+const POLL_MAX = 255;
+const POLL_LAY_BASE = 6; // a car emits this on a surface road per substep it drives there
+const POLL_FREEWAY_MULT = 2; // a freeway carries faster, heavier traffic → twice the emission
+const POLL_CONGEST = 8; // up to this much MORE on a fully-jammed tile (idling smog)
+const POLL_DECAY = 0.4; // smog lingers — eases back slower than traffic (TRAFFIC_DECAY = 1) clears
+const PED_POLL_WEIGHT = 2.5; // a fully-smoggy tile costs about as much as a stroad to walk
 
 /** Target number of itinerary citizens to keep out living their daily round at once. Below the
  *  ped cap, so there's still room for ambient wanderers, last-mile walkers, and respawned citizens.
@@ -394,6 +406,10 @@ export interface AmbientState {
    *  drive, decayed when they don't. THE traffic — emergent from the agents, not an aggregate field.
    *  Car pathfinding routes around it and peds shun it; renderer-side, never hashed. */
   traffic: Map<number, number>;
+  /** Live AGENT-DRIVEN air pollution (0..POLL_MAX), keyed by tile: cars emit it on the tiles they
+   *  drive (heavier on freeways / in congestion), lingering as smog that decays slowly. Peds shun it
+   *  and it drags land value down. Renderer-side, never hashed — the smog emerges from the vehicles. */
+  pollution: Map<number, number>;
   /** The residential homes citizens are spawned from (the census), published by the host via
    *  setHouseholds. Each spawn picks a home weighted by its citizen count (denser → more people
    *  out), so the daily-itinerary population reflects the built city. Renderer-side, never hashed. */
@@ -411,6 +427,7 @@ export function createAmbientState(): AmbientState {
     waterPollution: new Map(),
     waterTick: 0,
     traffic: new Map(),
+    pollution: new Map(),
   };
 }
 
@@ -781,27 +798,31 @@ function isWalkable(map: GameMap, x: number, y: number): boolean {
  *  (avenues) worst. So peds drift onto promenades and shun busy stroads where the route allows.
  *  WILD ground (empty land) is terrain-aware via `wear`: lush is dear, a beaten desire path cheap
  *  (foot traffic self-reinforces paths). */
-function pedCost(
+export function pedCost(
   map: GameMap,
   x: number,
   y: number,
   wear?: ReadonlyMap<number, number>,
   traffic?: ReadonlyMap<number, number>,
+  pollution?: ReadonlyMap<number, number>,
 ): number {
   const i = map.idx(x, y);
   const k = map.built[i]!;
-  if (k === BuiltKind.Promenade) return 0.3;
-  if (k === BuiltKind.QuietStreet || k === BuiltKind.BikePath) return 0.5;
-  const trafficLoad = ((traffic?.get(i) ?? 0) / TRAFFIC_MAX) * 2; // LIVE agent traffic: busier → costlier on foot
-  if (k === BuiltKind.RoadStreet) return 0.55 + trafficLoad; // a local street
-  if (k === BuiltKind.RoadAvenue) return 2.0 + trafficLoad; // a stroad — unpleasant on foot
-  if (k === BuiltKind.None) {
+  // Smog drifts over every tile — a polluted block is unpleasant on foot whatever its surface.
+  const smog = ((pollution?.get(i) ?? 0) / POLL_MAX) * PED_POLL_WEIGHT;
+  let base: number;
+  if (k === BuiltKind.Promenade) base = 0.3;
+  else if (k === BuiltKind.QuietStreet || k === BuiltKind.BikePath) base = 0.5;
+  else if (k === BuiltKind.RoadStreet || k === BuiltKind.RoadAvenue) {
+    const trafficLoad = ((traffic?.get(i) ?? 0) / TRAFFIC_MAX) * 2; // LIVE agent traffic: busier → costlier on foot
+    base = (k === BuiltKind.RoadStreet ? 0.55 : 2.0) + trafficLoad; // a local street vs a stroad
+  } else if (k === BuiltKind.None) {
     // wild ground: lush growth (high flora) is hard going; a beaten path (high wear) is easy.
     const flora = map.floraVitality[i]! / 255;
     const worn = (wear?.get(i) ?? 0) / WEAR_MAX;
-    return Math.max(PED_GROUND_MIN, PED_GROUND_BASE + flora * PED_LUSH - worn * PED_BEATEN);
-  }
-  return 0.9; // parking / transit / built greens
+    base = Math.max(PED_GROUND_MIN, PED_GROUND_BASE + flora * PED_LUSH - worn * PED_BEATEN);
+  } else base = 0.9; // parking / transit / built greens
+  return base + smog;
 }
 
 /** Fuel a citizen spends on one substep at (x,y) — the SPEND side of the fuel economy, twinned with
@@ -850,10 +871,13 @@ function modeCost(
   y: number,
   wear?: ReadonlyMap<number, number>,
   traffic?: ReadonlyMap<number, number>,
+  pollution?: ReadonlyMap<number, number>,
 ): number {
   const k = map.built[map.idx(x, y)]!;
   if (modeRidesNetwork(mode, k)) return modeSpec(mode).networkCost;
-  return modeSpec(mode).pavementOnly ? modeSpec(mode).networkCost : pedCost(map, x, y, wear, traffic);
+  return modeSpec(mode).pavementOnly
+    ? modeSpec(mode).networkCost
+    : pedCost(map, x, y, wear, traffic, pollution);
 }
 
 /** A routed citizen's next grid step toward (tgtx, tgty) for travel `mode` (default Walk): the
@@ -870,6 +894,7 @@ function nextStepToward(
   wear?: ReadonlyMap<number, number>,
   mode: TravelMode = TravelMode.Walk,
   traffic?: ReadonlyMap<number, number>,
+  pollution?: ReadonlyMap<number, number>,
 ): number {
   if (Math.abs(x - tgtx) + Math.abs(y - tgty) <= 1) return -1; // at / adjacent to the target
   let best = -1;
@@ -879,8 +904,9 @@ function nextStepToward(
     const ny = y + DIR_DY[d]!;
     if (!modeCanEnter(mode, map, nx, ny)) continue;
     if (recent && recent.includes(map.idx(nx, ny))) continue;
-    // Distance dominates (still reaches the target); the mode cost hugs lines / shuns stroads + jams.
-    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + modeCost(mode, map, nx, ny, wear, traffic);
+    // Distance dominates (still reaches the target); the mode cost hugs lines / shuns stroads + jams + smog.
+    const score =
+      Math.abs(nx - tgtx) + Math.abs(ny - tgty) + modeCost(mode, map, nx, ny, wear, traffic, pollution);
     if (score < bestScore) {
       bestScore = score;
       best = d;
@@ -1570,6 +1596,22 @@ function layTraffic(state: AmbientState, map: GameMap, x: number, y: number): vo
   layField(state.traffic, map.idx(x, y), TRAFFIC_LAY, TRAFFIC_MAX);
 }
 
+/** How much air pollution a car emits at the tile under it this substep (pure decision seam): a base
+ *  amount on a surface road, doubled on a freeway (faster, heavier flow), plus up to POLL_CONGEST
+ *  more scaled by how jammed the tile is (`congestion` 0..1 = local traffic / TRAFFIC_MAX) — idling
+ *  in a jam smogs the most. The car IS the source; the macro smog pattern emerges from the agents. */
+export function pollutionEmit(onFreeway: boolean, congestion: number): number {
+  return POLL_LAY_BASE * (onFreeway ? POLL_FREEWAY_MULT : 1) + congestion * POLL_CONGEST;
+}
+
+/** A driving car lays live air pollution at the tile under it, scaled by freeway/congestion via
+ *  pollutionEmit. Peds shun it (pedCost) and it drags land value down — the agent-driven air layer. */
+function layPollution(state: AmbientState, map: GameMap, x: number, y: number, onFreeway: boolean): void {
+  const i = map.idx(x, y);
+  const congestion = sampleField(state.traffic, i) / TRAFFIC_MAX;
+  layField(state.pollution, i, pollutionEmit(onFreeway, congestion), POLL_MAX);
+}
+
 function depositHealth(state: AmbientState, homeTile: number, value: number): void {
   if (value === 0) return;
   const cur = state.buildingHealth.get(homeTile) ?? 0;
@@ -1760,6 +1802,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       const sp = onFreeway ? CAR_SPEED * 2 : CAR_SPEED; // freeways move traffic twice as fast
       const moving = advanceMover(car, sp, map, (x, y) => pathStep(map, car, x, y));
       layTraffic(state, map, Math.round(car.x), Math.round(car.y)); // the car IS the traffic
+      layPollution(state, map, Math.round(car.x), Math.round(car.y), onFreeway); // ...and the smog
       p.x = car.x; // ride along (hidden)
       p.y = car.y;
       if (moving) return true;
@@ -1815,7 +1858,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       const hereKind = map.built[map.idx(Math.round(p.x), Math.round(p.y))]!;
       const speed = PED_SPEED * modeSpeedMult(mode, hereKind);
       const moving = advanceMover(p, speed, map, (x, y, _fromDir, recent) =>
-        nextStepToward(map, x, y, tgtx, tgty, recent, state.wear, mode, state.traffic),
+        nextStepToward(map, x, y, tgtx, tgty, recent, state.wear, mode, state.traffic, state.pollution),
       );
       if (moving) return true; // still walking this leg
       // advanceMover stopped: arrived (within a tile of the target) or boxed in.
@@ -1939,6 +1982,10 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   // 5b. Live traffic eases back where no car is passing — so the agent-driven field tracks CURRENT
   //     driving, and a calmed/bypassed road clears.
   decayField(state.traffic, TRAFFIC_DECAY);
+
+  // 5c. Air pollution lingers as smog and eases back slowly (slower than traffic) — so calming a
+  //     corridor clears its jam quickly but the haze takes longer to lift.
+  decayField(state.pollution, POLL_DECAY);
 
   // 6. Water runoff: on a slow cadence, each coastal water tile collects pollution from the
   //    ground around it and grows heavily polluted over time (impassable, so it never wears).

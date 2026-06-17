@@ -17,12 +17,22 @@ layer (non-deterministic).
   is retired; cars lay a live `state.traffic` field as they drive, the A\* car pathfinder routes
   AROUND congestion, and peds shun it. `map.traffic` stays 0 (out of the dynamic loop; seeded-world
   determinism unaffected).
-- 🔴 **Next layers:** pollution from actual traffic (cars emit on the tiles they drive); land value;
-  population — all agent-emergent.
+- ✅ **Pollution is now agent-driven** (PR #48): cars emit a live `state.pollution` field on the tiles
+  they drive (heavier on freeways / in congestion, `pollutionEmit`), it lingers as smog and decays
+  slowly, peds shun it (`pedCost`), and it renders as a grey haze. Built on the new `ScalarField`
+  abstraction (PR #47). Live-verified: smog concentrates on the freeway interchange, clear over calm
+  green blocks. Non-hashed — determinism gate intact.
+- ✅ **`ScalarField` abstraction** (PR #47): `layField`/`decayField`/`sampleField` — the one shape
+  behind wear / water-pollution / traffic / air-pollution, so each layer is a thin lay/decay/read.
+- 🔴 **Next layers:** land value (derived: amenity proximity − pollution − traffic − blight);
+  population (live per-household occupancy) — both agent-emergent.
 
 ## Open
 
-(none currently — see Fixed)
+- 🟡 **Driving-ped substrate exemption is implicit** — a hidden `'driving'` ped survives the
+  substrate-despawn (ambientContent substep step 1) only because boarding leaves a stale `walkTo` set.
+  Make it explicit (`p.phase === 'driving'` in the exemption) so it can't break if `walkTo` is cleared.
+  Surfaced while testing pollution; low priority, no live symptom.
 
 ## Fixed
 
