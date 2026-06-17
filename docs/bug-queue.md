@@ -22,18 +22,34 @@ Revival = make a pocket worth living in (greens + calm → land value → occupa
    row-major, so any vacancy scatters organically rather than leaving a clean empty bottom band
    (Maddy: "the lower half of these 4x4 grids is always empty... row major is not right, needs
    randomization"). Alive ~488→~1054; the city reads as a real filled place. **Item 1 DONE.**
-2. 🔴 **Legibility quick-wins** (cheap, high value — she's flying blind): plot LETTERS SNES-style
-   (R1/R2/R3, C, I, civic glyphs) on each parcel; inspect tool NAMES the thing + gives real info
-   (currently just an id number); fix the TOOLBAR — fixed bottom location blocks the lower map after
-   techs unlock → categorize behind MENU TILES (transit / residential / civic / …) + make it not
-   occlude the map.
-3. 🔴 **Revival payoff (deterministic-growth seam)** — zero-occupancy homes decay to RUINS; sustained
-   healing rebuilds/densifies them. Sample the live occupancy signal into the hashed stock. (Subsumes
-   the old "building decay → ruins" item. May loosen the #51 occupancy floor so blocks can truly die.)
-4. 🔴 **DESIGN (paradigm, not a quick fix): classic construction tools** — Maddy wants "original"
-   tools: R/C/I zoning, plain streets, **power plants + a real power grid**. TODAY power is NOT
-   simulated (EnergyNode is just a placeable building, no grid); the model is tech-tree placement, not
-   zoning. Bringing back zoning + utilities is a paradigm decision — discuss scope before building.
+2. ✅ **Legibility quick-wins** — (a) PR #55: SNES-style plot GLYPHS (R1/R2/R3, C, I, civic letters)
+   stamped per parcel (pure `glyphContent`, drawn in the cached base). (b) PR #56: inspect NAMES the
+   tile + shows real info (kind name / zone / density / condition% + live pop / land value / health /
+   traffic / smog) — `builtKindName` (engine) + `liveInspectLine`. (c) TOOLBAR fixed in item ✅-toolbar
+   below. **Item 2 DONE.**
+3. ✅ **Revival payoff (deterministic-growth seam)** — PR #61: new fail-closed `src/growth/revival.ts`.
+   The LIVE occupancy is sampled into the HASHED stock on the slow civic cadence (never in stepAmbient
+   / simTick → N=120 gate untouched): a thriving home heals + densifies (R1→R2→R3), a struggling one
+   crumbles to a derelict ruin, REVERSIBLY. Live-verified both directions. The #51 occupancy floor was
+   left as-is (revival keys on occ-vs-baseline signal, so the floor doesn't block decay-to-ruin). **DONE.**
+4. ✅ **Classic construction tools** — PR #57: the original primitives are always buildable regardless
+   of tech (Street/Avenue/Highway/Rail + R/C/I/Civic base zones); the tech tree LAYERS its kinds on top.
+   R/C/I plop a density-1 base parcel the revival/growth seam (item 3) then grows. **Scope note:**
+   "power plants + a real power grid" is NOT done — our taxonomy has no classic dirty power plant kind
+   (EnergyNode is the tech-tree solar hub); a simulated power grid remains a PARADIGM decision to scope
+   with Maddy (new BuiltKind + flood-fill grid). All primitives that EXIST in the taxonomy are buildable.
+
+## TOOLBAR + TECH TREE OVERHAUL (overnight 2026-06-17)
+
+- ✅ **Categorized pictorial dock** (PR #58): the flat 20-wide strip → top-level modes (Inspect/
+  Bulldoze) + category tiles (Transit/Residential/Commercial/Industrial/Civic/Green/Energy), each a
+  pictorial icon, with the picked category's tools in a flyout. Pure `toolMenuContent`; categories
+  surface only when they hold a tool, so tech grows the menu.
+- ✅ **Relocatable dock** (PR #59): a drag grip moves the dock off the lower map (it blocked the map
+  after techs unlocked); clamped to the viewport (`dockLayout`), persisted to localStorage.
+- ✅ **Civ-style tech tree** (PR #60): the 7 flat branch columns → a left→right dependency TREE — nodes
+  in depth columns (roots left), SVG connector lines per prereq, edges light gold when satisfied.
+  Pure `techLayout` (depth + edges); panel is a large 2D-scroll overlay. Click-to-unlock + edge recolor.
 
 ## ACTIVE DIRECTION
 
