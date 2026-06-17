@@ -34,10 +34,14 @@ Revival = make a pocket worth living in (greens + calm → land value → occupa
    left as-is (revival keys on occ-vs-baseline signal, so the floor doesn't block decay-to-ruin). **DONE.**
 4. ✅ **Classic construction tools** — PR #57: the original primitives are always buildable regardless
    of tech (Street/Avenue/Highway/Rail + R/C/I/Civic base zones); the tech tree LAYERS its kinds on top.
-   R/C/I plop a density-1 base parcel the revival/growth seam (item 3) then grows. **Scope note:**
-   "power plants + a real power grid" is NOT done — our taxonomy has no classic dirty power plant kind
-   (EnergyNode is the tech-tree solar hub); a simulated power grid remains a PARADIGM decision to scope
-   with Maddy (new BuiltKind + flood-fill grid). All primitives that EXIST in the taxonomy are buildable.
+   R/C/I plop a density-1 base parcel the revival/growth seam (item 3) then grows.
+5. ✅ **Power plants + a real power grid** (PRs #63-66) — SC2000 roster minus microwave (Coal/Gas/Hydro/
+   Nuclear classic; Wind/Solar/Fusion up Solarpunk) + distributed EnergyNode. SC1989 conduction (any
+   built tile conducts), per-component capacity-vs-demand with brownout (`src/growth/power.ts`, live
+   derived field). Hard-gate: unpowered → no growth + slow decay, reversible (composes with revival).
+   Dirty plants (Coal/Gas) emit smog → land value → occupancy → decay; renewables clean. Always-on red
+   "unpowered" pips + inspect power status. OPEN: power overlay; maybe seed legacy power so the start
+   isn't 100% dark; balance tuning. (Also fixed in #64: multi-tile glyph z-order — drawn in a 2nd pass.)
 
 ## TOOLBAR + TECH TREE OVERHAUL (overnight 2026-06-17)
 
