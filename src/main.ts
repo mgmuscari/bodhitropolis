@@ -45,6 +45,7 @@ import { mountTechPanel } from './ui/techPanel';
 import { availableTools, previewTool, applyTool, toolDef, type ToolId } from './tools/tools';
 import { isLineTool } from './ui/lineTools';
 import { toolbarRows, refreshSignature, addedIds } from './ui/toolbarContent';
+import { buildToolMenu, type ToolCategory } from './ui/toolMenuContent';
 import { mountToolbar } from './ui/toolbar';
 import { metaButtons } from './ui/dockContent';
 import { computeNeighborhoods } from './civic/neighborhoods';
@@ -218,6 +219,9 @@ export function main(): void {
   // build AND building convert (rezoning greens) — is point-apply. The predicate
   // lives in src/ui/lineTools.ts (pure, unit-tested); it reads the ToolDef's kind.
   let selectedToolId: ToolId | null = null;
+  // Which category flyout is open in the dock (null = none). Toggled by clicking a
+  // category tile; the picked tool stays selected with the flyout left open.
+  let openCategory: ToolCategory | null = null;
 
   // The single composite overlay (eco | civic | null). Declared HERE — before the
   // dock mount — because the dock's getMetaButtons reads it at mount time and on
@@ -229,7 +233,7 @@ export function main(): void {
   // the active flags from the live panel/overlay state; onMeta routes a click to
   // the SAME closures the keys use (techPanel.toggle / cycleOverlay).
   const toolbar = mountToolbar(document.body, {
-    getRows: () => toolbarRows(availableTools(tech), selectedToolId, tech.effort),
+    getMenu: () => buildToolMenu(availableTools(tech), selectedToolId, tech.effort, openCategory),
     onSelect: (id) => {
       selectedToolId = id as ToolId;
       renderer.setPreview(null);
@@ -237,6 +241,10 @@ export function main(): void {
       markPreviewDirty(); // selection-only: the preview lives in the composite
       toolbar.refresh();
       snapshotDock(); // selection moved the signature → keep the sim-gated check a no-op
+    },
+    onToggleCategory: (id) => {
+      openCategory = openCategory === id ? null : id;
+      toolbar.refresh();
     },
     getMetaButtons: () =>
       metaButtons(techPanel.isOpen(), activeOverlay && { kind: activeOverlay.kind }, ambientOn),

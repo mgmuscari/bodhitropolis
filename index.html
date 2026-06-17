@@ -230,6 +230,75 @@
         opacity: 0.45;
       }
 
+      /* Categorized dock (v2): top-level modes + category tiles in one row; the
+         open category's tools in a flyout above. Pictorial icons + pixel labels. */
+      .toolbar-main {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+      }
+      .toolbar-modes,
+      .toolbar-cats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+      }
+      .toolbar-cats {
+        padding-left: 0.5rem;
+        border-left: 1px solid #3a3850;
+      }
+      .toolbar-flyout {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 0.35rem;
+        max-width: 94vw;
+        padding-bottom: 0.4rem;
+        margin-bottom: 0.1rem;
+        border-bottom: 1px solid #3a3850;
+      }
+      .toolbar-flyout[hidden] {
+        display: none;
+      }
+      .toolbar-mode,
+      .toolbar-cat,
+      .toolbar-flyitem {
+        padding: 0.35rem 0.7rem;
+        font: inherit;
+        font-size: 0.8rem;
+        letter-spacing: 0.02em;
+        color: #e6e2d0;
+        background: #221f33;
+        border: 1px solid #3a3850;
+        border-radius: 2px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .toolbar-mode:hover,
+      .toolbar-cat:hover,
+      .toolbar-flyitem:hover {
+        background: #2a2740;
+      }
+      .toolbar-cat {
+        font-size: 0.82rem;
+      }
+      .toolbar-mode-selected,
+      .toolbar-cat-active,
+      .toolbar-flyitem-selected {
+        border-color: #c8c264;
+        background: #2f2b46;
+        color: #c8c264;
+      }
+      /* A category that holds the selected tool but is closed: a quiet gold hint. */
+      .toolbar-cat-hassel {
+        border-color: #8a8550;
+      }
+      .toolbar-flyitem-unaffordable {
+        opacity: 0.45;
+      }
+
       /* Dock meta row: [Tech (T)] [Eco (E)] [Civic (C)] — the keyboard-only depth
          surfaced as always-visible toggles, sitting in the dock below the tool row.
          Read as secondary controls (smaller, muted) until active, when they take the
