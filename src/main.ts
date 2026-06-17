@@ -18,7 +18,7 @@ import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
-import { createAmbientState, stepAmbient, ingestTrips, setParkingLots, setHouseholds, seedBlight } from './ui/ambientContent';
+import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, seedBlight } from './ui/ambientContent';
 import { residentialCensus } from './citizens/census';
 import { parkingLots, parkingStalls } from './ui/parkingContent';
 import { attachInput } from './ui/input';
@@ -489,12 +489,11 @@ export function main(): void {
     currentTick = tick;
     const r = simTick(deps, tick);
     simChanged = true; // effort accrued / grants may have moved → re-sync next frame
-    if (r.trafficTicked) {
-      // Cars ARE trips: the traffic cadence published this round's O-D trips → hand them
-      // to the ambient renderer, whose cars drive the committed paths and despawn on
-      // arrival. Renderer-side + deterministic (paths come from the sim).
-      ingestTrips(ambientState, deps.trips ?? [], world.map);
-    }
+    // NOTE: the sim's abstract O-D trips (deps.trips) still lay the deterministic traffic-density
+    // field that feeds growth/pollution/ped-routing, but they are NO LONGER visualised as ambient
+    // cars. The visible traffic is the CITIZENS (owned cars + walkers/cyclists/transit riders), which
+    // are persistent — they park and are walked to, never popping out of existence at a destination.
+    // (ingestTrips is retained + tested for the trip→ambient path, just not driven from the sim here.)
     if (r.ecoTicked && activeOverlay?.kind === 'eco') {
       // biodiversity is derived → recompute + re-push; soil/flora/fauna read the
       // live layers and need no recompute.

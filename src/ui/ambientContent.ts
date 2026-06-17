@@ -92,6 +92,10 @@ const CITIZEN_TRIP_RADIUS = 40;
 const BIKE_RANGE = 30;
 const MODE_INFRA_RADIUS = 6;
 
+/** How long a citizen's car lingers "parked at home" after the owner's round ends, before it clears
+ *  — a brief visible beat, short enough that retired cars don't pile up into a backlog. */
+const RETIRED_CAR_LINGER = 90;
+
 /** Target number of itinerary citizens to keep out living their daily round at once. Below the
  *  ped cap, so there's still room for ambient wanderers, last-mile walkers, and respawned citizens.
  *  CITIZEN_SPAWN_PER_SUBSTEP tops the population up gently rather than all at once. */
@@ -287,16 +291,19 @@ export interface Mover {
    *  ('to-home'), depositing the visit at `homeTile` on arrival. `phase` tracks the leg;
    *  `building` is the destination plot (the wellbeing source); `dwellInside` times the visit. */
   carId?: number;
-  phase?: 'to-building' | 'inside' | 'to-car' | 'to-home';
+  phase?: 'to-building' | 'inside' | 'to-car' | 'to-home' | 'to-vehicle' | 'driving';
   building?: { x: number; y: number };
   dwellInside?: number;
-  /** A CITIZEN-CAR's current grid-route target (the plot it is driving to, or home). A car with an
-   *  `itinerary` is a citizen's OWNED vehicle: it drives stop→stop, parks (visibly, persistently) at
-   *  each, and its bound ped does the last-mile; on the ped's return the car advances to the next
-   *  stop. It never vanishes at a plot and never "becomes a walker" — car and rider stay distinct. */
-  driveTo?: { x: number; y: number };
-  /** A citizen-car whose round is done and is now driving home to park (then despawn). */
-  headingHome?: boolean;
+  /** (Car) A citizen's OWNED vehicle — a persistent entity its owner walks to and drives. The car
+   *  filter never auto-moves, dwells, or despawns an owned car; only its owner ped moves it (in the
+   *  'driving' phase) and retires it when its round ends. So it never vanishes while its owner is
+   *  away on foot, and is never the same entity as the rider. */
+  owned?: boolean;
+  /** (Ped, DRIVE leg) the available parking spot its owned car drives to, before the owner walks the
+   *  last mile to the real destination. */
+  parkAt?: { x: number; y: number };
+  /** (Ped, DRIVE-HOME leg) where to walk after parking the car, then despawn (the home plot). */
+  homeDest?: { x: number; y: number };
   /** Substeps a walking citizen has spent on a road/stroad this trip — taxes the home deposit. */
   roadSteps?: number;
   /** Substeps a walking citizen has spent on a heavily-WORN (degraded) desire path this trip —
@@ -908,7 +915,7 @@ function nearestOfCategory(
  *  aim it at the nearest plot of the next itinerary category (skipping categories the district
  *  lacks). Sets it walking ('to-building') toward that plot and resets the leg's walk tolls.
  *  Returns false when no stops remain — the caller then sends it home. */
-function advanceItinerary(p: Ped, map: GameMap): boolean {
+function advanceItinerary(state: AmbientState, p: Ped, map: GameMap): boolean {
   const itin = p.itinerary!;
   const cx = Math.round(p.x);
   const cy = Math.round(p.y);
@@ -916,11 +923,14 @@ function advanceItinerary(p: Ped, map: GameMap): boolean {
     const plot = nearestOfCategory(map, cx, cy, itin[step]!);
     if (plot) {
       p.itinStep = step;
+      const mode = chooseMode(map, cx, cy, plot.x, plot.y);
+      // DRIVE: walk to the owned car, drive it to a parking spot, then walk to the plot. If no car
+      // can be had (land-locked), fall through and walk the leg.
+      if (mode === TravelMode.Drive && setDriveLeg(state, p, map, plot, 'to-building')) return true;
       p.phase = 'to-building';
       p.walkTo = { x: plot.x, y: plot.y };
       p.building = { x: plot.x, y: plot.y };
-      // An active traveller picks walk/bike/transit; it owns no car, so a would-drive leg is walked.
-      p.mode = activeMode(chooseMode(map, cx, cy, plot.x, plot.y));
+      p.mode = mode === TravelMode.Drive ? TravelMode.Walk : mode; // drive unavailable → walk
       p.roadSteps = undefined; // a fresh leg — its tolls accrue anew
       p.wornSteps = undefined;
       return true;
@@ -984,73 +994,107 @@ export function chooseMode(map: GameMap, ox: number, oy: number, dx: number, dy:
   return TravelMode.Walk;
 }
 
-/** An ACTIVE traveller owns no car, so a leg that would drive is walked instead (walk/bike/transit
- *  only). Drivers are spawned as citizen-cars up front; this keeps a ped from needing a vehicle
- *  mid-round. */
-function activeMode(mode: TravelMode): TravelMode {
-  return mode === TravelMode.Drive ? TravelMode.Walk : mode;
+/** A citizen's OWNED vehicle: the persistent parked Car it walks to and drives. Returns the existing
+ *  one (by carId), or lazily spawns one parked on a road by the citizen's current spot. Null if there
+ *  is no drivable tile nearby (land-locked) → the caller walks the leg instead. The car is `owned`
+ *  (the car filter never auto-moves or despawns it — its owner manages it), so it never vanishes
+ *  while its owner is away on foot. */
+function ensureOwnedCar(state: AmbientState, p: Ped, map: GameMap): Car | null {
+  if (p.carId !== undefined) {
+    const existing = findCar(state, p.carId);
+    if (existing) return existing;
+  }
+  const start = nearestDriveStart(map, Math.round(p.x), Math.round(p.y));
+  if (!start) return null;
+  const id = (state.nextCarId = (state.nextCarId ?? 0) + 1);
+  const car: Car = {
+    x: start.x,
+    y: start.y,
+    dir: 0,
+    tx: start.x,
+    ty: start.y,
+    parked: true,
+    owned: true,
+    id,
+    dwell: PARK_MAX_WAIT,
+    tint: (Math.imul((map.idx(start.x, start.y) + 1) ^ id, 0x9e3779b1) >>> 0) % 0x10000,
+  };
+  for (let d = 0; d < 4; d++) {
+    const nx = start.x + DIR_DX[d]!;
+    const ny = start.y + DIR_DY[d]!;
+    if (!map.inBounds(nx, ny) || !carTraversable(map.built[map.idx(nx, ny)]!)) {
+      car.curbDir = d;
+      break;
+    }
+  }
+  state.cars.push(car);
+  p.carId = id;
+  return car;
 }
 
-/** Advance a CITIZEN-CAR to the next stop on its owner's round: aim it at the nearest plot of the
- *  next itinerary category (skipping absent ones), or — when the round is done — home, to park and
- *  linger. Called when the last-mile bound ped returns to the car. The car drives there next tick
- *  and parks again, so the owned vehicle threads the whole day, never vanishing or turning into a
- *  walker. */
-function advanceCarItinerary(car: Car, map: GameMap): void {
-  const cx = Math.round(car.x);
-  const cy = Math.round(car.y);
-  const itin = car.itinerary!;
-  car.parked = false;
+/** A free, available parking spot (a drivable tile not already holding a parked car) near (x, y) —
+ *  where a citizen-car drives to and parks before its owner walks the last mile. Null if none. */
+function findParkingNear(state: AmbientState, map: GameMap, x: number, y: number): { x: number; y: number } | null {
+  return findCurbSpot(state, map, x, y);
+}
+
+/** Park an owned car at `spot` (a drivable tile), recording the kerb side, and keep it OWNED so it
+ *  persists at rest until its owner returns to it. */
+function parkOwnedCar(car: Car, map: GameMap, spot: { x: number; y: number }): void {
+  car.x = spot.x;
+  car.y = spot.y;
+  car.tx = spot.x;
+  car.ty = spot.y;
   car.lotIdx = undefined;
   car.stallIdx = undefined;
   car.curbDir = undefined;
-  car.recent = undefined;
-  for (let step = (car.itinStep ?? 0) + 1; step < itin.length; step++) {
-    const plot = nearestOfCategory(map, cx, cy, itin[step]!);
-    if (plot) {
-      car.itinStep = step;
-      car.building = { x: plot.x, y: plot.y };
-      car.driveTo = { x: plot.x, y: plot.y };
-      return;
-    }
-  }
-  // round done → drive home and park there.
-  car.itinStep = itin.length;
-  car.headingHome = true;
-  car.building = undefined;
-  if (car.homeTile !== undefined) {
-    const hx = car.homeTile % map.width;
-    const hy = (car.homeTile - hx) / map.width;
-    car.driveTo = { x: hx, y: hy };
-  } else {
-    car.driveTo = undefined; // no home → it'll park-and-linger wherever it is
-  }
-}
-
-/** Park a home-bound citizen-car at its home kerb and demote it to a plain lingering parked car
- *  (no bound ped, no deposit) — it sits "parked at home", then leaves on its dwell timeout. */
-function parkAtHome(state: AmbientState, car: Car, map: GameMap): boolean {
-  const ax = Math.round(car.x);
-  const ay = Math.round(car.y);
-  const curb = findCurbSpot(state, map, ax, ay);
-  if (!curb) return false; // nowhere to stop → despawn
-  car.x = curb.x;
-  car.y = curb.y;
-  car.curbDir = undefined;
   for (let d = 0; d < 4; d++) {
-    const nx = curb.x + DIR_DX[d]!;
-    const ny = curb.y + DIR_DY[d]!;
+    const nx = spot.x + DIR_DX[d]!;
+    const ny = spot.y + DIR_DY[d]!;
     if (!map.inBounds(nx, ny) || !carTraversable(map.built[map.idx(nx, ny)]!)) {
       car.curbDir = d;
       break;
     }
   }
   car.parked = true;
-  car.itinerary = undefined; // a plain parked car now — dwell out and leave
-  car.itinStep = undefined;
-  car.headingHome = undefined;
-  car.building = undefined;
-  car.dwell = PARK_MAX_WAIT;
+  car.recent = undefined;
+}
+
+/** When a citizen's round ends (it gets home, gives up, or is lost), retire its owned car: demote
+ *  it to a plain lingering parked car (no longer owned) so it sits a moment then leaves on its dwell
+ *  — "the car is put away" — rather than vanishing the instant its owner does. */
+function retireOwnedCar(state: AmbientState, p: Ped): void {
+  if (p.carId === undefined) return;
+  const car = findCar(state, p.carId);
+  if (car && car.owned) {
+    car.owned = false;
+    car.parked = true; // a car mid-drive when its owner is lost just stops + lingers, then leaves
+    car.dwell = RETIRED_CAR_LINGER; // a brief "parked at home" beat, then it clears (no backlog)
+  }
+  p.carId = undefined;
+}
+
+/** Set up a DRIVE leg toward `dest`: the citizen walks to its owned car ('to-vehicle'), drives it to
+ *  an available parking spot near `dest` ('driving' → park), then walks the last mile to `dest`
+ *  (`finalWalk`). Returns false if it can't get a car (land-locked) so the caller walks instead.
+ *  The car is a distinct persistent entity — walked to, parked, never morphed into the rider. */
+function setDriveLeg(
+  state: AmbientState,
+  p: Ped,
+  map: GameMap,
+  dest: { x: number; y: number },
+  finalWalk: 'to-building' | 'to-home',
+): boolean {
+  const car = ensureOwnedCar(state, p, map);
+  if (!car) return false;
+  p.phase = 'to-vehicle';
+  p.walkTo = { x: Math.round(car.x), y: Math.round(car.y) };
+  p.parkAt = findParkingNear(state, map, dest.x, dest.y) ?? { x: dest.x, y: dest.y };
+  p.mode = TravelMode.Walk; // walking to the car
+  p.building = finalWalk === 'to-building' ? { x: dest.x, y: dest.y } : undefined;
+  p.homeDest = finalWalk === 'to-home' ? { x: dest.x, y: dest.y } : undefined;
+  p.roadSteps = undefined;
+  p.wornSteps = undefined;
   return true;
 }
 
@@ -1234,16 +1278,14 @@ function spawnPeds(state: AmbientState, map: GameMap, rng: Rng): void {
 function citizenCount(state: AmbientState): number {
   let n = 0;
   for (const p of state.peds) if (p.itinerary !== undefined) n++;
-  for (const c of state.cars) if (c.itinerary !== undefined) n++;
   return n;
 }
 
 /** Top the daily-itinerary population up from the residential census: pick a home (weighted by its
- *  citizen count, so denser buildings send out more people) and send a citizen on its round. The
- *  round's PRIMARY mode is decided by the work leg — a car-dependent commute spawns a DRIVER (an
- *  owned citizen-CAR that drives stop→stop, parks at each, and is walked to/from), otherwise an
- *  ACTIVE traveller (a ped that walks/bikes/rides transit per leg). Census citizens are PRIMARY —
- *  spawned before the ambient wanderers. */
+ *  citizen count, so denser buildings send out more people) and send a citizen out as a PED on its
+ *  round. Each leg the ped picks its own mode (walk/bike/transit/drive); a drive leg makes it walk
+ *  to its OWNED car (lazily acquired), drive, park, and walk on — so the same citizen mixes modes
+ *  across the day. Census citizens are PRIMARY — spawned before the ambient wanderers. */
 function spawnCitizens(state: AmbientState, map: GameMap, rng: Rng): void {
   const homes = state.households;
   if (!homes || homes.length === 0) return;
@@ -1275,45 +1317,17 @@ function spawnCitizens(state: AmbientState, map: GameMap, rng: Rng): void {
       }
     }
     if (sx < 0) continue; // a hemmed-in home, nowhere to step out
-    const homeTile = map.idx(home.x, home.y);
-
-    // Decide the round's primary mode by the work (first) leg.
-    const work = nearestOfCategory(map, sx, sy, DAILY_ITINERARY[0]!);
-    const mode = work ? chooseMode(map, sx, sy, work.x, work.y) : TravelMode.Walk;
-    if (mode === TravelMode.Drive && work) {
-      // A DRIVER: an owned car parked at home drives the round. It carries the itinerary, parks
-      // (visibly, persistently) at each stop, and its bound ped does the last mile.
-      const road = nearestDriveStart(map, home.x, home.y);
-      if (road) {
-        state.cars.push({
-          x: road.x,
-          y: road.y,
-          dir: 0,
-          tx: road.x,
-          ty: road.y,
-          itinerary: DAILY_ITINERARY,
-          itinStep: 0,
-          homeTile,
-          building: { x: work.x, y: work.y },
-          driveTo: { x: work.x, y: work.y },
-          tint: (Math.imul(homeTile ^ (s + 1), 0x9e3779b1) >>> 0) % 0x10000,
-        });
-        continue;
-      }
-      // no road near home → fall through and walk the round instead
-    }
-    // An ACTIVE traveller: a ped that walks/bikes/rides transit per leg.
     const ped: Ped = {
       x: sx,
       y: sy,
       dir: 0,
       tx: sx,
       ty: sy,
-      homeTile,
+      homeTile: map.idx(home.x, home.y),
       itinerary: DAILY_ITINERARY,
       itinStep: -1, // advanceItinerary sets the first stop (step 0 = Work)
     };
-    if (advanceItinerary(ped, map)) state.peds.push(ped); // dropped if the district has no stops
+    if (advanceItinerary(state, ped, map)) state.peds.push(ped); // dropped if the district has no stops
   }
 }
 
@@ -1508,7 +1522,11 @@ function depositVisit(
  *  homeless ped (no `homeTile`) has nowhere to respawn, so it despawns (its car releases on its own
  *  timeout). Returns true if it respawned (keep the sprite), false if it should despawn. */
 function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
-  if (p.homeTile === undefined) return false;
+  if (p.homeTile === undefined) {
+    retireOwnedCar(state, p); // even a homeless/bound ped's owned car (if any) must be retired
+    return false;
+  }
+  retireOwnedCar(state, p); // its car is put away (lingers, then leaves) — not orphaned
   depositHealth(state, p.homeTile, -FAILED_TRIP_PENALTY);
   const hx = p.homeTile % map.width;
   const hy = (p.homeTile - hx) / map.width;
@@ -1538,6 +1556,8 @@ function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
   p.itinerary = undefined; // a lost citizen's round ends; it rejoins the neighbourhood at home
   p.itinStep = undefined;
   p.mode = undefined;
+  p.parkAt = undefined;
+  p.homeDest = undefined;
   return true;
 }
 
@@ -1587,6 +1607,10 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   //    and, on arrival, PARKS (a lot stall, or a street curb if none) — it no longer vanishes
   //    at the destination. A path-less car (a test fixture) falls back to the grid wander.
   state.cars = state.cars.filter((c) => {
+    // An OWNED citizen-car is managed entirely by its owner ped (it walks to it, drives it, parks
+    // it, retires it). The filter never moves, dwells, or despawns it — so it never vanishes while
+    // its owner is away on foot. (Demoted to a plain parked car when the owner's round ends.)
+    if (c.owned) return true;
     if (c.parked) {
       c.dwell! -= 1;
       return c.dwell! > 0;
@@ -1594,18 +1618,6 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     // A freeway moves traffic twice as fast as a surface street.
     const onFreeway = map.built[map.idx(Math.round(c.x), Math.round(c.y))] === BuiltKind.RoadHighway;
     const sp = onFreeway ? CAR_SPEED * 2 : CAR_SPEED;
-    if (c.driveTo !== undefined) {
-      // A CITIZEN-CAR grid-routes (Drive mode — roads + parking only) toward its target plot/home;
-      // on arrival (or boxed in) it parks. Heading home it parks-and-lingers; at a stop it parks +
-      // sends its bound ped on the last mile (tryPark), and advances its round when the ped returns.
-      const dt = c.driveTo;
-      const alive = advanceMover(c, sp, map, (x, y, _fromDir, recent) =>
-        nextStepToward(map, x, y, dt.x, dt.y, recent, undefined, TravelMode.Drive),
-      );
-      if (alive) return true;
-      c.driveTo = undefined;
-      return c.headingHome ? parkAtHome(state, c, map) : tryPark(state, c, map);
-    }
     if (c.path !== undefined) {
       const alive = advanceMover(c, sp, map, (x, y) => pathStep(map, c, x, y));
       return alive ? true : tryPark(state, c, map);
@@ -1623,28 +1635,72 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     if (p.phase === 'inside') {
       p.dwellInside! -= 1;
       if (p.dwellInside! > 0) return true;
-      if (p.carId !== undefined) {
+      if (p.itinerary !== undefined) {
+        // A CITIZEN on a daily round: go to the next stop (each leg picks its own mode), or head home.
+        if (!advanceItinerary(state, p, map)) {
+          const hx = p.homeTile! % map.width;
+          const hy = (p.homeTile! - hx) / map.width;
+          // If it has an owned car out, drive home to retrieve + park it; otherwise walk home.
+          const car = p.carId !== undefined ? findCar(state, p.carId) : undefined;
+          if (!(car && setDriveLeg(state, p, map, { x: hx, y: hy }, 'to-home'))) {
+            p.phase = 'to-home';
+            p.walkTo = { x: hx, y: hy };
+            p.building = undefined; // stops banked on arrival; the home leg carries nothing extra
+            p.mode = TravelMode.Walk;
+          }
+        }
+      } else if (p.carId !== undefined) {
+        // A sim/freight last-mile ped: walk back to its parked car and release it.
         const car = findCar(state, p.carId);
         if (!car) return false; // its car already left → the ped vanishes too
         p.phase = 'to-car';
         p.walkTo = { x: car.x, y: car.y };
-      } else if (p.itinerary !== undefined && advanceItinerary(p, map)) {
-        // A citizen on a daily round moved on to its next stop (work → shop → lifestyle).
       } else {
-        // A single-stop walk citizen, or a round that's complete — head home. (Itinerary stops bank
-        // their wellbeing on arrival, so the home leg of a round carries nothing extra.)
+        // A single-stop sim walk citizen: head home, carrying the visit's wellbeing.
         const hx = p.homeTile! % map.width;
         const hy = (p.homeTile! - hx) / map.width;
         p.phase = 'to-home';
         p.walkTo = { x: hx, y: hy };
-        if (p.itinerary !== undefined) {
-          p.building = undefined;
-          p.mode = activeMode(chooseMode(map, Math.round(p.x), Math.round(p.y), hx, hy)); // the trip home too
-        }
       }
       p.tx = Math.round(p.x); // recommit the Manhattan route from here toward the destination
       p.ty = Math.round(p.y);
       p.recent = undefined;
+      return true;
+    }
+
+    if (p.phase === 'driving') {
+      // The citizen rides its owned car to the parking spot near its destination (hidden — the
+      // renderer draws the car, not the rider). On arrival the car PARKS (a real, persistent
+      // vehicle left at the kerb) and the citizen alights to walk the last mile.
+      const car = p.carId !== undefined ? findCar(state, p.carId) : undefined;
+      const target = p.parkAt ?? p.building ?? p.homeDest;
+      if (!car || !target) {
+        // lost the car / no target → finish the leg on foot
+        p.phase = p.homeDest ? 'to-home' : 'to-building';
+        p.walkTo = p.homeDest ?? p.building ?? { x: Math.round(p.x), y: Math.round(p.y) };
+        p.mode = TravelMode.Walk;
+        p.tx = Math.round(p.x);
+        p.ty = Math.round(p.y);
+        p.recent = undefined;
+        return true;
+      }
+      const moved = advanceMover(car, CAR_SPEED, map, (x, y, _fromDir, recent) =>
+        nextStepToward(map, x, y, target.x, target.y, recent, undefined, TravelMode.Drive),
+      );
+      p.x = car.x; // ride along
+      p.y = car.y;
+      if (moved) return true;
+      // reached (or boxed near) the parking spot → park the car and walk the last mile to the dest.
+      parkOwnedCar(car, map, { x: Math.round(car.x), y: Math.round(car.y) });
+      p.x = car.x;
+      p.y = car.y;
+      p.phase = p.homeDest ? 'to-home' : 'to-building';
+      p.walkTo = p.homeDest ?? p.building ?? { x: Math.round(p.x), y: Math.round(p.y) };
+      p.mode = TravelMode.Walk;
+      p.tx = Math.round(p.x);
+      p.ty = Math.round(p.y);
+      p.recent = undefined;
+      p.fuel = undefined; // fresh walking leg
       return true;
     }
     if (p.walkTo !== undefined) {
@@ -1691,6 +1747,21 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         // lost trip; a bound/homeless ped despawns (a bound car releases on its safety timeout).
         return respawnAtHome(state, p, map);
       }
+      if (p.phase === 'to-vehicle') {
+        // Reached its OWNED car → get in and drive (the car was parked, waiting; it never vanished).
+        const car = p.carId !== undefined ? findCar(state, p.carId) : undefined;
+        if (!car) {
+          // car gone (shouldn't happen — owned cars persist) → finish on foot
+          p.phase = p.homeDest ? 'to-home' : 'to-building';
+          p.walkTo = p.homeDest ?? p.building ?? { x: Math.round(p.x), y: Math.round(p.y) };
+          p.mode = TravelMode.Walk;
+          return true;
+        }
+        car.parked = false; // boarded → the car drives next tick
+        car.recent = undefined;
+        p.phase = 'driving';
+        return true;
+      }
       if (p.phase === 'to-building') {
         p.phase = 'inside';
         p.dwellInside = INSIDE_DWELL_MIN + rng.nextInt(INSIDE_DWELL_SPAN);
@@ -1711,22 +1782,20 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         return true;
       }
       if (p.phase === 'to-car') {
+        // A sim/freight last-mile ped got back in → release its car to leave.
         const car = findCar(state, p.carId!);
-        if (car) {
-          if (car.itinerary !== undefined) advanceCarItinerary(car, map); // drive on to the next stop / home
-          else car.dwell = 0; // a sim/freight car: got back in → release it to leave
-        }
-        return false; // the last-mile ped despawns; the car carries on (or was released)
+        if (car) car.dwell = 0;
+        return false;
       }
       if (p.phase === 'to-home') {
-        // Walked home → deposit the visit's wellbeing, less the toll of any road-walking trudge
-        // AND of trudging beaten/degraded desire paths (convenient underfoot, but bleak).
+        // Walked home → deposit any single-stop visit (sim walk citizens), less the road/worn tolls.
         if (p.homeTile !== undefined && p.building) {
           const penalty = Math.floor(
             (p.roadSteps ?? 0) * ROAD_WALK_PENALTY + (p.wornSteps ?? 0) * WORN_WALK_PENALTY,
           );
           depositVisit(state, p.homeTile, p.building, map, penalty);
         }
+        retireOwnedCar(state, p); // the citizen is home → its car is put away (lingers, then leaves)
         return false;
       }
       return false; // unbound routed ped → despawn on arrival
