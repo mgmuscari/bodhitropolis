@@ -489,6 +489,10 @@ export interface AmbientState {
    *  setHouseholds. Each spawn picks a home weighted by its citizen count (denser → more people
    *  out), so the daily-itinerary population reflects the built city. Renderer-side, never hashed. */
   households?: ReadonlyArray<Household>;
+  /** Dirty power-plant emission sources: {tile, amount} laid into the air-pollution field every
+   *  step (like a car's exhaust, but persistent). Published by the host via setPlantEmitters from
+   *  the built layer, so a coal/gas plant smogs its district. Renderer-side, never hashed. */
+  plantEmitters?: ReadonlyArray<{ tile: number; amount: number }>;
 }
 
 export function createAmbientState(): AmbientState {
@@ -520,6 +524,16 @@ export function setParkingLots(state: AmbientState, lots: ReadonlyArray<ParkingL
  *  store via residentialCensus). Mirrors setParkingLots — structural, never part of the world. */
 export function setHouseholds(state: AmbientState, households: ReadonlyArray<Household>): void {
   state.households = households;
+}
+
+/** Publish the dirty-plant emission sources (the host computes these from the built layer via
+ *  power.plantPollution + each plant's footprint plume). Mirrors setHouseholds — structural,
+ *  never part of the world; stepAmbient lays them into the live air-pollution field each pass. */
+export function setPlantEmitters(
+  state: AmbientState,
+  emitters: ReadonlyArray<{ tile: number; amount: number }>,
+): void {
+  state.plantEmitters = emitters;
 }
 
 // --- Pure decision helpers (unit-test seams) -----------------------------
@@ -2217,8 +2231,15 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   //     driving, and a calmed/bypassed road clears.
   decayField(state.traffic, TRAFFIC_DECAY);
 
-  // 5c. Air pollution lingers as smog and eases back slowly (slower than traffic) — so calming a
-  //     corridor clears its jam quickly but the haze takes longer to lift.
+  // 5c. Dirty power plants emit smog from their footprint plume every pass (persistent exhaust,
+  //     like a parked source) — laid BEFORE the decay so a coal/gas district stays hazy while a
+  //     renewable one clears. Clean plants publish no emitters.
+  if (state.plantEmitters) {
+    for (const e of state.plantEmitters) layField(state.pollution, e.tile, e.amount, POLL_MAX);
+  }
+
+  // Air pollution lingers as smog and eases back slowly (slower than traffic) — so calming a
+  // corridor clears its jam quickly but the haze takes longer to lift.
   decayField(state.pollution, POLL_DECAY);
 
   // 6. Water runoff: on a slow cadence, each coastal water tile collects pollution from the

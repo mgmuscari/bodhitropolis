@@ -6,6 +6,7 @@ import {
   plantOutput,
   powerDemand,
   isPowerConsumer,
+  plantPollution,
 } from '../../src/growth/power';
 import { GameMap } from '../../src/engine/map';
 import { ParcelStore, BuiltKind, placeParcel, placeTransport } from '../../src/engine/fabric';
@@ -28,6 +29,22 @@ describe('power tables', () => {
     expect(isPowerConsumer(BuiltKind.Offices)).toBe(true);
     expect(isPowerConsumer(BuiltKind.Park)).toBe(false);
     expect(isPowerConsumer(BuiltKind.CoalPlant)).toBe(false);
+  });
+
+  it('emits air pollution from dirty combustion plants only', () => {
+    expect(plantPollution(BuiltKind.CoalPlant)).toBeGreaterThan(plantPollution(BuiltKind.GasPlant));
+    expect(plantPollution(BuiltKind.GasPlant)).toBeGreaterThan(0);
+    for (const clean of [
+      BuiltKind.HydroPlant,
+      BuiltKind.NuclearPlant,
+      BuiltKind.WindTurbine,
+      BuiltKind.SolarPlant,
+      BuiltKind.FusionPlant,
+      BuiltKind.EnergyNode,
+      BuiltKind.HouseSingle,
+    ]) {
+      expect(plantPollution(clean)).toBe(0);
+    }
   });
 });
 

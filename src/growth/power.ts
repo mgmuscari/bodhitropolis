@@ -33,9 +33,22 @@ const DEMAND_PER_DENSITY: ReadonlyMap<ZoneType, number> = new Map<ZoneType, numb
   [ZoneType.Civic, 2],
 ]);
 
+// Air pollution emitted per stepAmbient pass by the DIRTY combustion plants — coal
+// the worst, gas cleaner. Hydro/Nuclear/Wind/Solar/Fusion and the distributed
+// EnergyNode are clean (0), so the renewable transition visibly clears the smog.
+const PLANT_POLLUTION: ReadonlyMap<number, number> = new Map<number, number>([
+  [BuiltKind.CoalPlant, 6],
+  [BuiltKind.GasPlant, 4],
+]);
+
 /** A parcel's power output (plant) — 0 for non-plants. */
 export function plantOutput(kind: number): number {
   return PLANT_OUTPUT.get(kind) ?? 0;
+}
+
+/** Air pollution a plant emits per pass — 0 for clean plants and non-plants. */
+export function plantPollution(kind: number): number {
+  return PLANT_POLLUTION.get(kind) ?? 0;
 }
 
 /** A parcel's power demand from its kind + density — 0 for non-consumers (greens/transport/plants). */

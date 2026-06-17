@@ -18,7 +18,7 @@ import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
-import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, seedBlight, liveInspectLine } from './ui/ambientContent';
+import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, setPlantEmitters, seedBlight, liveInspectLine } from './ui/ambientContent';
 import { residentialCensus } from './citizens/census';
 import { parkingLots, parkingStalls } from './ui/parkingContent';
 import { attachInput } from './ui/input';
@@ -53,7 +53,7 @@ import { computeNeighborhoods } from './civic/neighborhoods';
 import { createCivicState } from './civic/state';
 import { simTick, type SimDeps } from './civic/compose';
 import { stepRevival } from './growth/revival';
-import { computePowerGrid, plantOutput, isPowerConsumer } from './growth/power';
+import { computePowerGrid, plantOutput, isPowerConsumer, plantPollution } from './growth/power';
 
 const DEFAULT_SEED = 'bodhitropolis';
 const SIM_TICK_MS = 100;
@@ -165,6 +165,29 @@ export function main(): void {
     return changed;
   };
   renderer.setPowerGrid(powerGrid.poweredAnchors);
+
+  // Dirty-plant smog: publish the air-pollution emitters from the built layer (each
+  // coal/gas plant smogs its footprint + a 2-tile plume). Recomputed on placement;
+  // the live pollution field (cars + plants) drags land value → occupancy → revival,
+  // so dirty power poisons what it powers and renewables read clean.
+  const PLUME_RADIUS = 2;
+  const recomputePlantEmitters = (): void => {
+    const emitters: { tile: number; amount: number }[] = [];
+    for (const idx of world.parcels.aliveIndices()) {
+      const p = world.parcels.get(idx);
+      const amt = plantPollution(p.kind);
+      if (amt <= 0) continue;
+      for (let yy = -PLUME_RADIUS; yy < p.height + PLUME_RADIUS; yy++) {
+        for (let xx = -PLUME_RADIUS; xx < p.width + PLUME_RADIUS; xx++) {
+          const tx = p.x + xx;
+          const ty = p.y + yy;
+          if (world.map.inBounds(tx, ty)) emitters.push({ tile: world.map.idx(tx, ty), amount: amt });
+        }
+      }
+    }
+    setPlantEmitters(ambientState, emitters);
+  };
+  recomputePlantEmitters();
 
   // The city starts BLIGHTED: a century of car-culture has already trampled the urban ground
   // into desire paths and polluted the shorelines, before the player arrives to heal it.
@@ -477,6 +500,7 @@ export function main(): void {
     }
     if (r.ok) {
       recomputePower(); // built layer changed → re-derive the grid (a new plant lights its district)
+      recomputePlantEmitters(); // a placed/bulldozed dirty plant changes the smog sources
       markDirty(); // mutated the built/parcel layer → rebuild the cached base
       // Effort changed → dock affordability + (if open) tech-panel affordability.
       // Refresh directly and snapshot both signatures so the next sim-gated check
