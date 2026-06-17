@@ -40,8 +40,38 @@ Revival = make a pocket worth living in (greens + calm → land value → occupa
    built tile conducts), per-component capacity-vs-demand with brownout (`src/growth/power.ts`, live
    derived field). Hard-gate: unpowered → no growth + slow decay, reversible (composes with revival).
    Dirty plants (Coal/Gas) emit smog → land value → occupancy → decay; renewables clean. Always-on red
-   "unpowered" pips + inspect power status. OPEN: power overlay; maybe seed legacy power so the start
-   isn't 100% dark; balance tuning. (Also fixed in #64: multi-tile glyph z-order — drawn in a 2nd pass.)
+   "unpowered" pips + inspect power status. OPEN: power overlay; balance tuning. (Legacy power seeding
+   so the start isn't 100% dark is DONE by the redlining arc R1 below.) (Also fixed in #64: multi-tile glyph z-order — drawn in a 2nd pass.)
+
+## REDLINING SYSTEM (arc, 2026-06-17) — produced-by-policy inequity
+
+The worldgen damage now reads as PRODUCED BY POLICY, not nature: a hashed `redline`
+grade (discrimination-first social geography + terrain as cover) is the single source
+every burden keys off. Vocabulary: live result is "decay"; "redlining/urban renewal"
+only critically, Moses-scoped; the player repairs/restores, never "redevelops".
+Plan: `~/.claude/plans/love-this-so-far-silly-moonbeam.md`.
+
+- ✅ **R1 — grade + all four worldgen burdens (hashed)** (PR pending) — `GameMap.redline`
+  (folded into snapshot, N=120-gated) drawn FIRST in mosesCentury (`worldgen/redline.ts`,
+  discrimination-first value noise + low-elevation/near-water cover). All four burdens key
+  off it: (a) legacy Coal/Gas plants sited on the most redlined SURVIVING frontage in era3
+  (after the highway carve, exempt from era5 abandonment via `isPowerPlant`) — seeds the grid
+  so the city is no longer 100% dark (live-verified: 4 plants, 136 powered anchors); (b) era2
+  industry sorted grade-first; (c) era5 decay scaled by grade (maxDecay·grade/255), not highway
+  distance — near-highway gradient re-emerges as a CONSEQUENCE since (d) era3 highways routed
+  through redlined corridors (grade-weighted score). Determinism gate green.
+  - 🔴 **TUNING (playtest call):** grade-driven decay at `maxDecay 340` is more aggressive than
+    the old highway-driven `200` — the city is more gutted and **industry is nearly zero by
+    full-stage** (concentrated in redlined → highways + decay destroy it). Structure is correct;
+    magnitude is provisional. Dial `maxDecay` / industry survival / `era3GradeWeight` live.
+- 🔴 **R2 — legibility (the indictment):** HOLC overlay (`redlineOverlayContent.ts`) + inspect
+  grade line + opening-briefing `RedlineReport` naming the policy. (The grade is invisible until this.)
+- 🔴 **R3 — live service coverage (fire/health):** `growth/services.ts` BFS coverage (mirrors
+  power), redlined zones under-served, feeds land value/occupancy; player extends = repair.
+- 🔴 **R4 — police-oppression civic dynamic:** worldgen `Precinct` in redlined zones; `civicTick`
+  penalty (over-policing → voice/trust down), countered by community alternatives (no building police).
+- 🔴 **R5 — infra quality (live):** water quality (redlined-industry runoff) + crumbling roads,
+  worst in redlined zones, reparable; feed the decay loop.
 
 ## TOOLBAR + TECH TREE OVERHAUL (overnight 2026-06-17)
 

@@ -28,6 +28,8 @@ import {
   type MosesState,
 } from '../../src/worldgen/moses';
 import { boxDensity, distanceField } from '../../src/worldgen/fields';
+import { gradeRedline } from '../../src/worldgen/redline';
+import { computePowerGrid } from '../../src/growth/power';
 import { wideRoadAt } from '../../src/ui/decoration';
 
 const SEEDS = ['moses-1', 'moses-2', 'moses-3'];
@@ -43,6 +45,8 @@ function runFullStage(seed: string, width = 128, height = 128): WorldState {
 }
 
 // Runs terrain, then the first `n` eras, forking each era rng like the stage.
+// Draws the redline grade first (as mosesCenturyStage does) so eras that key
+// burdens off the grade see the real discriminatory geography in prefix runs.
 function runEras(
   seed: string,
   n: number,
@@ -51,6 +55,7 @@ function runEras(
   params: MosesParams = P,
 ): { world: WorldState; state: MosesState } {
   const world = runPipeline({ seed, width, height }, [terrainStage()]);
+  gradeRedline(world.map, createRng(seed).fork('redline'));
   const state = createMosesState();
   for (let k = 0; k < n; k++) ERAS[k]!(world, createRng(seed).fork(ERA_NAMES[k]!), params, state);
   return { world, state };
@@ -71,6 +76,7 @@ function aliveKindCount(world: WorldState, kind: number): number {
 function runSatellites(seed: string, width = 128, height = 128): { world: WorldState; state: MosesState } {
   const world = runPipeline({ seed, width, height }, [terrainStage()]);
   const state = createMosesState();
+  gradeRedline(world.map, createRng(seed).fork('redline'));
   era1Founding(world, createRng(seed).fork('era1'), P, state);
   era2MotorAge(world, createRng(seed).fork('era2'), P, state);
   era3Highways(world, createRng(seed).fork('era3'), P, state);
@@ -356,6 +362,118 @@ describe('era2MotorAge', () => {
   }
 });
 
+describe('era3 — legacy dirty power, sited by grade on surviving frontage', () => {
+  const PLANTS = new Set<number>([BuiltKind.CoalPlant, BuiltKind.GasPlant]);
+  const parcelMeanGrade = (world: WorldState, i: number): number => {
+    const { map, parcels } = world;
+    const e = parcels.get(i);
+    let sum = 0;
+    let n = 0;
+    for (let dy = 0; dy < e.height; dy++) {
+      for (let dx = 0; dx < e.width; dx++) {
+        sum += map.redline[map.idx(e.x + dx, e.y + dy)]!;
+        n++;
+      }
+    }
+    return sum / n;
+  };
+  const isPlant = (world: WorldState, i: number): boolean => PLANTS.has(world.parcels.kindAt(i));
+
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": sites legacy coal/gas plants`, () => {
+      const { world } = runEras(seed, 3);
+      const plants = world.parcels.aliveIndices().filter((i) => isPlant(world, i));
+      expect(plants.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it(`seed "${seed}": the seeded grid powers part of the city (not all dark)`, () => {
+      const { world } = runEras(seed, 3);
+      const grid = computePowerGrid(world.map, world.parcels);
+      expect(grid.capacity).toBeGreaterThan(0);
+      expect(grid.poweredAnchors.size).toBeGreaterThan(0);
+    });
+
+    it(`seed "${seed}": plants survive the full century (era5 doesn't dark the city)`, () => {
+      // Plants are sited in redlined zones, where grade-driven era5 decay is
+      // harshest — they must be exempt from abandonment or the city restarts dark.
+      const world = runFullStage(seed);
+      const plants = world.parcels.aliveIndices().filter((i) => isPlant(world, i));
+      expect(plants.length).toBeGreaterThanOrEqual(2);
+      const grid = computePowerGrid(world.map, world.parcels);
+      expect(grid.poweredAnchors.size).toBeGreaterThan(0);
+    });
+  }
+
+  it('plants concentrate in worse-graded districts than the average building', () => {
+    // An ensemble property, not a per-seed guarantee: a map whose redlined core is
+    // fully built-out leaves no 3x3 room, so plants spill to the redlined EDGE.
+    // Across seeds the dirty power still sits on worse-graded ground than the
+    // average developed parcel. Baseline = developed (non-plant) parcels, since
+    // an all-tiles mean is inflated by undeveloped floodplain/redlined periphery.
+    let plantSum = 0;
+    let plantN = 0;
+    let devSum = 0;
+    let devN = 0;
+    for (const seed of SEEDS) {
+      const { world } = runEras(seed, 3);
+      for (const i of world.parcels.aliveIndices()) {
+        const g = parcelMeanGrade(world, i);
+        if (isPlant(world, i)) {
+          plantSum += g;
+          plantN++;
+        } else {
+          devSum += g;
+          devN++;
+        }
+      }
+    }
+    expect(plantSum / plantN).toBeGreaterThan(devSum / devN);
+  });
+});
+
+describe('era2MotorAge — industry concentration by grade', () => {
+  const parcelMeanGrade = (world: WorldState, i: number): number => {
+    const { map, parcels } = world;
+    const e = parcels.get(i);
+    let sum = 0;
+    let n = 0;
+    for (let dy = 0; dy < e.height; dy++) {
+      for (let dx = 0; dx < e.width; dx++) {
+        sum += map.redline[map.idx(e.x + dx, e.y + dy)]!;
+        n++;
+      }
+    }
+    return sum / n;
+  };
+
+  it('industry picks the worst-graded of the rail/water frontage cohort', () => {
+    // Controls for the floodplain confound (rail/water frontage is near water, so
+    // it already skews worse-graded): compare industry against OTHER parcels that
+    // are ALSO near rail/water. Industry is grade-sorted to pick the worst of that
+    // shared cohort, so its mean grade exceeds the rest. Aggregate across seeds.
+    let indSum = 0;
+    let indN = 0;
+    let cohortSum = 0;
+    let cohortN = 0;
+    for (const seed of SEEDS) {
+      const { world } = runEras(seed, 2);
+      const { map, parcels } = world;
+      for (const i of parcels.aliveIndices()) {
+        if (!nearRailOrWater(map, parcels, i, P.industryFrontage)) continue;
+        const g = parcelMeanGrade(world, i);
+        if (parcels.kindAt(i) === BuiltKind.Industrial) {
+          indSum += g;
+          indN++;
+        } else {
+          cohortSum += g;
+          cohortN++;
+        }
+      }
+    }
+    expect(indSum / indN).toBeGreaterThan(cohortSum / cohortN);
+  });
+});
+
 describe('placeParkingField (all-or-nothing, unit)', () => {
   it('places cols*rows lots on a fully-free region as one contiguous field', () => {
     const map = new GameMap(20, 20);
@@ -575,6 +693,7 @@ describe('era3Highways', () => {
       const demolished = Number(/(\d+) parcels demolished/.exec(line)![1]);
       const projPlaced = Number(/(\d+) projects/.exec(line)![1]);
       const civicPlaced = Number(/(\d+) civic/.exec(line)![1]);
+      const powerPlaced = Number(/(\d+) power/.exec(line)![1]);
 
       expect(demolished).toBeGreaterThanOrEqual(5);
       // Chronicle honesty: projects are placed only after carving and none
@@ -582,9 +701,9 @@ describe('era3Highways', () => {
       // placement count (a corridor cannot demolish a project).
       expect(aliveKindCount(world, BuiltKind.Projects) - projBefore).toBe(projPlaced);
       // Every alive-count change in era 3 is accounted for: demolitions out,
-      // projects + civic in. (Net kind-deltas would conflate a demolished
-      // era-1 civic with a placed one — the chronicled placement counts do not.)
-      expect(aliveAfter).toBe(aliveBefore - demolished + projPlaced + civicPlaced);
+      // projects + civic + power plants in. (Net kind-deltas would conflate a
+      // demolished era-1 civic with a placed one — the chronicled counts do not.)
+      expect(aliveAfter).toBe(aliveBefore - demolished + projPlaced + civicPlaced + powerPlaced);
     });
 
     it(`seed "${seed}": the streetcar is ripped out (rail <= 10% of peak)`, () => {
@@ -607,6 +726,36 @@ describe('era3Highways', () => {
       expect(checkParcelAgreement(world.map, world.parcels)).toEqual([]);
     });
   }
+});
+
+describe('era3Highways — routed through redlined districts', () => {
+  it('highways run through worse-graded ground than the surviving city', () => {
+    // The Moses signature, named: the corridor scorer prefers redlined-dense
+    // corridors, so the carved expressway sits on worse-graded ground than the
+    // parcels that survive beside it. Aggregate across seeds for robustness.
+    let hwSum = 0;
+    let hwN = 0;
+    let parcelSum = 0;
+    let parcelN = 0;
+    for (const seed of SEEDS) {
+      const { world } = runEras(seed, 3);
+      const { map } = world;
+      for (let i = 0; i < map.built.length; i++) {
+        if (map.built[i] === BuiltKind.RoadHighway) {
+          hwSum += map.redline[i]!;
+          hwN++;
+        } else if (map.parcel[i] !== 0) {
+          // Exclude power plants: they're deliberately sited on the worst frontage,
+          // so they'd inflate the "average building" baseline unfairly.
+          const k = world.parcels.kindAt(map.parcel[i]! - 1);
+          if (k >= 24 && k <= 30) continue;
+          parcelSum += map.redline[i]!;
+          parcelN++;
+        }
+      }
+    }
+    expect(hwSum / hwN).toBeGreaterThan(parcelSum / parcelN);
+  });
 });
 
 const RESIDENTIAL_KINDS: number[] = [BuiltKind.HouseSingle, BuiltKind.Apartments, BuiltKind.Projects];
@@ -711,46 +860,46 @@ describe('era4Suburbs', () => {
   }
 });
 
-// Min highway distance over parcel `i`'s footprint, using a precomputed field.
-function parcelHighwayDist(map: GameMap, parcels: WorldState['parcels'], i: number, field: Int32Array): number {
+// Mean redline grade (0..255) over parcel `i`'s footprint.
+function parcelMeanRedlineT(map: GameMap, parcels: WorldState['parcels'], i: number): number {
   const e = parcels.get(i);
-  let lo = Infinity;
+  let sum = 0;
+  let n = 0;
   for (let yy = e.y; yy < e.y + e.height; yy++) {
     for (let xx = e.x; xx < e.x + e.width; xx++) {
-      const v = field[map.idx(xx, yy)]!;
-      if (v >= 0 && v < lo) lo = v;
+      sum += map.redline[map.idx(xx, yy)]!;
+      n++;
     }
   }
-  return lo;
+  return n > 0 ? sum / n : 0;
 }
 
-// Runs eras 1-4, partitions the parcels alive at the START of era 5 by highway
-// distance (near <= 8 / far >= 16), snapshots parking count, then runs era 5.
-// Cohorts are fixed pre-era-5 and outcomes count abandoned parcels at condition
-// 0 — the survivorship-bias-free blight measure (yield point 3).
+// Runs eras 1-4, partitions the parcels alive at the START of era 5 by REDLINE
+// GRADE (redlined >= 176 / greenlined <= 80), snapshots parking count, then runs
+// era 5. Cohorts are fixed pre-era-5 and outcomes count abandoned parcels at
+// condition 0 — the survivorship-bias-free decay measure (yield point 3).
 function runEra5(seed: string) {
   const { world, state } = runEras(seed, 4);
   const { map, parcels } = world;
-  const highwayDist = distanceField(map, (i) => map.built[i] === BuiltKind.RoadHighway);
   const preAlive = parcels.aliveIndices();
-  const near = preAlive.filter((i) => parcelHighwayDist(map, parcels, i, highwayDist) <= 8);
-  const far = preAlive.filter((i) => parcelHighwayDist(map, parcels, i, highwayDist) >= 16);
+  const redlined = preAlive.filter((i) => parcelMeanRedlineT(map, parcels, i) >= 176);
+  const greenlined = preAlive.filter((i) => parcelMeanRedlineT(map, parcels, i) <= 80);
   const parkingBefore = aliveKindCount(world, BuiltKind.ParkingLot);
   era5Disinvestment(world, createRng(seed).fork('era5'), P, state);
-  return { world, state, near, far, parkingBefore };
+  return { world, state, redlined, greenlined, parkingBefore };
 }
 
-describe('era5Disinvestment blight & abandonment', () => {
+describe('era5Disinvestment decay & abandonment', () => {
   for (const seed of SEEDS) {
-    it(`seed "${seed}": blight gradient holds without survivorship bias (yield point 3)`, () => {
-      const { world, near, far } = runEra5(seed);
+    it(`seed "${seed}": decay follows the redline grade (no survivorship bias)`, () => {
+      const { world, redlined, greenlined } = runEra5(seed);
       const { parcels } = world;
-      expect(near.length).toBeGreaterThanOrEqual(5); // non-vacuous cohorts
-      expect(far.length).toBeGreaterThanOrEqual(5);
+      expect(redlined.length).toBeGreaterThanOrEqual(5); // non-vacuous cohorts
+      expect(greenlined.length).toBeGreaterThanOrEqual(5);
       // Outcome: surviving condition, or 0 for an abandoned (demolished) parcel.
       const outcome = (i: number) => (parcels.isAlive(i) ? parcels.conditionAt(i) : 0);
       const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
-      expect(mean(near.map(outcome))).toBeLessThan(mean(far.map(outcome)));
+      expect(mean(redlined.map(outcome))).toBeLessThan(mean(greenlined.map(outcome)));
     });
 
     it(`seed "${seed}": >= 10% of the standing city is abandoned (chronicle matches store)`, () => {
@@ -772,17 +921,17 @@ describe('era5Disinvestment blight & abandonment', () => {
 
 describe('era5Disinvestment crater fields (urban-density Task 7)', () => {
   it('a crater expands into a parking field on cleared land; balance stays exact', () => {
-    // Constructed fixture (seed-independent): a highway tile + an adjacent
-    // low-condition house with open land around it, so era-5 decay dooms the
-    // house and the crater FIELD has contiguous room to form. Pins the wiring
-    // (placeParkingField reused on the cleared footprint, count summed into
-    // craters) without relying on fragile organic clustering on moses-1/2/3.
+    // Constructed fixture (seed-independent): a REDLINED low-condition house with
+    // open land around it, so grade-driven era-5 decay dooms it and the crater
+    // FIELD has contiguous room to form. Pins the wiring (placeParkingField reused
+    // on the cleared footprint, count summed into craters) without relying on
+    // fragile organic clustering on moses-1/2/3.
     const map = new GameMap(24, 24);
     const parcels = new ParcelStore();
-    map.built[map.idx(10, 5)] = BuiltKind.RoadHighway;
     placeParcel(map, parcels, {
       x: 10, y: 6, width: 1, height: 1, kind: BuiltKind.HouseSingle, density: 1, condition: 45,
     });
+    map.redline[map.idx(10, 6)] = 255; // fully redlined → grade-driven decay dooms it
     const world: WorldState = { seed: 'crater-field', map, parcels, log: [] };
     const state = createMosesState();
     state.founded = true;

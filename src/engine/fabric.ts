@@ -83,6 +83,8 @@ export const isRoadKind = (k: number): boolean => k >= 1 && k <= 3;
 export const isTransportKind = (k: number): boolean => k >= 1 && k <= 15;
 /** Any building kind across the widened 16..127 band (transport never overlaps). */
 export const isBuildingKind = (k: number): boolean => k >= 16 && k <= 127;
+/** A central power plant (coal/gas/hydro/nuclear/wind/solar/fusion, 24..30). */
+export const isPowerPlant = (k: number): boolean => k >= 24 && k <= 30;
 
 // --- Parcels -------------------------------------------------------------
 //

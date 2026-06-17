@@ -57,6 +57,15 @@ export class GameMap {
   /** Traffic density per cell, 0..255 (traffic layer; see src/traffic). Laid by
    *  origin→destination trips, decays each traffic cycle. */
   readonly traffic: Uint8Array;
+  /**
+   * Redline grade per cell, 0..255 (0 = greenlined/best .. 255 = redlined/worst).
+   * The discriminatory social geography drawn at worldgen (see src/worldgen/redline)
+   * that every Moses-era burden keys off — dirty power, industry, decay, highways
+   * are SITED by this grade so the damage reads as produced by policy, not nature.
+   * A permanent historical record: hashed (folded into snapshot below), never live.
+   * "Redlining" is named here CRITICALLY, scoped to the oppressive-planning history.
+   */
+  readonly redline: Uint8Array;
 
   constructor(width = 128, height = 128) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
@@ -75,6 +84,7 @@ export class GameMap {
     this.floraVitality = new Uint8Array(n);
     this.faunaPresence = new Uint8Array(n);
     this.traffic = new Uint8Array(n);
+    this.redline = new Uint8Array(n);
   }
 
   idx(x: number, y: number): number {
@@ -148,6 +158,13 @@ export class GameMap {
     this.faunaPresence[this.idx(x, y)] = v;
   }
 
+  getRedline(x: number, y: number): number {
+    return this.redline[this.idx(x, y)]!;
+  }
+  setRedline(x: number, y: number, v: number): void {
+    this.redline[this.idx(x, y)] = v;
+  }
+
   /**
    * Stable serialization of every layer: dimensions plus an FNV-1a hash over
    * the concatenated layer bytes. Equal content yields an equal snapshot;
@@ -166,6 +183,7 @@ export class GameMap {
     h = fnv1aBytes(h, bytesOf(this.floraVitality));
     h = fnv1aBytes(h, bytesOf(this.faunaPresence));
     h = fnv1aBytes(h, bytesOf(this.traffic));
+    h = fnv1aBytes(h, bytesOf(this.redline));
     return `${this.width}x${this.height}:${(h >>> 0).toString(16).padStart(8, '0')}`;
   }
 }

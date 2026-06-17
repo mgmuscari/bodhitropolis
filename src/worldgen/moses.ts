@@ -19,6 +19,7 @@ import { Water, type GameMap } from '../engine/map';
 import {
   BuiltKind,
   isRoadKind,
+  isPowerPlant,
   canPlaceParcel,
   placeParcel,
   placeTransport,
@@ -28,6 +29,7 @@ import {
 } from '../engine/fabric';
 import type { Rng } from '../engine/rng';
 import { distanceField, boxDensity, landRun, type Axis } from './fields';
+import { gradeRedline } from './redline';
 import type { WorldgenStage, WorldState } from './pipeline';
 
 // --- Parameters ----------------------------------------------------------
@@ -61,6 +63,8 @@ export interface MosesParams {
   era2Parcels: number; // extra houses/strips filling new frontage
   // Era 3 highways & urban renewal
   era3DensityRadius: number; // boxDensity radius for corridor scoring
+  era3GradeWeight: number; // how strongly corridor scoring prefers redlined fabric
+  era3Power: number; // legacy coal/gas plants sited on surviving redlined frontage
   era3MinDemolish: number; // a corridor must cut through at least this many parcels
   corridorTopK: number; // rng jitter among the top-K scored corridors
   era3Projects: number; // tower-in-the-park Projects placed along the corridor
@@ -75,8 +79,8 @@ export interface MosesParams {
   era4DeclineMin: number; // min condition lost by a declining inner-city parcel
   era4DeclineMax: number; // max condition lost by a declining inner-city parcel
   // Era 5 disinvestment
-  maxDecay: number; // condition lost at a highway tile (d = 0)
-  decayK: number; // k in the rational decay falloff 1/(1 + k*d) (redlining-shaped)
+  maxDecay: number; // condition lost by a fully redlined parcel (grade 255)
+  decayK: number; // legacy: highway-distance falloff k (decay now follows the grade)
   decayNoise: number; // extra random condition loss (0..decayNoise)
   abandonThreshold: number; // a parcel below this after decay is abandoned
   craterChance: number; // fraction of abandoned parcels that become parking craters
@@ -118,6 +122,8 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   //                    (fillFrontage walks tiles row-major + stops at the budget, so a budget below
   //                    the frontage always leaves the BOTTOM rows empty — pack the whole grid instead)
   era3DensityRadius: 3,
+  era3GradeWeight: 8,
+  era3Power: 4,
   era3MinDemolish: 5,
   corridorTopK: 3,
   era3Projects: 5,
@@ -130,7 +136,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era4DeclineRadius: 24,
   era4DeclineMin: 20,
   era4DeclineMax: 60,
-  maxDecay: 200,
+  maxDecay: 340,
   decayK: 0.15,
   decayNoise: 20,
   abandonThreshold: 40,
@@ -252,6 +258,9 @@ type AttrGen = (rng: Rng) => { density: number; condition: number };
 const HEALTHY_ATTRS: AttrGen = (rng) => ({ density: 1 + rng.nextInt(2), condition: 200 + rng.nextInt(56) });
 /** Urban-renewal projects: built dense and cheap (condition 140..180). */
 const PROJECT_ATTRS: AttrGen = (rng) => ({ density: 3 + rng.nextInt(2), condition: 140 + rng.nextInt(41) });
+// Legacy power plants: density 1 (plants are not density-scaled), still-running
+// but aging condition. Two-nextInt draw shape matches HEALTHY_ATTRS.
+const PLANT_ATTRS: AttrGen = (rng) => ({ density: 1, condition: 170 + rng.nextInt(50) });
 /**
  * Dense near-core construction (Apartments): density 2..3, pristine-ish condition.
  * Same TWO-nextInt draw shape as HEALTHY_ATTRS, so swapping it in inside
@@ -815,12 +824,14 @@ export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state:
     return Math.abs(x - siteX) + Math.abs(y - siteY);
   };
 
-  // 3. Industry on rail/water frontage beyond the core. Sorted nearest-first so
-  //    placements cluster on the streetcar/freight spine and the waterfront.
+  // 3. Industry on rail/water frontage beyond the core. Sorted by GRADE first
+  //    (discrimination-first: industry concentrates in the most redlined districts)
+  //    then nearest rail/water, so it still clusters on the freight/water spine —
+  //    the accept filter below keeps every parcel on real rail/water frontage.
   const railWaterDist = distanceField(map, (i) => map.built[i] === BuiltKind.Rail || map.water[i] !== Water.None);
   const indCands = roadTiles
     .filter((i) => toCore(i) > p.coreRadius)
-    .sort((a, b) => railWaterDist[a]! - railWaterDist[b]! || a - b);
+    .sort((a, b) => map.redline[b]! - map.redline[a]! || railWaterDist[a]! - railWaterDist[b]! || a - b);
   let industry = 0;
   for (const i of indCands) {
     if (industry >= p.era2Industry) break;
@@ -908,6 +919,7 @@ interface Corridor {
   lo: number; // land-run start along the axis
   hi: number; // land-run end along the axis
   sum: number; // boxDensity sum over the bbox-intersected run (corridor score)
+  gradeMean: number; // mean redline grade over the bbox-intersected run (0..255)
   parcels: number; // distinct parcels whose footprint touches the line
 }
 
@@ -1010,8 +1022,13 @@ export function era3Highways(world: WorldState, rng: Rng, p: MosesParams, state:
     const ix1 = Math.min(hi, pbx1);
     if (ix0 > ix1) continue;
     let sum = 0;
-    for (let x = ix0; x <= ix1; x++) sum += density[map.idx(x, y)]!;
-    const c: Corridor = { axis: 'row', index: y, lo, hi, sum, parcels: 0 };
+    let gradeSum = 0;
+    for (let x = ix0; x <= ix1; x++) {
+      sum += density[map.idx(x, y)]!;
+      gradeSum += map.redline[map.idx(x, y)]!;
+    }
+    const gradeMean = gradeSum / (ix1 - ix0 + 1);
+    const c: Corridor = { axis: 'row', index: y, lo, hi, sum, gradeMean, parcels: 0 };
     c.parcels = corridorParcels(map, c);
     cands.push(c);
   }
@@ -1022,16 +1039,26 @@ export function era3Highways(world: WorldState, rng: Rng, p: MosesParams, state:
     const iy1 = Math.min(hi, pby1);
     if (iy0 > iy1) continue;
     let sum = 0;
-    for (let y = iy0; y <= iy1; y++) sum += density[map.idx(x, y)]!;
-    const c: Corridor = { axis: 'col', index: x, lo, hi, sum, parcels: 0 };
+    let gradeSum = 0;
+    for (let y = iy0; y <= iy1; y++) {
+      sum += density[map.idx(x, y)]!;
+      gradeSum += map.redline[map.idx(x, y)]!;
+    }
+    const gradeMean = gradeSum / (iy1 - iy0 + 1);
+    const c: Corridor = { axis: 'col', index: x, lo, hi, sum, gradeMean, parcels: 0 };
     c.parcels = corridorParcels(map, c);
     cands.push(c);
   }
 
-  // Only corridors that cut through real fabric; densest-first.
+  // Only corridors that cut through real fabric; ranked by a GRADE-weighted density
+  // score (the Moses signature, named): a corridor through redlined fabric outscores
+  // an equally dense one through greenlined fabric, so the expressway is routed
+  // THROUGH the redlined districts. Density stays a multiplicative factor, so a
+  // sparse corridor never wins on grade alone.
+  const score = (c: Corridor): number => c.sum * (255 + p.era3GradeWeight * c.gradeMean);
   const viable = cands.filter((c) => c.parcels >= p.era3MinDemolish);
   const ranked = (viable.length > 0 ? viable : cands).sort(
-    (a, b) => b.sum - a.sum || (a.axis === b.axis ? a.index - b.index : a.axis === 'row' ? -1 : 1),
+    (a, b) => score(b) - score(a) || (a.axis === b.axis ? a.index - b.index : a.axis === 'row' ? -1 : 1),
   );
   const top = ranked.slice(0, Math.min(p.corridorTopK, ranked.length));
   const first = top[rng.fork('corridor').nextInt(top.length)]!;
@@ -1090,7 +1117,30 @@ export function era3Highways(world: WorldState, rng: Rng, p: MosesParams, state:
     }
   }
 
-  world.log.push(`era3: urban renewal — ${demolished} parcels demolished, ${projects} projects, ${civic} civic`);
+  // Legacy dirty power, SITED BY GRADE on the SURVIVING redlined frontage (after
+  // the highway carve, so the expressway never plows the plants away — both are
+  // drawn to the same redlined ground). Coal/gas drop on the most redlined road
+  // frontage so those districts host the smog; they seed the starting grid — PART
+  // of the city, not all — so the rest stays dark until the player builds clean
+  // power. The plants ARE "redlining" made physical; the neutral live state is decay.
+  const powerRng = rng.fork('power');
+  const roadTiles: number[] = [];
+  for (let i = 0; i < map.built.length; i++) {
+    if (isRoadKind(map.built[i]!) && toCore(i) > p.coreRadius) roadTiles.push(i);
+  }
+  roadTiles.sort((a, b) => map.redline[b]! - map.redline[a]! || a - b);
+  let power = 0;
+  for (const i of roadTiles) {
+    if (power >= p.era3Power) break;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const kind = power % 2 === 0 ? BuiltKind.CoalPlant : BuiltKind.GasPlant;
+    if (placeAdjacent(map, parcels, x, y, 3, 3, kind, powerRng, undefined, PLANT_ATTRS) !== -1) power++;
+  }
+
+  world.log.push(
+    `era3: urban renewal — ${demolished} parcels demolished, ${projects} projects, ${civic} civic, ${power} power`,
+  );
 }
 
 /** Demolish every Rail tile; returns how many were removed. */
@@ -1406,47 +1456,55 @@ export function eraSatellites(world: WorldState, rng: Rng, p: MosesParams, state
 
 // --- Era 5: disinvestment ------------------------------------------------
 
-/** Minimum value of `field` over parcel `i`'s footprint (>= 0 entries only). */
-function parcelFieldMin(map: GameMap, parcels: ParcelStore, i: number, field: Int32Array): number {
+/** Mean redline grade (0..255) over parcel `i`'s footprint. */
+function parcelMeanRedline(map: GameMap, parcels: ParcelStore, i: number): number {
   const e = parcels.get(i);
-  let lo = Infinity;
+  let sum = 0;
+  let n = 0;
   for (let dy = 0; dy < e.height; dy++) {
     for (let dx = 0; dx < e.width; dx++) {
-      const v = field[map.idx(e.x + dx, e.y + dy)]!;
-      if (v >= 0 && v < lo) lo = v;
+      sum += map.redline[map.idx(e.x + dx, e.y + dy)]!;
+      n++;
     }
   }
-  return lo === Infinity ? -1 : lo;
+  return n > 0 ? sum / n : 0;
 }
 
 /**
  * Era 5 — disinvestment. Two passes (yield point 6): pass 1 decays every parcel
- * by a redlining-shaped rational falloff of highway distance (steepest beside
- * the expressway) plus rng noise, collecting those that fall below the
- * abandonment threshold; pass 2 demolishes that pre-collected list (so aliveness
- * is never mutated mid-iteration), turning craterChance of them into vacant
- * parking lots on the cleared footprint. No-ops if never founded.
+ * by its REDLINE GRADE (the most redlined districts lose the most condition) plus
+ * rng noise, collecting those that fall below the abandonment threshold; pass 2
+ * demolishes that pre-collected list (so aliveness is never mutated mid-iteration),
+ * turning craterChance of them into vacant parking lots on the cleared footprint.
+ *
+ * Decay no longer keys off highway distance directly: highways are routed THROUGH
+ * redlined districts (era 3), so the near-expressway decay gradient re-emerges as a
+ * CONSEQUENCE of the grade, not its cause — the inversion that names the policy
+ * instead of naturalizing the wound. The neutral live result is "decay". No-ops if
+ * never founded.
  */
 export function era5Disinvestment(world: WorldState, rng: Rng, p: MosesParams, state: MosesState): void {
   if (!state.founded) return;
   const { map, parcels } = world;
 
   state.preEra5Alive = parcels.aliveCount();
-  const highwayDist = distanceField(map, (i) => map.built[i] === BuiltKind.RoadHighway);
-  const farDist = map.width + map.height; // for parcels with no highway anywhere
 
-  // Pass 1: decay all (pre-collected snapshot; no demolition here).
+  // Pass 1: decay all (pre-collected snapshot; no demolition here). Loss scales
+  // with the redline grade — greenlined (grade 0) loses only noise; redlined
+  // (grade 255) loses the full maxDecay.
   const snapshot = parcels.aliveIndices();
   const decayRng = rng.fork('decay');
   const doomed: number[] = [];
   let decayed = 0;
   for (const idx of snapshot) {
-    const dRaw = parcelFieldMin(map, parcels, idx, highwayDist);
-    const d = dRaw >= 0 ? dRaw : farDist;
-    const falloff = 1 / (1 + p.decayK * d); // rational, redlining-shaped
-    const loss = Math.floor(p.maxDecay * falloff) + decayRng.nextInt(p.decayNoise + 1);
+    const grade = parcelMeanRedline(map, parcels, idx); // 0..255
+    const loss = Math.floor((p.maxDecay * grade) / 255) + decayRng.nextInt(p.decayNoise + 1);
     parcels.setCondition(idx, parcels.conditionAt(idx) - loss);
     decayed++;
+    // Power plants age but are NOT abandoned — the utility keeps the legacy grid
+    // running through disinvestment, so the redlined dirty power survives worldgen
+    // and the city does not restart 100% dark.
+    if (isPowerPlant(parcels.kindAt(idx))) continue;
     if (parcels.conditionAt(idx) < p.abandonThreshold) doomed.push(idx);
   }
 
@@ -1496,10 +1554,12 @@ export function era5Disinvestment(world: WorldState, rng: Rng, p: MosesParams, s
 // --- Stage assembly ------------------------------------------------------
 
 /**
- * The Moses-century worldgen stage: founding & streetcar town → motor age →
- * highways & urban renewal → suburban flight → disinvestment, threading one
- * MosesState and forking each era's rng stream by name. On an all-water map era
- * 1 logs "no viable site" and every later era no-ops on the empty state.
+ * The Moses-century worldgen stage: the redline grade is drawn FIRST (the
+ * discriminatory social geography every later burden keys off — see
+ * worldgen/redline), then founding & streetcar town → motor age → highways &
+ * urban renewal → suburban flight → disinvestment, threading one MosesState and
+ * forking each era's rng stream by name. On an all-water map era 1 logs "no
+ * viable site" and every later era no-ops on the empty state.
  */
 export function mosesCenturyStage(params: Partial<MosesParams> = {}): WorldgenStage {
   const p: MosesParams = { ...DEFAULT_MOSES_PARAMS, ...params };
@@ -1507,6 +1567,7 @@ export function mosesCenturyStage(params: Partial<MosesParams> = {}): WorldgenSt
     name: 'moses-century',
     apply(world, rng) {
       const state = createMosesState();
+      gradeRedline(world.map, rng.fork('redline'));
       era1Founding(world, rng.fork('era1'), p, state);
       era2MotorAge(world, rng.fork('era2'), p, state);
       era3Highways(world, rng.fork('era3'), p, state);
