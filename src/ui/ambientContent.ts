@@ -25,6 +25,7 @@ import { visitValue } from '../citizens/plots';
 import { stopCategoryOf, DAILY_ITINERARY, type StopCategory } from '../citizens/itinerary';
 import { TravelMode, modeSpec, modeRidesNetwork, modeSpeedMult, MODE_CHOICE_ORDER } from '../citizens/modes';
 import type { Household } from '../citizens/census';
+import { layField, decayField } from '../citizens/field';
 import type { Rng } from '../engine/rng';
 
 /** Maximum elapsed time honoured in a single stepAmbient call, mirroring
@@ -1566,9 +1567,7 @@ function zonedNeighbor(map: GameMap, roadIdx: number): number {
 /** A driving car lays live traffic at the tile under it — the agent-driven traffic field (cars ARE
  *  the traffic). Other cars' pathfinding routes around it; pedestrians shun it. */
 function layTraffic(state: AmbientState, map: GameMap, x: number, y: number): void {
-  const i = map.idx(x, y);
-  const v = (state.traffic.get(i) ?? 0) + TRAFFIC_LAY;
-  state.traffic.set(i, v > TRAFFIC_MAX ? TRAFFIC_MAX : v);
+  layField(state.traffic, map.idx(x, y), TRAFFIC_LAY, TRAFFIC_MAX);
 }
 
 function depositHealth(state: AmbientState, homeTile: number, value: number): void {
@@ -1923,9 +1922,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     const ty = Math.round(p.y);
     if (isWearable(map, tx, ty)) {
       const i = map.idx(tx, ty);
-      const w = (state.wear.get(i) ?? 0) + WEAR_RATE;
-      const capped = w > WEAR_MAX ? WEAR_MAX : w;
-      state.wear.set(i, capped);
+      const capped = layField(state.wear, i, WEAR_RATE, WEAR_MAX);
       // A walking citizen crossing a heavily-worn (degraded, littered) path brings home less — the
       // beaten path is convenient but bleak.
       if (p.phase !== undefined && p.carId === undefined && capped >= WORN_DEGRADE_MIN) {
@@ -1937,23 +1934,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       if (k === BuiltKind.RoadStreet || k === BuiltKind.RoadAvenue) p.roadSteps = (p.roadSteps ?? 0) + 1;
     }
   }
-  if (state.wear.size > 0) {
-    for (const [k, v] of [...state.wear]) {
-      const nv = v - WEAR_DECAY;
-      if (nv <= 0) state.wear.delete(k);
-      else state.wear.set(k, nv);
-    }
-  }
+  decayField(state.wear, WEAR_DECAY);
 
   // 5b. Live traffic eases back where no car is passing — so the agent-driven field tracks CURRENT
   //     driving, and a calmed/bypassed road clears.
-  if (state.traffic.size > 0) {
-    for (const [k, v] of [...state.traffic]) {
-      const nv = v - TRAFFIC_DECAY;
-      if (nv <= 0) state.traffic.delete(k);
-      else state.traffic.set(k, nv);
-    }
-  }
+  decayField(state.traffic, TRAFFIC_DECAY);
 
   // 6. Water runoff: on a slow cadence, each coastal water tile collects pollution from the
   //    ground around it and grows heavily polluted over time (impassable, so it never wears).
@@ -1985,8 +1970,7 @@ function accumulateWaterRunoff(state: AmbientState, map: GameMap): void {
         if ((state.wear.get(ni) ?? 0) > 40) runoff += RUNOFF_WORN;
       }
       if (runoff === 0) continue;
-      const next = (state.waterPollution.get(i) ?? 0) + runoff;
-      state.waterPollution.set(i, next > WATER_POLL_MAX ? WATER_POLL_MAX : next);
+      layField(state.waterPollution, i, runoff, WATER_POLL_MAX);
     }
   }
 }
