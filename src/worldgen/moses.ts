@@ -111,7 +111,9 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   industryFrontage: 2,
   era2Parking: 3,
   era2ParkingFields: 3,
-  era2Parcels: 200,
+  era2Parcels: 4000, // FILL-ALL: exceed the grown grid's frontage so every ring block fills, not half
+  //                    (fillFrontage walks tiles row-major + stops at the budget, so a budget below
+  //                    the frontage always leaves the BOTTOM rows empty — pack the whole grid instead)
   era3DensityRadius: 3,
   era3MinDemolish: 5,
   corridorTopK: 3,
@@ -133,7 +135,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   satelliteCount: 4,
   satelliteSpan: 16,
   satelliteBlocks: 2,
-  satelliteParcels: 40,
+  satelliteParcels: 600, // FILL-ALL: pack the whole exurb grid (else its lower half stays empty too)
   satelliteMinCoreDist: 34,
   satelliteSpacing: 22,
 };
@@ -462,6 +464,18 @@ export function promoteDenseStreets(map: GameMap, parcels: ParcelStore, rng: Rng
     }
   }
   return promoted;
+}
+
+/** Seeded in-place Fisher-Yates shuffle. Grid fabric is filled in RANDOM order, not row-major, so a
+ *  fill that doesn't reach every lane (a budget, lane conflicts, or later decline) leaves vacancy
+ *  SCATTERED organically across the blocks instead of a clean empty band along one edge. */
+function shuffleInPlace<T>(arr: T[], rng: Rng): void {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = rng.nextInt(i + 1);
+    const t = arr[i]!;
+    arr[i] = arr[j]!;
+    arr[j] = t;
+  }
 }
 
 /** Minimum value of `field` over a w×h footprint anchored at (ax, ay). */
@@ -834,6 +848,7 @@ export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state:
     const y = (i - x) / map.width;
     return x < e1x0 || x > e1x1 || y < e1y0 || y > e1y1;
   });
+  shuffleInPlace(extensionFrontage, rng.fork('order')); // random fill order — vacancy scatters, not banded
   const filled = fillFrontage(
     map,
     parcels,
@@ -1282,8 +1297,10 @@ function laySatellite(map: GameMap, parcels: ParcelStore, sx: number, sy: number
       growArm(map, sx - off, sy, 0, -1, nCol, BuiltKind.RoadStreet, bbox);
     }
   }
-  // Suburb fabric: mostly single houses, a scattered commercial strip, core-first for tidy fill.
+  // Suburb fabric: mostly single houses, a scattered commercial strip, filled in RANDOM order so any
+  // vacancy scatters across the exurb instead of leaving its lower half empty (row-major artefact).
   const roadTiles = collectRoadTiles(map, bbox.x0, bbox.y0, bbox.x1, bbox.y1);
+  shuffleInPlace(roadTiles, rng.fork('order'));
   const suburbKind = (i: number): BuiltKind =>
     i % 7 === 0 ? BuiltKind.CommercialStrip : BuiltKind.HouseSingle;
   fillFrontage(map, parcels, roadTiles, rng.fork('fill'), p.satelliteParcels, suburbKind);

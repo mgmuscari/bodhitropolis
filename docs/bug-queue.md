@@ -17,6 +17,11 @@ Revival = make a pocket worth living in (greens + calm → land value → occupa
    core by a BFS connector over open-land/road (paved before the exurb's houses so they can't block
    it). Alive ~335→488; the post-stage road network stays ONE connected component (exurbs are
    genuinely reachable). Could push count/size further; deterministic, N=120 gate intact.
+   (c) PR pending: FILL the empty blocks — grid fabric budgets raised to pack the whole grid
+   (era2Parcels/satelliteParcels), AND the fill order RANDOMIZED (seeded Fisher-Yates) instead of
+   row-major, so any vacancy scatters organically rather than leaving a clean empty bottom band
+   (Maddy: "the lower half of these 4x4 grids is always empty... row major is not right, needs
+   randomization"). Alive ~488→~1054; the city reads as a real filled place. **Item 1 DONE.**
 2. 🔴 **Legibility quick-wins** (cheap, high value — she's flying blind): plot LETTERS SNES-style
    (R1/R2/R3, C, I, civic glyphs) on each parcel; inspect tool NAMES the thing + gives real info
    (currently just an id number); fix the TOOLBAR — fixed bottom location blocks the lower map after
