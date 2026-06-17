@@ -161,6 +161,7 @@ export function main(): void {
     camera,
     world,
     ambient: ambientState,
+    tech,
   };
 
   // Opening challenge overlay. Computed from the same world, mounted over the
