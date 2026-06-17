@@ -23,7 +23,7 @@ import { BuiltKind, isRoadKind } from '../engine/fabric';
 import { ZoneType, zoneTypeOf } from '../engine/zone';
 import { visitValue } from '../citizens/plots';
 import { stopCategoryOf, DAILY_ITINERARY, type StopCategory } from '../citizens/itinerary';
-import { TravelMode, modeSpec, modeRidesNetwork, modeSpeedMult } from '../citizens/modes';
+import { TravelMode, modeSpec, modeRidesNetwork, modeSpeedMult, MODE_CHOICE_ORDER } from '../citizens/modes';
 import type { Household } from '../citizens/census';
 import type { Rng } from '../engine/rng';
 
@@ -83,6 +83,13 @@ const WALK_RANGE = 10;
  *  third place). Larger than a last-mile radius — a citizen ranges across its district — but the
  *  FUEL economy is what really bounds reach: a stop too far to walk burns the citizen out. */
 const CITIZEN_TRIP_RADIUS = 24;
+
+/** Mode choice: a leg up to BIKE_RANGE tiles can be cycled (bikes need no special infra — bike
+ *  paths just speed them); a transit/road mode is "available" only when its network is within
+ *  MODE_INFRA_RADIUS of BOTH ends of the leg. So building a tram/rail line lets the citizens whose
+ *  trips it serves ride it instead of driving — the road-diet → mode-shift → bloom loop. */
+const BIKE_RANGE = 30;
+const MODE_INFRA_RADIUS = 6;
 
 /** Target number of itinerary citizens to keep out living their daily round at once. Below the
  *  ped cap, so there's still room for ambient wanderers, last-mile walkers, and respawned citizens.
@@ -904,6 +911,7 @@ function advanceItinerary(p: Ped, map: GameMap): boolean {
       p.phase = 'to-building';
       p.walkTo = { x: plot.x, y: plot.y };
       p.building = { x: plot.x, y: plot.y };
+      p.mode = chooseMode(map, cx, cy, plot.x, plot.y); // pick how to get there (walk/bike/transit/drive)
       p.roadSteps = undefined; // a fresh leg — its tolls accrue anew
       p.wornSteps = undefined;
       return true;
@@ -911,6 +919,36 @@ function advanceItinerary(p: Ped, map: GameMap): boolean {
   }
   p.itinStep = itin.length; // round exhausted
   return false;
+}
+
+/** Is a tile of `mode`'s network within MODE_INFRA_RADIUS of (cx, cy)? (Is this mode served here?) */
+function infraNear(map: GameMap, cx: number, cy: number, mode: TravelMode): boolean {
+  for (let y = cy - MODE_INFRA_RADIUS; y <= cy + MODE_INFRA_RADIUS; y++) {
+    for (let x = cx - MODE_INFRA_RADIUS; x <= cx + MODE_INFRA_RADIUS; x++) {
+      if (!map.inBounds(x, y)) continue;
+      if (modeRidesNetwork(mode, map.built[map.idx(x, y)]!)) return true;
+    }
+  }
+  return false;
+}
+
+/** Choose a citizen's travel MODE for a leg origin→dest: WALK if close; else the best available
+ *  premium mode — transit (rail, then streetcar) when a line serves BOTH ends, a BIKE for medium
+ *  distances (bikes need no special infra — bike paths just speed them), and DRIVE only for a long
+ *  leg with no transit. So a player's transit build / road-diet shifts citizens off cars (the
+ *  congestion → mode-shift → bloom loop). Falls back to walking when nothing else fits. */
+export function chooseMode(map: GameMap, ox: number, oy: number, dx: number, dy: number): TravelMode {
+  const d = Math.abs(ox - dx) + Math.abs(oy - dy);
+  if (d <= WALK_RANGE) return TravelMode.Walk;
+  for (const mode of MODE_CHOICE_ORDER) {
+    if (mode === TravelMode.Bike) {
+      if (d <= BIKE_RANGE) return TravelMode.Bike;
+      continue;
+    }
+    // rail / streetcar / drive: available when their network serves BOTH ends of the leg.
+    if (infraNear(map, ox, oy, mode) && infraNear(map, dx, dy, mode)) return mode;
+  }
+  return TravelMode.Walk;
 }
 
 /** Advance one flock by one boids substep (cohesion + alignment + separation). */
@@ -1424,7 +1462,10 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         const hy = (p.homeTile! - hx) / map.width;
         p.phase = 'to-home';
         p.walkTo = { x: hx, y: hy };
-        if (p.itinerary !== undefined) p.building = undefined;
+        if (p.itinerary !== undefined) {
+          p.building = undefined;
+          p.mode = chooseMode(map, Math.round(p.x), Math.round(p.y), hx, hy); // pick the trip home too
+        }
       }
       p.tx = Math.round(p.x); // recommit the Manhattan route from here toward the destination
       p.ty = Math.round(p.y);
@@ -1452,6 +1493,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
           p.ty = Math.round(p.y);
           p.recent = undefined;
           p.fuel = FUEL_LIMP_HOME; // a reserve to drag itself home (not a full tank)
+          p.mode = TravelMode.Walk; // exhausted → limp home on foot
           depositHealth(state, p.homeTile, -GIVE_UP_PENALTY);
           return true;
         }

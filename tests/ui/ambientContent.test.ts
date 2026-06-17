@@ -20,6 +20,7 @@ import {
   ingestTrips,
   setParkingLots,
   setHouseholds,
+  chooseMode,
   curbParkOffset,
   isWearable,
   seedBlight,
@@ -1405,5 +1406,38 @@ describe('multimodal travel (mode sets a citizen’s route + speed — Maddy /go
     };
     expect(reaches(TravelMode.Walk)).toBe(true); // a walker crosses the green and arrives
     expect(reaches(TravelMode.Drive)).toBe(false); // a driver is stuck on the road stub — pavement-only
+  });
+});
+
+describe('mode choice (close → walk; build transit → citizens ride it; drive last)', () => {
+  it('walks a short leg', () => {
+    const map = new GameMap(40, 40);
+    expect(chooseMode(map, 5, 5, 12, 5)).toBe(TravelMode.Walk); // d=7, within walking range
+  });
+
+  it('bikes a medium leg when no transit serves it', () => {
+    const map = new GameMap(40, 40);
+    expect(chooseMode(map, 5, 5, 25, 5)).toBe(TravelMode.Bike); // d=20, no rail/tram
+  });
+
+  it('drives a long leg when only roads connect it', () => {
+    const map = new GameMap(60, 10);
+    for (let x = 0; x < 60; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    expect(chooseMode(map, 3, 5, 50, 5)).toBe(TravelMode.Drive); // d=47 (beyond biking), roads at both ends
+  });
+
+  it('rides elevated rail when a line serves both ends — even far (transit beats driving)', () => {
+    const map = new GameMap(60, 10);
+    for (let x = 0; x < 60; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet; // roads exist too
+    map.built[map.idx(4, 5)] = BuiltKind.ElevatedRail; // a stop near the origin
+    map.built[map.idx(50, 5)] = BuiltKind.ElevatedRail; // and near the destination
+    expect(chooseMode(map, 3, 6, 50, 6)).toBe(TravelMode.ElevatedRail);
+  });
+
+  it('rides a streetcar when a line serves both ends and there is no rail', () => {
+    const map = new GameMap(60, 10);
+    map.built[map.idx(4, 5)] = BuiltKind.Streetcar;
+    map.built[map.idx(49, 5)] = BuiltKind.Streetcar;
+    expect(chooseMode(map, 3, 6, 50, 6)).toBe(TravelMode.Streetcar);
   });
 });
