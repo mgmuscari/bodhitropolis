@@ -16,6 +16,12 @@ import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 import { laneOffset, curbParkOffset, pedCurbOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
+import { TravelMode } from '../citizens/modes';
+
+/** Citizen sprite colour by travel mode (walk/bike/streetcar/elevated-rail/drive) — so the modal
+ *  shift the player engineers is visible: warm walkers, yellow cyclists, cyan tram + violet rail
+ *  riders, car-red drivers. Indexed by TravelMode. */
+const MODE_COLORS: readonly string[] = ['#efe6d2', '#ffd24a', '#5ad1e0', '#b48cff', '#c44e3d'];
 
 /** A previewed tile for the hover/drag overlay: world coords + validity tint. */
 export interface PreviewTile {
@@ -699,22 +705,28 @@ export class Renderer {
       }
     }
 
-    // Pedestrians: small warm dots. On a STREET a ped walks the kerb (sidewalk), pulled
-    // perpendicular off the lane; crossing open ground (a demand path) it stays centred.
-    ctx.fillStyle = '#efe6d2';
+    // Citizens, coloured + sized by TRAVEL MODE so the modal shift is legible: walkers are warm
+    // dots, cyclists yellow, tram riders cyan, rail riders violet, drivers a larger car-red block.
+    // On a STREET a walker hugs the kerb (sidewalk); a driver rides the lane; transit riders stay
+    // centred on their line; demand-path walkers stay centred on open ground.
     const pedSize = Math.max(1, ts * 0.16);
+    const driveSize = Math.max(1, ts * 0.26);
     for (const p of ambient.peds) {
       if (p.phase === 'inside') continue; // the citizen is inside the building, not on the street
+      const mode = p.mode ?? TravelMode.Walk;
+      const driving = mode === TravelMode.Drive;
       let ox = 0.5;
       let oy = 0.5;
       if (isRoadKind(world.map.built[world.map.idx(Math.round(p.x), Math.round(p.y))]!)) {
-        const o = pedCurbOffset(p.dir);
+        const o = driving ? laneOffset(p.dir) : pedCurbOffset(p.dir);
         ox += o.dx;
         oy += o.dy;
       }
       const { sx, sy } = camera.worldToScreen(p.x + ox, p.y + oy);
       if (!onScreen(sx, sy)) continue;
-      ctx.fillRect(sx - pedSize / 2, sy - pedSize / 2, pedSize, pedSize);
+      const sz = driving ? driveSize : pedSize;
+      ctx.fillStyle = MODE_COLORS[mode] ?? MODE_COLORS[TravelMode.Walk]!;
+      ctx.fillRect(sx - sz / 2, sy - sz / 2, sz, sz);
     }
 
     // Bird flocks: tiny dot clusters. Centre on the tile (+0.5) for the same
