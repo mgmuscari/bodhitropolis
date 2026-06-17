@@ -23,6 +23,7 @@ import { BuiltKind, isRoadKind } from '../engine/fabric';
 import { ZoneType, zoneTypeOf } from '../engine/zone';
 import { visitValue } from '../citizens/plots';
 import { stopCategoryOf, DAILY_ITINERARY, type StopCategory } from '../citizens/itinerary';
+import { TravelMode, modeSpec, modeRidesNetwork, modeSpeedMult } from '../citizens/modes';
 import type { Household } from '../citizens/census';
 import type { Rng } from '../engine/rng';
 
@@ -292,11 +293,15 @@ export interface Mover {
    *  stop, banking that visit's wellbeing at home, and heads home once the round is done. */
   itinerary?: readonly StopCategory[];
   itinStep?: number;
-  /** A walking citizen's remaining FUEL (substeps) for the current leg. Lazily budgeted from the
-   *  leg's start→target distance and re-budgeted (cleared) at each phase change. When it hits zero
-   *  the citizen gives up — turns back home, or dies if the way home is blocked too. Guards against
+  /** A walking citizen's remaining FUEL: a persistent energy tank (lazily FUEL_TANK), spent per
+   *  substep by the terrain underfoot and refilled at plots. When it hits zero the citizen gives up
+   *  — turns home on a limp reserve, or respawns at home if even that fails. Guards against
    *  oscillation toward an unreachable destination (a limit cycle the `recent` window can't catch). */
   fuel?: number;
+  /** The travel MODE for the current leg (walk/bike/streetcar/rail/drive). Undefined ⇒ Walk (the
+   *  default + back-compat). Chosen per leg by distance + nearby infra; sets which tiles the mover
+   *  can enter, which it hugs (the mode's network), and how fast it goes. */
+  mode?: TravelMode;
 }
 
 export type Car = Mover;
@@ -781,10 +786,34 @@ export function isWearable(map: GameMap, x: number, y: number): boolean {
   return map.built[i] === BuiltKind.None && map.water[i] === 0;
 }
 
-/** A routed pedestrian's next grid step (a Manhattan walk): the walkable, non-recent
- *  4-neighbour that most reduces Manhattan distance to (tgtx, tgty). Returns -1 when within
- *  one tile of the target (arrived — peds stop at a building's door, not inside it) OR when
- *  boxed in. Axis-aligned → no diagonals; obeys isWalkable → never through a plot. */
+/** Can a citizen on `mode` occupy the tile at (x,y)? A driver is PAVEMENT-ONLY (roads + parking,
+ *  no median) — it can't cross wild ground or a promenade; every other mode travels over the
+ *  pedestrian-walkable set, which already includes transit tiles (a rider boards by walking onto
+ *  the line, then rides it fast). */
+function modeCanEnter(mode: TravelMode, map: GameMap, x: number, y: number): boolean {
+  if (!map.inBounds(x, y)) return false;
+  return modeSpec(mode).pavementOnly ? carPassable(map, x, y) : isWalkable(map, x, y);
+}
+
+/** A mode's routing COST for a tile (lower = preferred): cheap ON the mode's network so the mover
+ *  hugs the bike path / tram line / rail / road; off-network it pays the pedestrian preference
+ *  cost (a driver, being pavement-only, is always on its road network). */
+function modeCost(
+  mode: TravelMode,
+  map: GameMap,
+  x: number,
+  y: number,
+  wear?: ReadonlyMap<number, number>,
+): number {
+  const k = map.built[map.idx(x, y)]!;
+  if (modeRidesNetwork(mode, k)) return modeSpec(mode).networkCost;
+  return modeSpec(mode).pavementOnly ? modeSpec(mode).networkCost : pedCost(map, x, y, wear);
+}
+
+/** A routed citizen's next grid step toward (tgtx, tgty) for travel `mode` (default Walk): the
+ *  mode-enterable, non-recent 4-neighbour that most reduces Manhattan distance, broken by the
+ *  mode's routing cost (so a rider hugs its line, a driver its roads). Returns -1 when within one
+ *  tile of the target (arrived) OR when boxed in. Axis-aligned → no diagonals. */
 function nextStepToward(
   map: GameMap,
   x: number,
@@ -793,6 +822,7 @@ function nextStepToward(
   tgty: number,
   recent?: readonly number[],
   wear?: ReadonlyMap<number, number>,
+  mode: TravelMode = TravelMode.Walk,
 ): number {
   if (Math.abs(x - tgtx) + Math.abs(y - tgty) <= 1) return -1; // at / adjacent to the target
   let best = -1;
@@ -800,10 +830,10 @@ function nextStepToward(
   for (let d = 0; d < 4; d++) {
     const nx = x + DIR_DX[d]!;
     const ny = y + DIR_DY[d]!;
-    if (!isWalkable(map, nx, ny)) continue;
+    if (!modeCanEnter(mode, map, nx, ny)) continue;
     if (recent && recent.includes(map.idx(nx, ny))) continue;
-    // Distance dominates (still reaches the target); pedCost nudges onto promenades, off stroads.
-    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + pedCost(map, nx, ny, wear);
+    // Distance dominates (still reaches the target); the mode cost hugs lines / shuns stroads.
+    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + modeCost(mode, map, nx, ny, wear);
     if (score < bestScore) {
       bestScore = score;
       best = d;
@@ -1306,6 +1336,7 @@ function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
   p.wornSteps = undefined;
   p.itinerary = undefined; // a lost citizen's round ends; it rejoins the neighbourhood at home
   p.itinStep = undefined;
+  p.mode = undefined;
   return true;
 }
 
@@ -1426,8 +1457,13 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         }
         return respawnAtHome(state, p, map); // couldn't even get home → respawn there (or despawn if homeless)
       }
-      const moving = advanceMover(p, PED_SPEED, map, (x, y, _fromDir, recent) =>
-        nextStepToward(map, x, y, tgtx, tgty, recent, state.wear),
+      // The travel MODE sets the route (which tiles, which it hugs) and the speed (fast on its
+      // network — a tram on its line, a driver on roads — slower walking to/from a stop).
+      const mode = p.mode ?? TravelMode.Walk;
+      const hereKind = map.built[map.idx(Math.round(p.x), Math.round(p.y))]!;
+      const speed = PED_SPEED * modeSpeedMult(mode, hereKind);
+      const moving = advanceMover(p, speed, map, (x, y, _fromDir, recent) =>
+        nextStepToward(map, x, y, tgtx, tgty, recent, state.wear, mode),
       );
       if (moving) return true; // still walking this leg
       // advanceMover stopped: arrived (within a tile of the target) or boxed in.

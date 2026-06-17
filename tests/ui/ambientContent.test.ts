@@ -13,6 +13,7 @@ import { TECH_TREE } from '../../src/tech/tree';
 import { simTick, type SimDeps } from '../../src/civic/compose';
 import { parkingLots, parkingStalls } from '../../src/ui/parkingContent';
 import { StopCategory } from '../../src/citizens/itinerary';
+import { TravelMode } from '../../src/citizens/modes';
 import {
   createAmbientState,
   stepAmbient,
@@ -1366,5 +1367,43 @@ describe('citizen daily itinerary (home → work → shop → lifestyle → home
     const rng = ambientFork('nocensus');
     for (let i = 0; i < 30; i++) stepAmbient(state, map, rng, 50);
     expect(state.peds.every((p) => p.itinerary === undefined)).toBe(true); // only ambient wanderers, no citizens
+  });
+});
+
+describe('multimodal travel (mode sets a citizen’s route + speed — Maddy /goal)', () => {
+  it('a streetcar rider covers more ground along a line than a walker', () => {
+    const make = (mode: TravelMode) => {
+      const map = new GameMap(40, 8);
+      for (let x = 0; x < 40; x++) map.built[map.idx(x, 4)] = BuiltKind.Streetcar; // a tram line
+      const state = createAmbientState();
+      state.peds.push({ x: 2, y: 4, dir: 1, tx: 2, ty: 4, walkTo: { x: 38, y: 4 }, fuel: 1e9, mode });
+      const rng = ambientFork('tram' + mode);
+      for (let i = 0; i < 60; i++) stepAmbient(state, map, rng, 50);
+      return state.peds[0]!.x;
+    };
+    expect(make(TravelMode.Streetcar)).toBeGreaterThan(make(TravelMode.Walk)); // rode the line faster
+  });
+
+  it('a driver cannot cross wild ground to an unroaded destination (a walker can)', () => {
+    const reaches = (mode: TravelMode): boolean => {
+      const map = new GameMap(16, 8);
+      map.built[map.idx(2, 4)] = BuiltKind.RoadStreet; // a 2-tile road stub at the start...
+      map.built[map.idx(3, 4)] = BuiltKind.RoadStreet;
+      map.built[map.idx(12, 4)] = BuiltKind.CommercialStrip; // ...the dest plot is out in the green
+      const state = createAmbientState();
+      state.peds.push({
+        x: 3, y: 4, dir: 1, tx: 3, ty: 4,
+        walkTo: { x: 12, y: 4 }, phase: 'to-building', building: { x: 12, y: 4 },
+        homeTile: map.idx(2, 4), mode,
+      });
+      const rng = ambientFork('cross' + mode);
+      for (let i = 0; i < 1500 && state.peds.length > 0; i++) {
+        stepAmbient(state, map, rng, 50);
+        if (state.peds[0]?.phase === 'inside') return true;
+      }
+      return false;
+    };
+    expect(reaches(TravelMode.Walk)).toBe(true); // a walker crosses the green and arrives
+    expect(reaches(TravelMode.Drive)).toBe(false); // a driver is stuck on the road stub — pavement-only
   });
 });
