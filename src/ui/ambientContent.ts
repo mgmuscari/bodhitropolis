@@ -120,6 +120,38 @@ const POLL_CONGEST = 8; // up to this much MORE on a fully-jammed tile (idling s
 const POLL_DECAY = 0.4; // smog lingers — eases back slower than traffic (TRAFFIC_DECAY = 1) clears
 const PED_POLL_WEIGHT = 2.5; // a fully-smoggy tile costs about as much as a stroad to walk
 
+/** Live DERIVED land value (0..LV_MAX), keyed by inhabited PLOT tile (zoneTypeOf !== None): a tile's
+ *  desirability, recomputed on a slow cadence from the healed land + amenity neighbours MINUS the
+ *  live nuisances (pollution, traffic, blight). Unlike traffic/pollution it isn't laid by agents —
+ *  it's a readout over the other layers, so it follows the water-runoff cadence pattern, not layField.
+ *  Steers where citizens go and (next) how households grow. Live layer, never hashed. */
+const LV_MAX = 255;
+const LV_BASE = 90; // a bare inhabited tile, before greenery / amenities / nuisances
+const LV_FLORA = 50; // + full flora vitality on the tile (the healed land lifts value)
+const LV_FAUNA = 35; // + full fauna presence on the tile
+const LV_AMENITY = 25; // + per nearby amenity, weighted by a linear falloff over LV_RADIUS
+const LV_RADIUS = 4; // how far amenities lift / nuisances drag a plot (Manhattan)
+const LV_POLL_PEN = 70; // − the worst nearby smog (distance-weighted), the dominant nuisance
+const LV_TRAFFIC_PEN = 50; // − the worst nearby congestion (noise / danger of a jammed road)
+const LV_WEAR_PEN = 30; // − the worst nearby trampled, littered ground (blight)
+const LV_CADENCE = 20; // recompute every N substeps (~1s) — a slow, whole-map readout
+const LV_PULL = 10; // tiles of extra distance a max-value destination can justify over a drab one
+
+/** The green / healing / civic-green kinds that lift a neighbour's land value (the goods the player
+ *  builds while healing the city). Amenity GREENS (park, garden, rewilded, parklet, promenade) are
+ *  zoneTypeOf None so they don't get their own value — they raise the plots around them. */
+const AMENITY_KINDS: ReadonlySet<number> = new Set([
+  BuiltKind.Park,
+  BuiltKind.CommunityGarden,
+  BuiltKind.RewildedLand,
+  BuiltKind.Parklet,
+  BuiltKind.Promenade,
+  BuiltKind.HealingCommons,
+  BuiltKind.VerticalFarm,
+  BuiltKind.Civic,
+  BuiltKind.CompostHub,
+]);
+
 /** Target number of itinerary citizens to keep out living their daily round at once. Below the
  *  ped cap, so there's still room for ambient wanderers, last-mile walkers, and respawned citizens.
  *  CITIZEN_SPAWN_PER_SUBSTEP tops the population up gently rather than all at once. */
@@ -410,6 +442,12 @@ export interface AmbientState {
    *  drive (heavier on freeways / in congestion), lingering as smog that decays slowly. Peds shun it
    *  and it drags land value down. Renderer-side, never hashed — the smog emerges from the vehicles. */
   pollution: Map<number, number>;
+  /** Live DERIVED land value (0..LV_MAX), keyed by inhabited plot tile: desirability recomputed on a
+   *  slow cadence from greenery + amenity neighbours minus pollution/traffic/blight. Steers citizen
+   *  destinations (and, next, household growth). Renderer-side, never hashed. */
+  landValue: Map<number, number>;
+  /** Substep counter gating the (whole-map) land-value recompute to LV_CADENCE. */
+  lvTick: number;
   /** The residential homes citizens are spawned from (the census), published by the host via
    *  setHouseholds. Each spawn picks a home weighted by its citizen count (denser → more people
    *  out), so the daily-itinerary population reflects the built city. Renderer-side, never hashed. */
@@ -428,6 +466,8 @@ export function createAmbientState(): AmbientState {
     waterTick: 0,
     traffic: new Map(),
     pollution: new Map(),
+    landValue: new Map(),
+    lvTick: 0,
   };
 }
 
@@ -1002,22 +1042,27 @@ function nearestDemandTile(map: GameMap, cx: number, cy: number): { x: number; y
 
 /** The nearest plot serving stop `category` (work/shop/lifestyle via stopCategoryOf) within
  *  CITIZEN_TRIP_RADIUS of (cx, cy), by Manhattan distance; null if the district has none. */
-function nearestOfCategory(
+export function nearestOfCategory(
   map: GameMap,
   cx: number,
   cy: number,
   category: StopCategory,
+  landValue?: ReadonlyMap<number, number>,
 ): { x: number; y: number } | null {
   let bx = -1;
   let by = -1;
-  let bestD = 1e9;
+  let bestScore = 1e9;
   for (let y = cy - CITIZEN_TRIP_RADIUS; y <= cy + CITIZEN_TRIP_RADIUS; y++) {
     for (let x = cx - CITIZEN_TRIP_RADIUS; x <= cx + CITIZEN_TRIP_RADIUS; x++) {
       if (!map.inBounds(x, y)) continue;
       if (stopCategoryOf(map.built[map.idx(x, y)]!) !== category) continue;
+      // Distance, pulled DOWN by the plot's land value: a prized destination justifies up to LV_PULL
+      // extra tiles of travel over a drab nearer one — citizens flow toward the nice parts of town.
       const d = Math.abs(x - cx) + Math.abs(y - cy);
-      if (d < bestD) {
-        bestD = d;
+      const lv = landValue ? sampleField(landValue, map.idx(x, y)) : 0;
+      const score = d - (lv / LV_MAX) * LV_PULL;
+      if (score < bestScore) {
+        bestScore = score;
         bx = x;
         by = y;
       }
@@ -1035,7 +1080,7 @@ function advanceItinerary(state: AmbientState, p: Ped, map: GameMap): boolean {
   const cx = Math.round(p.x);
   const cy = Math.round(p.y);
   for (let step = (p.itinStep ?? 0) + 1; step < itin.length; step++) {
-    const plot = nearestOfCategory(map, cx, cy, itin[step]!);
+    const plot = nearestOfCategory(map, cx, cy, itin[step]!, state.landValue);
     if (plot) {
       p.itinStep = step;
       const mode = chooseMode(map, cx, cy, plot.x, plot.y);
@@ -1612,6 +1657,67 @@ function layPollution(state: AmbientState, map: GameMap, x: number, y: number, o
   layField(state.pollution, i, pollutionEmit(onFreeway, congestion), POLL_MAX);
 }
 
+/** A plot tile's DERIVED land value (0..LV_MAX, pure decision seam): the healed land it sits on +
+ *  a bonus per adjacent amenity green, MINUS the live nuisances under/over it (air pollution, traffic
+ *  congestion, trampled-ground blight). The live fields are optional so the contract is unit-testable
+ *  in isolation; absent ⇒ no nuisance. This is the readout the city's desirability emerges from. */
+export function landValueAt(
+  map: GameMap,
+  x: number,
+  y: number,
+  pollution?: ReadonlyMap<number, number>,
+  traffic?: ReadonlyMap<number, number>,
+  wear?: ReadonlyMap<number, number>,
+): number {
+  const i = map.idx(x, y);
+  let v = LV_BASE + (map.floraVitality[i]! / 255) * LV_FLORA + (map.faunaPresence[i]! / 255) * LV_FAUNA;
+  // Amenities and nuisances are felt over a RADIUS, not just on the plot tile — a building's smog and
+  // congestion come from the ROADS beside it, and a park lifts a whole block. Amenities sum (with a
+  // linear falloff: more greens near = nicer); nuisances take the worst nearby (one jammed/smoggy road
+  // is enough to drag a plot down).
+  let amenity = 0;
+  let pollNear = 0;
+  let trafNear = 0;
+  let wearNear = 0;
+  for (let dy = -LV_RADIUS; dy <= LV_RADIUS; dy++) {
+    for (let dx = -LV_RADIUS; dx <= LV_RADIUS; dx++) {
+      const dist = Math.abs(dx) + Math.abs(dy);
+      if (dist > LV_RADIUS) continue;
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!map.inBounds(nx, ny)) continue;
+      const ni = map.idx(nx, ny);
+      const falloff = 1 - dist / (LV_RADIUS + 1); // 1 on the tile → ~0 at the edge of the radius
+      if (AMENITY_KINDS.has(map.built[ni]!)) amenity += falloff;
+      // Nuisances felt by distance: the worst weighted road nearby sets the drag (one jam is enough).
+      if (pollution) pollNear = Math.max(pollNear, sampleField(pollution, ni) * falloff);
+      if (traffic) trafNear = Math.max(trafNear, sampleField(traffic, ni) * falloff);
+      if (wear) wearNear = Math.max(wearNear, sampleField(wear, ni) * falloff);
+    }
+  }
+  v += amenity * LV_AMENITY;
+  v -= (pollNear / POLL_MAX) * LV_POLL_PEN;
+  v -= (trafNear / TRAFFIC_MAX) * LV_TRAFFIC_PEN;
+  v -= (wearNear / WEAR_MAX) * LV_WEAR_PEN;
+  return v < 0 ? 0 : v > LV_MAX ? LV_MAX : v;
+}
+
+/** Recompute the land-value field over every inhabited PLOT tile (zoneTypeOf !== None), reading the
+ *  current live nuisance fields. Rebuilt fresh each pass (cleared first) so a demolished plot drops
+ *  out. Whole-map scan — gated to LV_CADENCE by the caller (a slow, cheap readout). */
+export function recomputeLandValue(state: AmbientState, map: GameMap): void {
+  state.landValue.clear();
+  const W = map.width;
+  const H = map.height;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = map.idx(x, y);
+      if (zoneTypeOf(map.built[i]!) === ZoneType.None) continue; // only inhabited plots carry a value
+      state.landValue.set(i, landValueAt(map, x, y, state.pollution, state.traffic, state.wear));
+    }
+  }
+}
+
 function depositHealth(state: AmbientState, homeTile: number, value: number): void {
   if (value === 0) return;
   const cur = state.buildingHealth.get(homeTile) ?? 0;
@@ -1991,6 +2097,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   //    ground around it and grows heavily polluted over time (impassable, so it never wears).
   state.waterTick += 1;
   if (state.waterTick % WATER_RUNOFF_CADENCE === 0) accumulateWaterRunoff(state, map);
+
+  // 7. Land value: on a slow cadence, recompute each plot's desirability from the healed land +
+  //    amenities minus the live nuisances. A readout over the other layers — derived, not laid.
+  state.lvTick += 1;
+  if (state.lvTick % LV_CADENCE === 0) recomputeLandValue(state, map);
 }
 
 /** One water-runoff pass: every water tile with ground neighbours collects their runoff

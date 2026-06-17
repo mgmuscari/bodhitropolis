@@ -24,8 +24,14 @@ layer (non-deterministic).
   green blocks. Non-hashed — determinism gate intact.
 - ✅ **`ScalarField` abstraction** (PR #47): `layField`/`decayField`/`sampleField` — the one shape
   behind wear / water-pollution / traffic / air-pollution, so each layer is a thin lay/decay/read.
-- 🔴 **Next layers:** land value (derived: amenity proximity − pollution − traffic − blight);
-  population (live per-household occupancy) — both agent-emergent.
+- ✅ **Land value is now agent-emergent** (PR #49): a DERIVED live field `state.landValue` recomputed
+  on a slow cadence over inhabited plots (`landValueAt`: healed land + amenity proximity, distance-
+  weighted, MINUS the worst nearby pollution/traffic/blight). Steers citizen destinations
+  (`nearestOfCategory` pulled toward value) and renders as a slate→gold overlay. Live-verified range
+  0–96 in the blighted start (slate near arterials/freeway); climbs as the player heals. Non-hashed.
+- 🔴 **Next layer:** population — a LIVE per-household occupancy quantity bounded by seeded building
+  capacity, grows/shrinks on land-value/pollution/jobs/wellbeing, drives the spawn target. NEVER
+  writes the hash (buildings changing = the deferred deterministic-growth seam).
 
 ## Open
 
