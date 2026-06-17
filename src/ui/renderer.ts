@@ -159,6 +159,17 @@ const BUILDING_STYLES: Record<number, BuildingStyle> = {
   [BuiltKind.Industrial]: { base: [140, 92, 62], accent: [160, 110, 78], roof: [104, 66, 44] },
   [BuiltKind.ParkingLot]: { base: [96, 93, 90], accent: [110, 107, 104], roof: [82, 80, 78] },
   [BuiltKind.Civic]: { base: [190, 176, 142], accent: [206, 192, 158], roof: [152, 138, 108] },
+  // Power plants 24..30 — dirty centralized tier reads smoky/industrial (coal soot,
+  // gas steel, hydro concrete, nuclear cooling-tower grey); the renewables read
+  // bright (wind white, solar gold, fusion electric-cyan) — the clean transition is
+  // visible at a glance.
+  [BuiltKind.CoalPlant]: { base: [74, 70, 66], accent: [96, 90, 84], roof: [52, 48, 46] },
+  [BuiltKind.GasPlant]: { base: [110, 100, 96], accent: [132, 120, 114], roof: [82, 74, 70] },
+  [BuiltKind.HydroPlant]: { base: [120, 132, 140], accent: [142, 156, 164], roof: [92, 104, 112] },
+  [BuiltKind.NuclearPlant]: { base: [150, 156, 150], accent: [176, 182, 174], roof: [116, 122, 118] },
+  [BuiltKind.WindTurbine]: { base: [210, 214, 218], accent: [232, 236, 240], roof: [180, 186, 192] },
+  [BuiltKind.SolarPlant]: { base: [196, 168, 70], accent: [220, 192, 92], roof: [158, 132, 50] },
+  [BuiltKind.FusionPlant]: { base: [86, 168, 188], accent: [108, 196, 214], roof: [58, 130, 150] },
   // Tech-tree-era 48..60 — solarpunk palette: parklet/garden greens, vertical-farm
   // teal, water blues, solar/AI blues, warm commune purples, bazaar/commons sandstone.
   [BuiltKind.Parklet]: { base: [88, 148, 84], accent: [104, 168, 98], roof: [64, 118, 62] },

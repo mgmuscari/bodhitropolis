@@ -97,8 +97,8 @@ describe('buildToolMenu', () => {
   });
 
   it('drops an empty/unknown open category back to null', () => {
-    const view = buildToolMenu(availableTools(freshTech(0)), null, 0, 'energy' as ToolCategory);
-    // energy has no tools unlocked at tech 0 → no flyout
+    const view = buildToolMenu(availableTools(freshTech(0)), null, 0, 'green' as ToolCategory);
+    // green has no tools unlocked at tech 0 → no flyout
     expect(view.open).toBeNull();
     expect(view.rows).toEqual([]);
   });
@@ -106,14 +106,18 @@ describe('buildToolMenu', () => {
   it('surfaces a tech-unlocked category once its kind is granted', () => {
     const tech = freshTech(1000);
     expect(buildToolMenu(availableTools(tech), null, 1000, null).categories.map((c) => c.id)).not.toContain(
-      'energy',
+      'green',
     );
-    tech.unlock('sun-and-wire');
-    tech.unlock('renewable-energy');
-    tech.unlock('local-grids');
-    tech.unlock('community-energy-nodes'); // grants EnergyNode
+    tech.unlock('walkable-streets');
+    tech.unlock('road-diets');
+    tech.unlock('parklets'); // grants Parklet (green)
     expect(buildToolMenu(availableTools(tech), null, 1000, null).categories.map((c) => c.id)).toContain(
-      'energy',
+      'green',
     );
+  });
+
+  it('shows the Energy category from the start (classic power plants)', () => {
+    const cats = buildToolMenu(availableTools(freshTech(0)), null, 0, null).categories.map((c) => c.id);
+    expect(cats).toContain('energy'); // Coal/Gas/Hydro/Nuclear are classic
   });
 });
