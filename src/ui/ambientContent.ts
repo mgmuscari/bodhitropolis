@@ -167,11 +167,17 @@ const CITIZEN_SPAWN_PER_SUBSTEP = 2;
  *  reverses it. (Buildings actually appearing/disappearing is the deferred deterministic-growth seam.) */
 const OCC_CADENCE = 20; // re-evaluate occupancy every ~1s (a slow demographic drift)
 const OCC_RATE = 0.25; // people/cadence occupancy moves toward the ceiling / floor at a full signal (gentle)
-const OCC_LV_NEUTRAL = 75; // land value at which a home holds steady (≈ the blighted start's mean, so it is
-//                            metastable — bleeding slowly, not collapsing — and healing clearly reverses it)
+// LAND VALUE is the ANCHOR of occupancy (it self-corrects: fewer people → less traffic → higher value).
+// Neutral sits at the blighted car-city's live equilibrium so the start is metastable, not free-falling.
+const OCC_LV_NEUTRAL = 60;
 const OCC_POLL_W = 0.5; // how strongly local smog pushes residents out
-const OCC_HEALTH_SCALE = 36; // building-health magnitude counting as a full ±0.5 of signal
-const OCC_OUT_FRACTION = 0.4; // fraction of residents out on a round at once (before the cap)
+// Building health is a MINOR nudge, not the driver: in the blighted start most homes carry negative
+// health (unpleasant trips), so an unbounded health term death-spirals the city to empty. Cap it small.
+const OCC_HEALTH_SCALE = 120; // building-health magnitude mapped before the cap (HEALTH_MAX)
+const OCC_HEALTH_CAP = 0.15; // max ± the health term can contribute to the signal (a nudge, not a collapse)
+// A city loses people but never fully empties: occupancy floors at this fraction of its seeded baseline.
+const OCC_FLOOR = 0.4;
+const OCC_OUT_FRACTION = 0.5; // fraction of residents out on a round at once (before the cap)
 /** Per-kind growth HEADROOM: how far above its seeded baseline a home's occupancy can climb when it
  *  thrives. A single house barely densifies; apartments / projects / co-ops / communes hold far more. */
 const OCC_HEADROOM: ReadonlyMap<number, number> = new Map([
@@ -1465,18 +1471,19 @@ export function capacityOf(kind: number, baseCount: number): number {
  *  it sheds them; nearby smog repels; the wellbeing its citizens carry home (building health) tips it
  *  either way. Sign drives grow vs shrink, magnitude scales the rate. */
 export function occupancySignal(landValue: number, pollution: number, health: number): number {
-  let s = (landValue - OCC_LV_NEUTRAL) / 255;
-  s -= (pollution / POLL_MAX) * OCC_POLL_W;
-  const h = health / OCC_HEALTH_SCALE;
-  s += h < -0.5 ? -0.5 : h > 0.5 ? 0.5 : h;
+  let s = (landValue - OCC_LV_NEUTRAL) / 255; // land value is the anchor
+  s -= (pollution / POLL_MAX) * OCC_POLL_W; // smog pushes out
+  const h = health / OCC_HEALTH_SCALE; // building health is only a small bounded nudge
+  s += h < -OCC_HEALTH_CAP ? -OCC_HEALTH_CAP : h > OCC_HEALTH_CAP ? OCC_HEALTH_CAP : h;
   return s;
 }
 
-/** One occupancy drift step (pure): nudge toward the ceiling on a positive signal, toward empty on a
- *  negative one, clamped to [0, capacity]. */
-export function occupancyStep(occ: number, capacity: number, signal: number): number {
+/** One occupancy drift step (pure): nudge toward the ceiling on a positive signal, toward the floor on
+ *  a negative one, clamped to [floor, capacity]. The floor keeps a struggling home populated — a city
+ *  thins but never becomes a literal ghost town. */
+export function occupancyStep(occ: number, floor: number, capacity: number, signal: number): number {
   const next = occ + signal * OCC_RATE;
-  return next < 0 ? 0 : next > capacity ? capacity : next;
+  return next < floor ? floor : next > capacity ? capacity : next;
 }
 
 /** How many citizens to keep out on their round, from the live total occupancy: a fraction of the
@@ -1501,13 +1508,14 @@ export function stepOccupancy(state: AmbientState, map: GameMap): void {
   for (const h of homes) {
     const t = map.idx(h.x, h.y);
     const cap = capacityOf(map.built[t]!, h.count);
+    const floor = h.count * OCC_FLOOR; // a home never thins below this fraction of its seeded baseline
     const cur = state.occupancy.get(t) ?? h.count; // seed lazily at the census baseline
     const signal = occupancySignal(
       sampleField(state.landValue, t),
       sampleField(state.pollution, t),
       state.buildingHealth.get(t) ?? 0,
     );
-    next.set(t, occupancyStep(cur, cap, signal));
+    next.set(t, occupancyStep(cur, floor, cap, signal));
   }
   state.occupancy = next;
 }

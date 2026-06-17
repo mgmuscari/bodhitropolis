@@ -759,14 +759,15 @@ describe('population: occupancy signal (attract vs decline)', () => {
   });
 });
 
-describe('population: occupancy step (bounded drift)', () => {
+describe('population: occupancy step (bounded drift, never empties)', () => {
   it('grows toward capacity on a positive signal, clamped at the ceiling', () => {
-    expect(occupancyStep(9, 27, 1)).toBeGreaterThan(9);
-    expect(occupancyStep(27, 27, 1)).toBe(27);
+    expect(occupancyStep(9, 0, 27, 1)).toBeGreaterThan(9);
+    expect(occupancyStep(27, 0, 27, 1)).toBe(27);
   });
-  it('shrinks toward zero on a negative signal, clamped at the floor', () => {
-    expect(occupancyStep(9, 27, -1)).toBeLessThan(9);
-    expect(occupancyStep(0, 27, -1)).toBe(0);
+  it('shrinks on a negative signal but never below the floor (no ghost town)', () => {
+    expect(occupancyStep(9, 4, 27, -1)).toBeLessThan(9);
+    expect(occupancyStep(4, 4, 27, -1)).toBe(4); // at the floor it holds
+    expect(occupancyStep(5, 4, 27, -100)).toBe(4); // a big negative signal clamps up to the floor
   });
 });
 
@@ -808,7 +809,7 @@ describe('population: occupancy evolves with conditions (agent-emergent)', () =>
     state.pollution.set(t, 255);
     for (let i = 0; i < 80; i++) stepOccupancy(state, map);
     expect(state.occupancy.get(t)!).toBeLessThan(9);
-    expect(state.occupancy.get(t)!).toBeGreaterThanOrEqual(0);
+    expect(state.occupancy.get(t)!).toBeGreaterThan(0); // floored — a blighted home thins but never empties
   });
 });
 
