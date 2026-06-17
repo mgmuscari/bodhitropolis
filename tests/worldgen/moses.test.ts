@@ -362,7 +362,7 @@ describe('era2MotorAge', () => {
   }
 });
 
-describe('era2MotorAge — legacy dirty power, sited by grade', () => {
+describe('era3 — legacy dirty power, sited by grade on surviving frontage', () => {
   const PLANTS = new Set<number>([BuiltKind.CoalPlant, BuiltKind.GasPlant]);
   const parcelMeanGrade = (world: WorldState, i: number): number => {
     const { map, parcels } = world;
@@ -381,15 +381,25 @@ describe('era2MotorAge — legacy dirty power, sited by grade', () => {
 
   for (const seed of SEEDS) {
     it(`seed "${seed}": sites legacy coal/gas plants`, () => {
-      const { world } = runEras(seed, 2);
+      const { world } = runEras(seed, 3);
       const plants = world.parcels.aliveIndices().filter((i) => isPlant(world, i));
       expect(plants.length).toBeGreaterThanOrEqual(2);
     });
 
     it(`seed "${seed}": the seeded grid powers part of the city (not all dark)`, () => {
-      const { world } = runEras(seed, 2);
+      const { world } = runEras(seed, 3);
       const grid = computePowerGrid(world.map, world.parcels);
       expect(grid.capacity).toBeGreaterThan(0);
+      expect(grid.poweredAnchors.size).toBeGreaterThan(0);
+    });
+
+    it(`seed "${seed}": plants survive the full century (era5 doesn't dark the city)`, () => {
+      // Plants are sited in redlined zones, where grade-driven era5 decay is
+      // harshest — they must be exempt from abandonment or the city restarts dark.
+      const world = runFullStage(seed);
+      const plants = world.parcels.aliveIndices().filter((i) => isPlant(world, i));
+      expect(plants.length).toBeGreaterThanOrEqual(2);
+      const grid = computePowerGrid(world.map, world.parcels);
       expect(grid.poweredAnchors.size).toBeGreaterThan(0);
     });
   }
@@ -405,7 +415,7 @@ describe('era2MotorAge — legacy dirty power, sited by grade', () => {
     let devSum = 0;
     let devN = 0;
     for (const seed of SEEDS) {
-      const { world } = runEras(seed, 2);
+      const { world } = runEras(seed, 3);
       for (const i of world.parcels.aliveIndices()) {
         const g = parcelMeanGrade(world, i);
         if (isPlant(world, i)) {
@@ -683,6 +693,7 @@ describe('era3Highways', () => {
       const demolished = Number(/(\d+) parcels demolished/.exec(line)![1]);
       const projPlaced = Number(/(\d+) projects/.exec(line)![1]);
       const civicPlaced = Number(/(\d+) civic/.exec(line)![1]);
+      const powerPlaced = Number(/(\d+) power/.exec(line)![1]);
 
       expect(demolished).toBeGreaterThanOrEqual(5);
       // Chronicle honesty: projects are placed only after carving and none
@@ -690,9 +701,9 @@ describe('era3Highways', () => {
       // placement count (a corridor cannot demolish a project).
       expect(aliveKindCount(world, BuiltKind.Projects) - projBefore).toBe(projPlaced);
       // Every alive-count change in era 3 is accounted for: demolitions out,
-      // projects + civic in. (Net kind-deltas would conflate a demolished
-      // era-1 civic with a placed one — the chronicled placement counts do not.)
-      expect(aliveAfter).toBe(aliveBefore - demolished + projPlaced + civicPlaced);
+      // projects + civic + power plants in. (Net kind-deltas would conflate a
+      // demolished era-1 civic with a placed one — the chronicled counts do not.)
+      expect(aliveAfter).toBe(aliveBefore - demolished + projPlaced + civicPlaced + powerPlaced);
     });
 
     it(`seed "${seed}": the streetcar is ripped out (rail <= 10% of peak)`, () => {
@@ -734,6 +745,10 @@ describe('era3Highways — routed through redlined districts', () => {
           hwSum += map.redline[i]!;
           hwN++;
         } else if (map.parcel[i] !== 0) {
+          // Exclude power plants: they're deliberately sited on the worst frontage,
+          // so they'd inflate the "average building" baseline unfairly.
+          const k = world.parcels.kindAt(map.parcel[i]! - 1);
+          if (k >= 24 && k <= 30) continue;
           parcelSum += map.redline[i]!;
           parcelN++;
         }

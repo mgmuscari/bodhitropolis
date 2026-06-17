@@ -19,6 +19,7 @@ import { Water, type GameMap } from '../engine/map';
 import {
   BuiltKind,
   isRoadKind,
+  isPowerPlant,
   canPlaceParcel,
   placeParcel,
   placeTransport,
@@ -57,13 +58,13 @@ export interface MosesParams {
   era2GrowthRings: number; // extra grid rings beyond the founding blocks
   era2Industry: number; // industrial parcels on rail/water frontage
   industryFrontage: number; // an industrial footprint must be within this of rail/water
-  era2Power: number; // legacy coal/gas plants sited on the most redlined frontage
   era2Parking: number; // parking lots near the crossroads
   era2ParkingFields: number; // full 2x2-lot parking fields laid in the open fringe
   era2Parcels: number; // extra houses/strips filling new frontage
   // Era 3 highways & urban renewal
   era3DensityRadius: number; // boxDensity radius for corridor scoring
   era3GradeWeight: number; // how strongly corridor scoring prefers redlined fabric
+  era3Power: number; // legacy coal/gas plants sited on surviving redlined frontage
   era3MinDemolish: number; // a corridor must cut through at least this many parcels
   corridorTopK: number; // rng jitter among the top-K scored corridors
   era3Projects: number; // tower-in-the-park Projects placed along the corridor
@@ -115,7 +116,6 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era2GrowthRings: 6,
   era2Industry: 8,
   industryFrontage: 2,
-  era2Power: 4,
   era2Parking: 3,
   era2ParkingFields: 3,
   era2Parcels: 4000, // FILL-ALL: exceed the grown grid's frontage so every ring block fills, not half
@@ -123,6 +123,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   //                    the frontage always leaves the BOTTOM rows empty — pack the whole grid instead)
   era3DensityRadius: 3,
   era3GradeWeight: 8,
+  era3Power: 4,
   era3MinDemolish: 5,
   corridorTopK: 3,
   era3Projects: 5,
@@ -841,25 +842,6 @@ export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state:
     if (placeAdjacent(map, parcels, x, y, 3, 3, BuiltKind.Industrial, fabRng, accept) !== -1) industry++;
   }
 
-  // 3b. Legacy dirty power, SITED BY GRADE (discrimination-first): coal/gas plants
-  //     drop on the most redlined road frontage, so the redlined districts host the
-  //     smog. They seed the starting grid — enough to power PART of the city, not
-  //     all of it — so the rest starts dark until the player builds clean power.
-  //     A dedicated rng fork keeps era-2's other streams byte-stable. The plants
-  //     ARE "redlining" made physical; the neutral live result is decay.
-  const powerRng = rng.fork('power');
-  const powerCands = roadTiles
-    .filter((i) => toCore(i) > p.coreRadius)
-    .sort((a, b) => map.redline[b]! - map.redline[a]! || railWaterDist[a]! - railWaterDist[b]! || a - b);
-  let power = 0;
-  for (const i of powerCands) {
-    if (power >= p.era2Power) break;
-    const x = i % map.width;
-    const y = (i - x) / map.width;
-    const kind = power % 2 === 0 ? BuiltKind.CoalPlant : BuiltKind.GasPlant;
-    if (placeAdjacent(map, parcels, x, y, 3, 3, kind, powerRng, undefined, PLANT_ATTRS) !== -1) power++;
-  }
-
   // 4. Parking near the crossroads.
   const byCore = [...roadTiles].sort((a, b) => toCore(a) - toCore(b) || a - b);
   let parking = 0;
@@ -924,7 +906,7 @@ export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state:
   }
 
   world.log.push(
-    `era2: motor age — ${avenues} avenue tiles, ${industry} industry, ${power} power, ${parking} parking, ` +
+    `era2: motor age — ${avenues} avenue tiles, ${industry} industry, ${parking} parking, ` +
       `${fields} fields (${fieldLots} lots), ${filled} infill`,
   );
 }
@@ -1135,7 +1117,30 @@ export function era3Highways(world: WorldState, rng: Rng, p: MosesParams, state:
     }
   }
 
-  world.log.push(`era3: urban renewal — ${demolished} parcels demolished, ${projects} projects, ${civic} civic`);
+  // Legacy dirty power, SITED BY GRADE on the SURVIVING redlined frontage (after
+  // the highway carve, so the expressway never plows the plants away — both are
+  // drawn to the same redlined ground). Coal/gas drop on the most redlined road
+  // frontage so those districts host the smog; they seed the starting grid — PART
+  // of the city, not all — so the rest stays dark until the player builds clean
+  // power. The plants ARE "redlining" made physical; the neutral live state is decay.
+  const powerRng = rng.fork('power');
+  const roadTiles: number[] = [];
+  for (let i = 0; i < map.built.length; i++) {
+    if (isRoadKind(map.built[i]!) && toCore(i) > p.coreRadius) roadTiles.push(i);
+  }
+  roadTiles.sort((a, b) => map.redline[b]! - map.redline[a]! || a - b);
+  let power = 0;
+  for (const i of roadTiles) {
+    if (power >= p.era3Power) break;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const kind = power % 2 === 0 ? BuiltKind.CoalPlant : BuiltKind.GasPlant;
+    if (placeAdjacent(map, parcels, x, y, 3, 3, kind, powerRng, undefined, PLANT_ATTRS) !== -1) power++;
+  }
+
+  world.log.push(
+    `era3: urban renewal — ${demolished} parcels demolished, ${projects} projects, ${civic} civic, ${power} power`,
+  );
 }
 
 /** Demolish every Rail tile; returns how many were removed. */
@@ -1496,6 +1501,10 @@ export function era5Disinvestment(world: WorldState, rng: Rng, p: MosesParams, s
     const loss = Math.floor((p.maxDecay * grade) / 255) + decayRng.nextInt(p.decayNoise + 1);
     parcels.setCondition(idx, parcels.conditionAt(idx) - loss);
     decayed++;
+    // Power plants age but are NOT abandoned — the utility keeps the legacy grid
+    // running through disinvestment, so the redlined dirty power survives worldgen
+    // and the city does not restart 100% dark.
+    if (isPowerPlant(parcels.kindAt(idx))) continue;
     if (parcels.conditionAt(idx) < p.abandonThreshold) doomed.push(idx);
   }
 
