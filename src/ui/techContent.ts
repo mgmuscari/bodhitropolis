@@ -27,7 +27,7 @@ export interface BranchColumn {
 }
 
 // Columns render in the order the design presents the philosophies.
-const BRANCH_ORDER: readonly Branch[] = [
+export const BRANCH_ORDER: readonly Branch[] = [
   Branch.NewUrbanism,
   Branch.GreenDevelopment,
   Branch.RestorativeJustice,
@@ -54,6 +54,26 @@ function statusOf(node: TechNode, state: TechState): NodeStatus {
 }
 
 /**
+ * The display view of one node: its status and the names (not ids) of any prereqs
+ * not yet unlocked. Shared by branchColumns and the Civ-style techLayout so both
+ * derive node state identically. `byId` maps prereq ids to nodes for name lookup.
+ */
+export function nodeViewOf(
+  n: TechNode,
+  byId: ReadonlyMap<string, TechNode>,
+  state: TechState,
+): NodeView {
+  return {
+    id: n.id,
+    name: n.name,
+    flavor: n.flavor,
+    cost: n.cost,
+    status: statusOf(n, state),
+    missing: n.prereqs.filter((p) => !state.unlocked.has(p)).map((p) => byId.get(p)?.name ?? p),
+  };
+}
+
+/**
  * Build the 7 branch columns from (tree, state). Columns follow BRANCH_ORDER;
  * within a column, no-prereq roots come first, then nodes by ascending cost
  * (id-tie-broken for determinism). Each node carries its status and the display
@@ -72,16 +92,7 @@ export function branchColumns(tree: readonly TechNode[], state: TechState): Bran
         if (a.cost !== b.cost) return a.cost - b.cost; // then ascending cost
         return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; // stable tiebreak
       })
-      .map((n): NodeView => ({
-        id: n.id,
-        name: n.name,
-        flavor: n.flavor,
-        cost: n.cost,
-        status: statusOf(n, state),
-        missing: n.prereqs
-          .filter((p) => !state.unlocked.has(p))
-          .map((p) => byId.get(p)?.name ?? p),
-      }));
+      .map((n): NodeView => nodeViewOf(n, byId, state));
     return { branch, title: BRANCH_TITLES[branch], nodes };
   });
 }
