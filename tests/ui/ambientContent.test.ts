@@ -37,6 +37,11 @@ import {
   landValueAt,
   recomputeLandValue,
   nearestOfCategory,
+  capacityOf,
+  occupancySignal,
+  occupancyStep,
+  spawnTargetFor,
+  stepOccupancy,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -724,6 +729,86 @@ describe('land value steers citizen destination choice', () => {
     const lv = new Map([[map.idx(10, 5), 10], [map.idx(16, 5), 255]]);
     expect(nearestOfCategory(map, 8, 5, StopCategory.Shop, lv)).toEqual({ x: 16, y: 5 });
     expect(nearestOfCategory(map, 8, 5, StopCategory.Shop)).toEqual({ x: 10, y: 5 }); // no LV → nearest
+  });
+});
+
+describe('population: building capacity (the seeded ceiling)', () => {
+  it('lets a denser building hold more than a single house at the same baseline', () => {
+    expect(capacityOf(BuiltKind.Apartments, 9)).toBeGreaterThan(capacityOf(BuiltKind.HouseSingle, 9));
+  });
+  it('is at least the seeded baseline (room for the residents already there)', () => {
+    expect(capacityOf(BuiltKind.HouseSingle, 9)).toBeGreaterThanOrEqual(9);
+  });
+  it('scales with the baseline (denser seed → bigger ceiling)', () => {
+    expect(capacityOf(BuiltKind.Apartments, 18)).toBeGreaterThan(capacityOf(BuiltKind.Apartments, 9));
+  });
+  it('a derelict (zero) home holds nobody', () => {
+    expect(capacityOf(BuiltKind.HouseSingle, 0)).toBe(0);
+  });
+});
+
+describe('population: occupancy signal (attract vs decline)', () => {
+  it('is positive in a prized, clean, healthy spot', () => {
+    expect(occupancySignal(220, 0, 40)).toBeGreaterThan(0);
+  });
+  it('is negative in a blighted, smoggy, unhealthy spot', () => {
+    expect(occupancySignal(10, 255, -40)).toBeLessThan(0);
+  });
+  it('falls as pollution rises (smog repels residents)', () => {
+    expect(occupancySignal(150, 255, 0)).toBeLessThan(occupancySignal(150, 0, 0));
+  });
+});
+
+describe('population: occupancy step (bounded drift)', () => {
+  it('grows toward capacity on a positive signal, clamped at the ceiling', () => {
+    expect(occupancyStep(9, 27, 1)).toBeGreaterThan(9);
+    expect(occupancyStep(27, 27, 1)).toBe(27);
+  });
+  it('shrinks toward zero on a negative signal, clamped at the floor', () => {
+    expect(occupancyStep(9, 27, -1)).toBeLessThan(9);
+    expect(occupancyStep(0, 27, -1)).toBe(0);
+  });
+});
+
+describe('population: spawn target tracks live occupancy', () => {
+  it('caps (flat) for a large population', () => {
+    expect(spawnTargetFor(100000)).toBe(spawnTargetFor(200000));
+    expect(spawnTargetFor(100000)).toBeGreaterThan(0);
+  });
+  it('scales down as the population falls, and zero when nobody lives here', () => {
+    expect(spawnTargetFor(60)).toBeLessThan(spawnTargetFor(100000));
+    expect(spawnTargetFor(0)).toBe(0);
+  });
+  it('is monotonic non-decreasing', () => {
+    expect(spawnTargetFor(300)).toBeGreaterThanOrEqual(spawnTargetFor(120));
+  });
+});
+
+describe('population: occupancy evolves with conditions (agent-emergent)', () => {
+  it('grows above baseline for a home in a prized, healthy spot', () => {
+    const map = new GameMap(8, 8);
+    map.built[map.idx(3, 3)] = BuiltKind.Apartments;
+    const t = map.idx(3, 3);
+    const state = createAmbientState();
+    setHouseholds(state, [{ x: 3, y: 3, count: 9 }]);
+    state.landValue.set(t, 255);
+    state.buildingHealth.set(t, 60);
+    for (let i = 0; i < 80; i++) stepOccupancy(state, map);
+    expect(state.occupancy.get(t)!).toBeGreaterThan(9);
+    expect(state.occupancy.get(t)!).toBeLessThanOrEqual(capacityOf(BuiltKind.Apartments, 9));
+  });
+
+  it('shrinks below baseline for a home in a blighted, smoggy spot', () => {
+    const map = new GameMap(8, 8);
+    map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
+    const t = map.idx(3, 3);
+    const state = createAmbientState();
+    setHouseholds(state, [{ x: 3, y: 3, count: 9 }]);
+    state.landValue.set(t, 10);
+    state.pollution.set(t, 255);
+    for (let i = 0; i < 80; i++) stepOccupancy(state, map);
+    expect(state.occupancy.get(t)!).toBeLessThan(9);
+    expect(state.occupancy.get(t)!).toBeGreaterThanOrEqual(0);
   });
 });
 
