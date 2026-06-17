@@ -41,6 +41,7 @@ import { TECH_TREE } from './tech/tree';
 import { createTechState } from './tech/state';
 import { wellbeing } from './tech/effort';
 import { branchColumns, effortLine, panelSignature } from './ui/techContent';
+import { techLayout } from './ui/techLayout';
 import { mountTechPanel } from './ui/techPanel';
 import { availableTools, previewTool, applyTool, toolDef, type ToolId } from './tools/tools';
 import { isLineTool } from './ui/lineTools';
@@ -192,7 +193,7 @@ export function main(): void {
   // content and the unlock action through deps. The `T` gate is suppressed while
   // the opening overlay is up (isOverlayActive), so it never toggles beneath it.
   const techPanel = mountTechPanel(document.body, {
-    getContent: () => ({ effort: effortLine(tech), columns: branchColumns(TECH_TREE, tech) }),
+    getContent: () => ({ effort: effortLine(tech), layout: techLayout(TECH_TREE, tech) }),
     // Cheap per-tick header source (no branchColumns derive) for refreshHeader (Y5).
     getEffort: () => effortLine(tech),
     onUnlock: (id) => {
