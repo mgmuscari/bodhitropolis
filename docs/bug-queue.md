@@ -41,6 +41,13 @@ layer (non-deterministic).
 
 ## Open
 
+- ✅ **Ghost town: population spiralled to empty** (PR pending) — occupancy declined monotonically to
+  ~0 (no populated equilibrium). Root cause (diagnosed live): building-HEALTH dominated the occupancy
+  signal (≈half the homes negative, ~none positive in the blighted car-city → bad trips → negative
+  health → decline → fewer trips that stay bad → spiral), overwhelming the self-correcting land-value
+  term. Fix (architectural): land value is the ANCHOR, building-health a minor bounded nudge; add a
+  per-home population FLOOR (a city thins but never fully empties); re-anchor OCC_LV_NEUTRAL at the
+  live equilibrium so the start is metastable, not free-falling.
 - 🟡 **Driving-ped substrate exemption is implicit** — a hidden `'driving'` ped survives the
   substrate-despawn (ambientContent substep step 1) only because boarding leaves a stale `walkTo` set.
   Make it explicit (`p.phase === 'driving'` in the exemption) so it can't break if `walkTo` is cleared.
