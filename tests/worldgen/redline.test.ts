@@ -4,7 +4,7 @@ import { createRng } from '../../src/engine/rng';
 import { runPipeline } from '../../src/worldgen/pipeline';
 import { terrainStage } from '../../src/worldgen/terrain';
 import { mosesCenturyStage } from '../../src/worldgen/moses';
-import { gradeRedline, gradeBucket, RedlineGrade } from '../../src/worldgen/redline';
+import { gradeRedline, gradeBucket, gradeLetter, RedlineGrade } from '../../src/worldgen/redline';
 
 // gradeRedline draws the redline grade — a discriminatory social geography drawn
 // FIRST (independent of terrain), with a low-elevation/near-water "cover" nudge
@@ -98,6 +98,15 @@ describe('gradeBucket — HOLC A/B/C/D over the continuous grade', () => {
     expect(gradeBucket(255)).toBe(RedlineGrade.D);
     // Monotonic: a worse grade never buckets better.
     expect(gradeBucket(200)).toBeGreaterThanOrEqual(gradeBucket(100));
+  });
+});
+
+describe('gradeLetter — the HOLC letter for a grade value', () => {
+  it('maps each band to its letter A..D', () => {
+    expect(gradeLetter(0)).toBe('A');
+    expect(gradeLetter(96)).toBe('B');
+    expect(gradeLetter(160)).toBe('C');
+    expect(gradeLetter(255)).toBe('D');
   });
 });
 

@@ -61,6 +61,13 @@ export function gradeBucket(v: number): RedlineGrade {
   return RedlineGrade.D;
 }
 
+const GRADE_LETTERS = ['A', 'B', 'C', 'D'] as const;
+
+/** The HOLC letter (A..D) for a continuous 0..255 grade value. */
+export function gradeLetter(value: number): string {
+  return GRADE_LETTERS[gradeBucket(value)]!;
+}
+
 /** Smoothstep on [0,1] — a polynomial fade (no transcendental Math). */
 const smooth = (t: number): number => t * t * (3 - 2 * t);
 

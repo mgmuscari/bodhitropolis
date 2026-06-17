@@ -10,6 +10,7 @@ import { mosesCenturyStage } from './worldgen/moses';
 import { ecoSeedStage } from './worldgen/ecoseed';
 import { parseChronicle } from './worldgen/chronicle';
 import { buildReport } from './worldgen/report';
+import { gradeLetter } from './worldgen/redline';
 import { ecologyReport } from './ecology/report';
 import { biodiversityField } from './ecology/biodiversity';
 import { Water } from './engine/map';
@@ -508,6 +509,9 @@ export function main(): void {
       else if (pid && isPowerConsumer(world.parcels.kindAt(pid - 1))) {
         line += powerGrid.poweredAnchors.has(anchor) ? ' · powered' : ' · UNPOWERED';
       }
+      // The HOLC redline grade of this ground — the apparatus's classification that
+      // sited the burdens here. Land only (water carries a grade but it reads wrong).
+      if (world.map.water[i] === Water.None) line += ` · redline ${gradeLetter(world.map.redline[i]!)}`;
       toolbar.setStatus(line);
       return;
     }
