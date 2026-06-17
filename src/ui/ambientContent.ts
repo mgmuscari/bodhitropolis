@@ -89,12 +89,23 @@ const CITIZEN_TRIP_RADIUS = 40;
  *  paths just speed them); a transit/road mode is "available" only when its network is within
  *  MODE_INFRA_RADIUS of BOTH ends of the leg. So building a tram/rail line lets the citizens whose
  *  trips it serves ride it instead of driving — the road-diet → mode-shift → bloom loop. */
-const BIKE_RANGE = 30;
+const BIKE_RANGE = 18;
 const MODE_INFRA_RADIUS = 6;
 
 /** How long a citizen's car lingers "parked at home" after the owner's round ends, before it clears
  *  — a brief visible beat, short enough that retired cars don't pile up into a backlog. */
 const RETIRED_CAR_LINGER = 90;
+
+/** Live, AGENT-DRIVEN traffic density (0..TRAFFIC_MAX), keyed by road tile: laid by cars as they
+ *  actually drive, decayed when they don't. It IS the traffic — the macro pattern emerges from the
+ *  agents, not from an aggregate field the sim paints. Cars route AROUND it (CONGESTION_WEIGHT in
+ *  the pathfinder) and peds shun it; so building a bypass or calming a street shifts where cars go. */
+const TRAFFIC_MAX = 255;
+const TRAFFIC_LAY = 10; // a car adds this to its tile's live traffic per substep it drives there
+const TRAFFIC_DECAY = 1; // live traffic eases back this much per substep when no car is passing
+const CONGESTION_WEIGHT = 3; // how strongly the pathfinder/peds avoid a fully-congested tile
+/** A* search bound — a car-agent's route is the committed least-cost path; abandon past this. */
+const ROAD_PATH_MAX_ITERS = 4000;
 
 /** Target number of itinerary citizens to keep out living their daily round at once. Below the
  *  ped cap, so there's still room for ambient wanderers, last-mile walkers, and respawned citizens.
@@ -378,6 +389,10 @@ export interface AmbientState {
   waterPollution: Map<number, number>;
   /** Substep counter gating the (whole-map) water-runoff pass to WATER_RUNOFF_CADENCE. */
   waterTick: number;
+  /** Live AGENT-DRIVEN traffic density (0..TRAFFIC_MAX), keyed by road tile: laid by cars as they
+   *  drive, decayed when they don't. THE traffic — emergent from the agents, not an aggregate field.
+   *  Car pathfinding routes around it and peds shun it; renderer-side, never hashed. */
+  traffic: Map<number, number>;
   /** The residential homes citizens are spawned from (the census), published by the host via
    *  setHouseholds. Each spawn picks a home weighted by its citizen count (denser → more people
    *  out), so the daily-itinerary population reflects the built city. Renderer-side, never hashed. */
@@ -394,6 +409,7 @@ export function createAmbientState(): AmbientState {
     wear: new Map(),
     waterPollution: new Map(),
     waterTick: 0,
+    traffic: new Map(),
   };
 }
 
@@ -764,12 +780,18 @@ function isWalkable(map: GameMap, x: number, y: number): boolean {
  *  (avenues) worst. So peds drift onto promenades and shun busy stroads where the route allows.
  *  WILD ground (empty land) is terrain-aware via `wear`: lush is dear, a beaten desire path cheap
  *  (foot traffic self-reinforces paths). */
-function pedCost(map: GameMap, x: number, y: number, wear?: ReadonlyMap<number, number>): number {
+function pedCost(
+  map: GameMap,
+  x: number,
+  y: number,
+  wear?: ReadonlyMap<number, number>,
+  traffic?: ReadonlyMap<number, number>,
+): number {
   const i = map.idx(x, y);
   const k = map.built[i]!;
   if (k === BuiltKind.Promenade) return 0.3;
   if (k === BuiltKind.QuietStreet || k === BuiltKind.BikePath) return 0.5;
-  const trafficLoad = (map.traffic[i]! / 255) * 2; // inverse traffic density: busier → costlier
+  const trafficLoad = ((traffic?.get(i) ?? 0) / TRAFFIC_MAX) * 2; // LIVE agent traffic: busier → costlier on foot
   if (k === BuiltKind.RoadStreet) return 0.55 + trafficLoad; // a local street
   if (k === BuiltKind.RoadAvenue) return 2.0 + trafficLoad; // a stroad — unpleasant on foot
   if (k === BuiltKind.None) {
@@ -826,10 +848,11 @@ function modeCost(
   x: number,
   y: number,
   wear?: ReadonlyMap<number, number>,
+  traffic?: ReadonlyMap<number, number>,
 ): number {
   const k = map.built[map.idx(x, y)]!;
   if (modeRidesNetwork(mode, k)) return modeSpec(mode).networkCost;
-  return modeSpec(mode).pavementOnly ? modeSpec(mode).networkCost : pedCost(map, x, y, wear);
+  return modeSpec(mode).pavementOnly ? modeSpec(mode).networkCost : pedCost(map, x, y, wear, traffic);
 }
 
 /** A routed citizen's next grid step toward (tgtx, tgty) for travel `mode` (default Walk): the
@@ -845,6 +868,7 @@ function nextStepToward(
   recent?: readonly number[],
   wear?: ReadonlyMap<number, number>,
   mode: TravelMode = TravelMode.Walk,
+  traffic?: ReadonlyMap<number, number>,
 ): number {
   if (Math.abs(x - tgtx) + Math.abs(y - tgty) <= 1) return -1; // at / adjacent to the target
   let best = -1;
@@ -854,14 +878,78 @@ function nextStepToward(
     const ny = y + DIR_DY[d]!;
     if (!modeCanEnter(mode, map, nx, ny)) continue;
     if (recent && recent.includes(map.idx(nx, ny))) continue;
-    // Distance dominates (still reaches the target); the mode cost hugs lines / shuns stroads.
-    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + modeCost(mode, map, nx, ny, wear);
+    // Distance dominates (still reaches the target); the mode cost hugs lines / shuns stroads + jams.
+    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + modeCost(mode, map, nx, ny, wear, traffic);
     if (score < bestScore) {
       bestScore = score;
       best = d;
     }
   }
   return best;
+}
+
+/** A driving tile's PATHFINDING cost (lower = preferred): freeways are cheap (fast through-routes),
+ *  avenues a bit cheaper than streets, and LIVE congestion (the traffic the agents themselves lay)
+ *  adds cost so cars route AROUND jams. This is what makes a car-agent prefer the freeway and avoid
+ *  a clogged street — the macro traffic pattern emerges from the agents, not an aggregate field. */
+function driveTileCost(map: GameMap, x: number, y: number, traffic?: ReadonlyMap<number, number>): number {
+  const i = map.idx(x, y);
+  const k = map.built[i]!;
+  let c = k === BuiltKind.RoadHighway ? 0.5 : k === BuiltKind.RoadAvenue ? 0.8 : 1; // freeways fast
+  if (traffic) c += ((traffic.get(i) ?? 0) / TRAFFIC_MAX) * CONGESTION_WEIGHT; // shun jams
+  return c;
+}
+
+/** A* over the drivable road network from (sx,sy) to (gx,gy): the committed least-cost route a
+ *  car-agent follows (so it never circles), preferring freeways and avoiding congestion via
+ *  driveTileCost. Returns tile indices start-first (inclusive of both ends), or null if no route /
+ *  the search bound is hit. Pure: array open-list + Maps + abs heuristic (allowlist-safe). */
+export function roadPath(
+  map: GameMap,
+  sx: number,
+  sy: number,
+  gx: number,
+  gy: number,
+  traffic?: ReadonlyMap<number, number>,
+): number[] | null {
+  if (!carPassable(map, sx, sy) || !carPassable(map, gx, gy)) return null;
+  const start = map.idx(sx, sy);
+  const goal = map.idx(gx, gy);
+  if (start === goal) return [start];
+  const gScore = new Map<number, number>([[start, 0]]);
+  const came = new Map<number, number>();
+  const open: Array<{ i: number; x: number; y: number; f: number }> = [
+    { i: start, x: sx, y: sy, f: Math.abs(sx - gx) + Math.abs(sy - gy) },
+  ];
+  let iters = 0;
+  while (open.length > 0 && iters++ < ROAD_PATH_MAX_ITERS) {
+    let bi = 0; // pop lowest f (linear scan — road frontiers stay small)
+    for (let k = 1; k < open.length; k++) if (open[k]!.f < open[bi]!.f) bi = k;
+    const cur = open.splice(bi, 1)[0]!;
+    if (cur.i === goal) {
+      const path = [goal];
+      let p = goal;
+      while (came.has(p)) {
+        p = came.get(p)!;
+        path.push(p);
+      }
+      return path.reverse();
+    }
+    const baseG = gScore.get(cur.i)!;
+    for (let d = 0; d < 4; d++) {
+      const nx = cur.x + DIR_DX[d]!;
+      const ny = cur.y + DIR_DY[d]!;
+      if (!carPassable(map, nx, ny)) continue;
+      const ni = map.idx(nx, ny);
+      const ng = baseG + driveTileCost(map, nx, ny, traffic);
+      if (ng < (gScore.get(ni) ?? Infinity)) {
+        gScore.set(ni, ng);
+        came.set(ni, cur.i);
+        open.push({ i: ni, x: nx, y: ny, f: ng + (Math.abs(nx - gx) + Math.abs(ny - gy)) * 0.5 });
+      }
+    }
+  }
+  return null;
 }
 
 /** The nearest demand tile (R/C/I/Civic via zoneTypeOf — a place a person walks to/from)
@@ -951,26 +1039,6 @@ function infraNear(map: GameMap, cx: number, cy: number, mode: TravelMode): bool
   return false;
 }
 
-/** Calm, bike-friendly infrastructure — a citizen will cycle a leg only when one of these serves
- *  both ends (a dedicated path, or a calmed street / promenade pleasant to ride). A stroad-only
- *  district is NOT bike-friendly, so its citizens drive until the player calms it. */
-const BIKE_FRIENDLY: ReadonlySet<number> = new Set<number>([
-  BuiltKind.BikePath,
-  BuiltKind.QuietStreet,
-  BuiltKind.Promenade,
-]);
-
-/** Is bike-friendly infrastructure within MODE_INFRA_RADIUS of (cx, cy)? */
-function bikeFriendlyNear(map: GameMap, cx: number, cy: number): boolean {
-  for (let y = cy - MODE_INFRA_RADIUS; y <= cy + MODE_INFRA_RADIUS; y++) {
-    for (let x = cx - MODE_INFRA_RADIUS; x <= cx + MODE_INFRA_RADIUS; x++) {
-      if (!map.inBounds(x, y)) continue;
-      if (BIKE_FRIENDLY.has(map.built[map.idx(x, y)]!)) return true;
-    }
-  }
-  return false;
-}
-
 /** Choose a citizen's travel MODE for a leg origin→dest, after Maddy's rule — drive only when it
  *  is far AND no transit/bike/ped infrastructure serves it. WALK if close; else the best available
  *  active/transit mode whose network serves BOTH ends — rail, then streetcar, then a BIKE for a
@@ -982,10 +1050,9 @@ export function chooseMode(map: GameMap, ox: number, oy: number, dx: number, dy:
   if (d <= WALK_RANGE) return TravelMode.Walk;
   for (const mode of MODE_CHOICE_ORDER) {
     if (mode === TravelMode.Bike) {
-      // bikeable only on a medium leg the player has made calm/bike-friendly at both ends.
-      if (d <= BIKE_RANGE && bikeFriendlyNear(map, ox, oy) && bikeFriendlyNear(map, dx, dy)) {
-        return TravelMode.Bike;
-      }
+      // A medium leg cycles (you can bike a street); bike-friendly infra just makes it faster/nicer
+      // via the routing cost. So cyclists appear from the start and grow as the player calms streets.
+      if (d <= BIKE_RANGE) return TravelMode.Bike;
       continue;
     }
     // rail / streetcar / drive: available when their network serves BOTH ends of the leg.
@@ -1496,6 +1563,14 @@ function zonedNeighbor(map: GameMap, roadIdx: number): number {
 }
 
 /** Add `value` (signed) to a home building's health, clamped. */
+/** A driving car lays live traffic at the tile under it — the agent-driven traffic field (cars ARE
+ *  the traffic). Other cars' pathfinding routes around it; pedestrians shun it. */
+function layTraffic(state: AmbientState, map: GameMap, x: number, y: number): void {
+  const i = map.idx(x, y);
+  const v = (state.traffic.get(i) ?? 0) + TRAFFIC_LAY;
+  state.traffic.set(i, v > TRAFFIC_MAX ? TRAFFIC_MAX : v);
+}
+
 function depositHealth(state: AmbientState, homeTile: number, value: number): void {
   if (value === 0) return;
   const cur = state.buildingHealth.get(homeTile) ?? 0;
@@ -1669,14 +1744,12 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     }
 
     if (p.phase === 'driving') {
-      // The citizen rides its owned car to the parking spot near its destination (hidden — the
-      // renderer draws the car, not the rider). On arrival the car PARKS (a real, persistent
-      // vehicle left at the kerb) and the citizen alights to walk the last mile.
+      // The citizen rides its owned car along a COMMITTED least-cost route (set at boarding — no
+      // greedy circling), fast on freeways, laying live traffic as it goes (which other cars route
+      // around). On arrival it PARKS in a free, non-freeway spot and the citizen walks the last mile.
       const car = p.carId !== undefined ? findCar(state, p.carId) : undefined;
-      const target = p.parkAt ?? p.building ?? p.homeDest;
-      if (!car || !target) {
-        // lost the car / no target → finish the leg on foot
-        p.phase = p.homeDest ? 'to-home' : 'to-building';
+      if (!car || car.path === undefined) {
+        p.phase = p.homeDest ? 'to-home' : 'to-building'; // lost the car / no route → finish on foot
         p.walkTo = p.homeDest ?? p.building ?? { x: Math.round(p.x), y: Math.round(p.y) };
         p.mode = TravelMode.Walk;
         p.tx = Math.round(p.x);
@@ -1684,14 +1757,21 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         p.recent = undefined;
         return true;
       }
-      const moved = advanceMover(car, CAR_SPEED, map, (x, y, _fromDir, recent) =>
-        nextStepToward(map, x, y, target.x, target.y, recent, undefined, TravelMode.Drive),
-      );
-      p.x = car.x; // ride along
+      const onFreeway = map.built[map.idx(Math.round(car.x), Math.round(car.y))] === BuiltKind.RoadHighway;
+      const sp = onFreeway ? CAR_SPEED * 2 : CAR_SPEED; // freeways move traffic twice as fast
+      const moving = advanceMover(car, sp, map, (x, y) => pathStep(map, car, x, y));
+      layTraffic(state, map, Math.round(car.x), Math.round(car.y)); // the car IS the traffic
+      p.x = car.x; // ride along (hidden)
       p.y = car.y;
-      if (moved) return true;
-      // reached (or boxed near) the parking spot → park the car and walk the last mile to the dest.
-      parkOwnedCar(car, map, { x: Math.round(car.x), y: Math.round(car.y) });
+      if (moving) return true;
+      // route done → park in a FREE, non-freeway spot near the car, then walk the last mile.
+      const spot = findParkingNear(state, map, Math.round(car.x), Math.round(car.y)) ?? {
+        x: Math.round(car.x),
+        y: Math.round(car.y),
+      };
+      parkOwnedCar(car, map, spot);
+      car.path = undefined;
+      car.leg = undefined;
       p.x = car.x;
       p.y = car.y;
       p.phase = p.homeDest ? 'to-home' : 'to-building';
@@ -1736,7 +1816,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       const hereKind = map.built[map.idx(Math.round(p.x), Math.round(p.y))]!;
       const speed = PED_SPEED * modeSpeedMult(mode, hereKind);
       const moving = advanceMover(p, speed, map, (x, y, _fromDir, recent) =>
-        nextStepToward(map, x, y, tgtx, tgty, recent, state.wear, mode),
+        nextStepToward(map, x, y, tgtx, tgty, recent, state.wear, mode, state.traffic),
       );
       if (moving) return true; // still walking this leg
       // advanceMover stopped: arrived (within a tile of the target) or boxed in.
@@ -1748,17 +1828,40 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         return respawnAtHome(state, p, map);
       }
       if (p.phase === 'to-vehicle') {
-        // Reached its OWNED car → get in and drive (the car was parked, waiting; it never vanished).
+        // Reached its OWNED car → plan a COMMITTED least-cost route to a free parking spot near the
+        // destination, then drive it. (The car was parked, waiting; it never vanished.) If no road
+        // route exists, finish the leg on foot.
         const car = p.carId !== undefined ? findCar(state, p.carId) : undefined;
-        if (!car) {
-          // car gone (shouldn't happen — owned cars persist) → finish on foot
+        const dest = p.building ?? p.homeDest;
+        const spot = car && dest ? findParkingNear(state, map, dest.x, dest.y) ?? dest : undefined;
+        const path =
+          car && spot
+            ? roadPath(map, Math.round(car.x), Math.round(car.y), spot.x, spot.y, state.traffic)
+            : null;
+        if (!car || !path || path.length < 2) {
           p.phase = p.homeDest ? 'to-home' : 'to-building';
           p.walkTo = p.homeDest ?? p.building ?? { x: Math.round(p.x), y: Math.round(p.y) };
           p.mode = TravelMode.Walk;
+          p.tx = Math.round(p.x);
+          p.ty = Math.round(p.y);
+          p.recent = undefined;
           return true;
         }
-        car.parked = false; // boarded → the car drives next tick
+        // Board: snap onto the route's first tile and commit to following it (cars=committed paths).
+        const p0x = path[0]! % map.width;
+        const p0y = (path[0]! - p0x) / map.width;
+        const p1x = path[1]! % map.width;
+        const p1y = (path[1]! - p1x) / map.width;
+        car.x = p0x;
+        car.y = p0y;
+        car.tx = p1x;
+        car.ty = p1y;
+        car.dir = p1x > p0x ? 1 : p1x < p0x ? 3 : p1y > p0y ? 2 : 0;
+        car.path = path;
+        car.leg = 2; // path[0]=start, path[1]=the committed next tile; pathStep targets path[2] next
+        car.parked = false;
         car.recent = undefined;
+        p.parkAt = spot;
         p.phase = 'driving';
         return true;
       }
@@ -1839,6 +1942,16 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       const nv = v - WEAR_DECAY;
       if (nv <= 0) state.wear.delete(k);
       else state.wear.set(k, nv);
+    }
+  }
+
+  // 5b. Live traffic eases back where no car is passing — so the agent-driven field tracks CURRENT
+  //     driving, and a calmed/bypassed road clears.
+  if (state.traffic.size > 0) {
+    for (const [k, v] of [...state.traffic]) {
+      const nv = v - TRAFFIC_DECAY;
+      if (nv <= 0) state.traffic.delete(k);
+      else state.traffic.set(k, nv);
     }
   }
 

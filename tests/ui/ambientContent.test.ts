@@ -21,6 +21,7 @@ import {
   setParkingLots,
   setHouseholds,
   chooseMode,
+  roadPath,
   curbParkOffset,
   isWearable,
   seedBlight,
@@ -1415,21 +1416,19 @@ describe('mode choice (close → walk; car-dependent until calm/transit infra; t
     expect(chooseMode(map, 5, 5, 12, 5)).toBe(TravelMode.Walk); // d=7, within walking range
   });
 
-  it('DRIVES a medium leg when only car infra (stroads) serves it — the car-dependent start', () => {
-    const map = new GameMap(40, 10);
-    for (let x = 0; x < 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet; // only roads
-    expect(chooseMode(map, 5, 5, 25, 5)).toBe(TravelMode.Drive); // d=20, no bike/transit infra → drive
-  });
-
-  it('BIKES that same medium leg once bike-friendly infra serves both ends — the shift', () => {
+  it('BIKES a medium leg (cyclists appear from the start; bike infra just makes it nicer)', () => {
     const map = new GameMap(40, 10);
     for (let x = 0; x < 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
-    map.built[map.idx(6, 5)] = BuiltKind.BikePath; // a calm/bike tile near the origin
-    map.built[map.idx(24, 5)] = BuiltKind.QuietStreet; // and near the destination
-    expect(chooseMode(map, 5, 5, 25, 5)).toBe(TravelMode.Bike); // d=20, now bike-friendly at both ends
+    expect(chooseMode(map, 5, 5, 20, 5)).toBe(TravelMode.Bike); // d=15, beyond walking, within biking
   });
 
-  it('drives a long leg when only roads connect it', () => {
+  it('DRIVES a leg beyond biking range when no transit serves it (a mix: some drive)', () => {
+    const map = new GameMap(40, 10);
+    for (let x = 0; x < 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    expect(chooseMode(map, 3, 5, 28, 5)).toBe(TravelMode.Drive); // d=25, beyond biking → drive
+  });
+
+  it('drives a long leg when only roads connect it (beyond biking, no transit)', () => {
     const map = new GameMap(60, 10);
     for (let x = 0; x < 60; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
     expect(chooseMode(map, 3, 5, 50, 5)).toBe(TravelMode.Drive); // d=47 (beyond biking), roads at both ends
@@ -1523,5 +1522,44 @@ describe('citizen vehicle ownership (a driver parks a persistent car — Maddy: 
       }
     }
     expect(survivedVisit).toBe(true); // the parked car waited for its owner — it did not despawn
+  });
+});
+
+describe('roadPath (A* agent road routing — committed least-cost paths, no greedy circling)', () => {
+  it('finds a contiguous committed route along the road network, start- and goal-inclusive', () => {
+    const map = new GameMap(12, 6);
+    for (let x = 1; x <= 10; x++) map.built[map.idx(x, 3)] = BuiltKind.RoadStreet;
+    const path = roadPath(map, 1, 3, 10, 3);
+    expect(path).not.toBeNull();
+    expect(path![0]).toBe(map.idx(1, 3));
+    expect(path![path!.length - 1]).toBe(map.idx(10, 3));
+    for (let i = 1; i < path!.length; i++) {
+      const a = path![i - 1]!;
+      const b = path![i]!;
+      const ax = a % 12;
+      const ay = (a - ax) / 12;
+      const bx = b % 12;
+      const by = (b - bx) / 12;
+      expect(Math.abs(ax - bx) + Math.abs(ay - by)).toBe(1); // adjacent tiles, no jumps
+    }
+  });
+
+  it('returns null when the goal is not road-reachable from the start', () => {
+    const map = new GameMap(12, 6);
+    map.built[map.idx(1, 3)] = BuiltKind.RoadStreet;
+    map.built[map.idx(10, 3)] = BuiltKind.RoadStreet; // two disconnected road tiles
+    expect(roadPath(map, 1, 3, 10, 3)).toBeNull();
+  });
+
+  it('routes around a congested tile when an alternative exists (agent-driven avoidance)', () => {
+    // a grid with two parallel corridors between the same ends; congest the direct one.
+    const map = new GameMap(9, 7);
+    for (let x = 1; x <= 7; x++) { map.built[map.idx(x, 2)] = BuiltKind.RoadStreet; map.built[map.idx(x, 4)] = BuiltKind.RoadStreet; }
+    for (let y = 2; y <= 4; y++) { map.built[map.idx(1, y)] = BuiltKind.RoadStreet; map.built[map.idx(7, y)] = BuiltKind.RoadStreet; }
+    const jam = new Map<number, number>();
+    for (let x = 2; x <= 6; x++) jam.set(map.idx(x, 2), 255); // top corridor fully congested
+    const path = roadPath(map, 1, 3, 7, 3, jam)!;
+    const usedTop = path.some((i) => { const x = i % 9; const y = (i - x) / 9; return y === 2 && x >= 2 && x <= 6; });
+    expect(usedTop).toBe(false); // avoided the jam, took the clear bottom corridor
   });
 });
