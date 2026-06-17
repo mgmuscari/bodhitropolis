@@ -14,6 +14,19 @@ function densityTier(density: number): number {
   return density < 1 ? 1 : density > 3 ? 3 : Math.floor(density);
 }
 
+// Power plants aren't an RCI zone (they stay ZoneType.None), but they still want a
+// readable label — a 'P' + a generation-source letter (Coal/Gas/Hydro/Nuclear/
+// Wind/Solar/Fusion). Checked before the zone switch in parcelGlyph.
+const POWER_GLYPH: ReadonlyMap<number, string> = new Map<number, string>([
+  [BuiltKind.CoalPlant, 'PC'],
+  [BuiltKind.GasPlant, 'PG'],
+  [BuiltKind.HydroPlant, 'PH'],
+  [BuiltKind.NuclearPlant, 'PN'],
+  [BuiltKind.WindTurbine, 'PW'],
+  [BuiltKind.SolarPlant, 'PS'],
+  [BuiltKind.FusionPlant, 'PF'],
+]);
+
 // Civic amenities all map to ZoneType.Civic, but the player wants to tell a
 // healing commons from a power node at a glance — so each gets its own short tag.
 const CIVIC_GLYPH: ReadonlyMap<number, string> = new Map<number, string>([
@@ -34,6 +47,8 @@ const CIVIC_GLYPH: ReadonlyMap<number, string> = new Map<number, string>([
  * parking, transport, empty — returns null. Total over BuiltKind.
  */
 export function parcelGlyph(kind: BuiltKind, density: number): string | null {
+  const power = POWER_GLYPH.get(kind);
+  if (power) return power;
   switch (zoneTypeOf(kind)) {
     case ZoneType.Residential:
       return `R${densityTier(density)}`;

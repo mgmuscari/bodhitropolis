@@ -43,6 +43,18 @@ export const BuiltKind = {
   Industrial: 21,
   ParkingLot: 22,
   Civic: 23,
+  // Power plants 24..30 — the SC2000-style centralized tier (minus microwave).
+  // Coal/Gas/Hydro/Nuclear are classic always-buildable legacy power; Wind/Solar/
+  // Fusion are the renewable future granted up the Solarpunk branch. Distributed
+  // generation is the existing EnergyNode (53). Dirty plants (coal/gas/nuclear) emit
+  // into the live pollution field; renewables don't.
+  CoalPlant: 24,
+  GasPlant: 25,
+  HydroPlant: 26,
+  NuclearPlant: 27,
+  WindTurbine: 28,
+  SolarPlant: 29,
+  FusionPlant: 30,
   // tech-tree-era buildings 48..60
   Parklet: 48,
   CommunityGarden: 49,

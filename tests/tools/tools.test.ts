@@ -177,6 +177,49 @@ describe('classic primitives (always buildable)', () => {
   });
 });
 
+describe('power plants (SC2000 tier)', () => {
+  it('resolves the plant build tools with footprints', () => {
+    expect(toolDef('build-24')!.name).toBe('Coal Plant');
+    expect(toolDef('build-24')!.kind).toBe(BuiltKind.CoalPlant);
+    expect(toolDef('build-24')!.footprint).toEqual({ w: 3, h: 3 });
+    expect(toolDef('build-27')!.name).toBe('Nuclear Plant');
+    expect(toolDef('build-27')!.footprint).toEqual({ w: 4, h: 4 });
+    expect(toolDef('build-28')!.name).toBe('Wind Turbine');
+    expect(toolDef('build-30')!.name).toBe('Fusion Plant');
+  });
+
+  it('offers Coal/Gas/Hydro/Nuclear with NOTHING unlocked (classic legacy power)', () => {
+    const list = ids(freshTech(0));
+    for (const id of ['build-24', 'build-25', 'build-26', 'build-27']) expect(list).toContain(id);
+  });
+
+  it('gates Wind/Solar/Fusion behind the Solarpunk branch', () => {
+    const tech = freshTech(1000);
+    expect(ids(tech)).not.toContain('build-28');
+    expect(ids(tech)).not.toContain('build-29');
+    expect(ids(tech)).not.toContain('build-30');
+    tech.unlock('sun-and-wire');
+    tech.unlock('renewable-energy');
+    tech.unlock('wind-power'); // grants WindTurbine
+    tech.unlock('solar-arrays'); // grants SolarPlant
+    expect(ids(tech)).toContain('build-28'); // wind
+    expect(ids(tech)).toContain('build-29'); // solar
+    expect(ids(tech)).not.toContain('build-30'); // fusion still needs the deep chain
+    tech.unlock('local-grids');
+    tech.unlock('community-energy-nodes');
+    tech.unlock('fusion-power');
+    expect(ids(tech)).toContain('build-30');
+  });
+
+  it('places a classic Coal Plant on empty land', () => {
+    const world = freshWorld();
+    const tech = freshTech(1000);
+    const r = applyTool(world, tech, toolDef('build-24')!, 5, 5);
+    expect(r.ok).toBe(true);
+    expect(world.map.built[world.map.idx(5, 5)]).toBe(BuiltKind.CoalPlant);
+  });
+});
+
 describe('availableTools: rezone tools (building-target 3-way gate)', () => {
   it('resolves the rezone convert tools with their target kind + cost', () => {
     expect(toolDef('convert-61')!.kind).toBe(BuiltKind.Park);

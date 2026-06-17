@@ -107,6 +107,13 @@ const CATEGORY_OF_BUILDING: ReadonlyMap<number, ToolCategory> = new Map<number, 
   [BuiltKind.WastewaterWorks, 'green'],
   [BuiltKind.EnergyNode, 'energy'],
   [BuiltKind.AINode, 'energy'],
+  [BuiltKind.CoalPlant, 'energy'],
+  [BuiltKind.GasPlant, 'energy'],
+  [BuiltKind.HydroPlant, 'energy'],
+  [BuiltKind.NuclearPlant, 'energy'],
+  [BuiltKind.WindTurbine, 'energy'],
+  [BuiltKind.SolarPlant, 'energy'],
+  [BuiltKind.FusionPlant, 'energy'],
 ]);
 
 // Per-kind pictorial icon. Falls back to the category icon when a kind has none.
@@ -142,6 +149,13 @@ const ICON_OF_KIND: ReadonlyMap<number, string> = new Map<number, string>([
   [BuiltKind.WastewaterWorks, '💧'],
   [BuiltKind.EnergyNode, '⚡'],
   [BuiltKind.AINode, '🤖'],
+  [BuiltKind.CoalPlant, '🔥'],
+  [BuiltKind.GasPlant, '🛢️'],
+  [BuiltKind.HydroPlant, '🌊'],
+  [BuiltKind.NuclearPlant, '☢️'],
+  [BuiltKind.WindTurbine, '🌬️'],
+  [BuiltKind.SolarPlant, '🔆'],
+  [BuiltKind.FusionPlant, '⚛️'],
 ]);
 
 /** The category a tool belongs to, or null for the top-level modes (inspect/bulldoze). */

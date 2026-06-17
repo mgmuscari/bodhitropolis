@@ -132,6 +132,12 @@ export const TECH_TREE: readonly TechNode[] = [
     'Light rail rides above the streets, solar-fed and silent, knitting the districts.'),
   node('drone-deliveries', Solarpunk, 'Drone Deliveries', ['community-ai-nodes'], 45, cap('drone-deliveries'),
     'Democratically dispatched couriers carry the last mile so no one has to drive it.'),
+  node('wind-power', Solarpunk, 'Wind Power', ['renewable-energy'], 30, kind(BuiltKind.WindTurbine),
+    'Turbines lean into the prevailing wind; clean megawatts spun from moving air.'),
+  node('solar-arrays', Solarpunk, 'Solar Arrays', ['renewable-energy'], 35, kind(BuiltKind.SolarPlant),
+    'A field of panels drinks the noon sun; the cheapest power humanity has ever made.'),
+  node('fusion-power', Solarpunk, 'Fusion Power', ['local-grids', 'community-energy-nodes'], 80, kind(BuiltKind.FusionPlant),
+    'A star in a bottle, owned in common; limitless clean power and nothing to mine.'),
 
   // --- Anarcho-Communism -----------------------------------------------------
   node('mutual-aid', AnarchoCommunism, 'Mutual Aid', [], 10, cap('mutual-aid'),

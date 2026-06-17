@@ -27,6 +27,7 @@ const DESIGN_BRIEF_IDS = [
   // Solarpunk
   'sun-and-wire', 'renewable-energy', 'local-grids', 'community-energy-nodes',
   'bike-paths', 'elevated-rail', 'drone-deliveries',
+  'wind-power', 'solar-arrays', 'fusion-power',
   // AnarchoCommunism
   'mutual-aid', 'collective-ownership', 'communes', 'community-ai-nodes',
 ];
@@ -39,8 +40,8 @@ function cap(id: string, prereqs: string[] = []): TechNode {
 }
 
 describe('TECH_TREE shape', () => {
-  it('has 36 nodes', () => {
-    expect(TECH_TREE.length).toBe(36);
+  it('has 39 nodes', () => {
+    expect(TECH_TREE.length).toBe(39);
   });
 
   it('contains exactly the design-brief node ids', () => {
