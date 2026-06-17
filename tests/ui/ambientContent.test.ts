@@ -1476,7 +1476,7 @@ describe('citizen vehicle ownership (a driver parks a persistent car — Maddy: 
     expect(state.buildingHealth.get(map.idx(2, 4))!).toBeLessThan(0); // industrial visit → negative at home
   });
 
-  it('census drivers are cars carrying an itinerary, not pedestrians rendered as cars', () => {
+  it('a driver is a ped that OWNS a distinct persistent car, not a ped rendered as a car', () => {
     const map = new GameMap(50, 10);
     for (let x = 2; x <= 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
     map.built[map.idx(2, 4)] = BuiltKind.HouseSingle;
@@ -1484,12 +1484,44 @@ describe('citizen vehicle ownership (a driver parks a persistent car — Maddy: 
     const state = createAmbientState();
     setHouseholds(state, [{ x: 2, y: 4, count: 3 }]);
     const rng = ambientFork('owncar2');
-    let sawCitizenCar = false;
+    let sawOwnedCar = false;
+    let sawOwnerPed = false;
     for (let i = 0; i < 400; i++) {
       stepAmbient(state, map, rng, 50);
-      if (state.cars.some((c) => c.itinerary !== undefined)) sawCitizenCar = true;
+      if (state.cars.some((c) => c.owned)) sawOwnedCar = true;
+      if (state.peds.some((p) => p.carId !== undefined && state.cars.some((c) => c.id === p.carId))) {
+        sawOwnerPed = true;
+      }
     }
-    expect(sawCitizenCar).toBe(true); // a driver is a Car entity with an itinerary
-    expect(state.peds.every((p) => p.mode !== TravelMode.Drive)).toBe(true); // no ped is ever "a car"
+    expect(sawOwnedCar).toBe(true); // the vehicle is a distinct, persistent OWNED Car entity
+    expect(sawOwnerPed).toBe(true); // a citizen PED owns it — it walks to and from it
+    expect(state.peds.every((p) => p.mode !== TravelMode.Drive)).toBe(true); // a ped is never itself "a car"
+  });
+
+  it('an owned car persists (does not despawn) while its owner is away visiting on foot', () => {
+    const map = new GameMap(50, 10);
+    for (let x = 2; x <= 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(2, 4)] = BuiltKind.HouseSingle;
+    map.built[map.idx(38, 4)] = BuiltKind.Industrial;
+    const state = createAmbientState();
+    setHouseholds(state, [{ x: 2, y: 4, count: 3 }]);
+    const rng = ambientFork('persist');
+    // step until a citizen is INSIDE a plot with an owned car parked outside, then keep stepping
+    // through the whole visit and assert the car never vanishes.
+    let survivedVisit = false;
+    for (let i = 0; i < 1500 && !survivedVisit; i++) {
+      stepAmbient(state, map, rng, 50);
+      const visitor = state.peds.find((p) => p.phase === 'inside' && p.carId !== undefined);
+      if (visitor && state.cars.some((c) => c.id === visitor.carId)) {
+        // its car exists right now; verify it's still there after a stretch of the visit
+        let stillThere = true;
+        for (let j = 0; j < 40; j++) {
+          stepAmbient(state, map, rng, 50);
+          if (!state.cars.some((c) => c.id === visitor.carId)) { stillThere = false; break; }
+        }
+        survivedVisit = stillThere;
+      }
+    }
+    expect(survivedVisit).toBe(true); // the parked car waited for its owner — it did not despawn
   });
 });

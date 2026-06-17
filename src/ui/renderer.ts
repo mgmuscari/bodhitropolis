@@ -711,7 +711,7 @@ export class Renderer {
     // (sidewalk); crossing open ground (a demand path) it stays centred.
     const pedSize = Math.max(1, ts * 0.16);
     for (const p of ambient.peds) {
-      if (p.phase === 'inside') continue; // the citizen is inside the building, not on the street
+      if (p.phase === 'inside' || p.phase === 'driving') continue; // inside a building, or riding its car
       let ox = 0.5;
       let oy = 0.5;
       if (isRoadKind(world.map.built[world.map.idx(Math.round(p.x), Math.round(p.y))]!)) {
