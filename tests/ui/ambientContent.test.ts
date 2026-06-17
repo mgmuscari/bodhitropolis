@@ -18,6 +18,7 @@ import {
   stepAmbient,
   ingestTrips,
   setParkingLots,
+  setHouseholds,
   curbParkOffset,
   isWearable,
   seedBlight,
@@ -1341,5 +1342,29 @@ describe('citizen daily itinerary (home → work → shop → lifestyle → home
     }
     expect(visited).toEqual(['6,4', '12,4']); // work then lifestyle — the absent shop was skipped
     expect(state.peds.length).toBe(0);
+  });
+
+  it('census citizens spawn from homes and set off on their daily round', () => {
+    const map = new GameMap(24, 8);
+    map.built[map.idx(2, 4)] = BuiltKind.HouseSingle; // a home
+    map.built[map.idx(8, 4)] = BuiltKind.Industrial; // a workplace in range
+    const state = createAmbientState();
+    setHouseholds(state, [{ x: 2, y: 4, count: 3 }]); // published from the residential census
+    const rng = ambientFork('census');
+    for (let i = 0; i < 30; i++) stepAmbient(state, map, rng, 50);
+    const citizens = state.peds.filter((p) => p.itinerary !== undefined);
+    expect(citizens.length).toBeGreaterThan(0); // the census produced walking citizens
+    expect(citizens.every((p) => p.homeTile === map.idx(2, 4))).toBe(true); // tagged with their home
+    expect(citizens.some((p) => p.phase === 'to-building' && p.building)).toBe(true); // off toward a stop
+  });
+
+  it('does not spawn census citizens when no household is published', () => {
+    const map = new GameMap(24, 8);
+    map.built[map.idx(2, 4)] = BuiltKind.HouseSingle;
+    map.built[map.idx(8, 4)] = BuiltKind.Industrial;
+    const state = createAmbientState(); // no setHouseholds
+    const rng = ambientFork('nocensus');
+    for (let i = 0; i < 30; i++) stepAmbient(state, map, rng, 50);
+    expect(state.peds.every((p) => p.itinerary === undefined)).toBe(true); // only ambient wanderers, no citizens
   });
 });

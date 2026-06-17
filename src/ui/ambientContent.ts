@@ -22,7 +22,8 @@ import type { GameMap } from '../engine/map';
 import { BuiltKind, isRoadKind } from '../engine/fabric';
 import { ZoneType, zoneTypeOf } from '../engine/zone';
 import { visitValue } from '../citizens/plots';
-import { stopCategoryOf, type StopCategory } from '../citizens/itinerary';
+import { stopCategoryOf, DAILY_ITINERARY, type StopCategory } from '../citizens/itinerary';
+import type { Household } from '../citizens/census';
 import type { Rng } from '../engine/rng';
 
 /** Maximum elapsed time honoured in a single stepAmbient call, mirroring
@@ -81,6 +82,12 @@ const WALK_RANGE = 10;
  *  third place). Larger than a last-mile radius — a citizen ranges across its district — but the
  *  FUEL economy is what really bounds reach: a stop too far to walk burns the citizen out. */
 const CITIZEN_TRIP_RADIUS = 24;
+
+/** Target number of itinerary citizens to keep out living their daily round at once. Below the
+ *  ped cap, so there's still room for ambient wanderers, last-mile walkers, and respawned citizens.
+ *  CITIZEN_SPAWN_PER_SUBSTEP tops the population up gently rather than all at once. */
+const CITIZEN_POP_TARGET = 120;
+const CITIZEN_SPAWN_PER_SUBSTEP = 2;
 
 /** Wellbeing a walking citizen loses per substep spent trudging along a road/stroad — a long
  *  road walk brings home less (the unpleasant commute). Promenades/quiet streets/green cost
@@ -344,6 +351,10 @@ export interface AmbientState {
   waterPollution: Map<number, number>;
   /** Substep counter gating the (whole-map) water-runoff pass to WATER_RUNOFF_CADENCE. */
   waterTick: number;
+  /** The residential homes citizens are spawned from (the census), published by the host via
+   *  setHouseholds. Each spawn picks a home weighted by its citizen count (denser → more people
+   *  out), so the daily-itinerary population reflects the built city. Renderer-side, never hashed. */
+  households?: ReadonlyArray<Household>;
 }
 
 export function createAmbientState(): AmbientState {
@@ -363,6 +374,12 @@ export function createAmbientState(): AmbientState {
  *  the map's ParkingLot components (centre + stall grid) so parked cars land on the stalls. */
 export function setParkingLots(state: AmbientState, lots: ReadonlyArray<ParkingLotInfo>): void {
   state.parkingLots = lots;
+}
+
+/** Publish the residential homes citizens spawn from (the host computes these from the parcel
+ *  store via residentialCensus). Mirrors setParkingLots — structural, never part of the world. */
+export function setHouseholds(state: AmbientState, households: ReadonlyArray<Household>): void {
+  state.households = households;
 }
 
 // --- Pure decision helpers (unit-test seams) -----------------------------
@@ -1020,6 +1037,56 @@ function spawnPeds(state: AmbientState, map: GameMap, rng: Rng): void {
   }
 }
 
+/** Top the daily-itinerary population up from the residential census: pick a home (weighted by its
+ *  citizen count, so denser buildings send out more people), stand a citizen just outside it, and
+ *  send it off toward the first reachable stop of its round (work → shop → lifestyle). A citizen
+ *  whose district has none of those stops makes no trip (dropped). Census citizens are PRIMARY —
+ *  spawned before the ambient wanderers so they fill most of the ped pool. */
+function spawnCitizens(state: AmbientState, map: GameMap, rng: Rng): void {
+  const homes = state.households;
+  if (!homes || homes.length === 0) return;
+  let total = 0;
+  for (const h of homes) total += h.count;
+  if (total <= 0) return;
+  for (let s = 0; s < CITIZEN_SPAWN_PER_SUBSTEP; s++) {
+    if (state.peds.length >= CITIZEN_POP_TARGET) return;
+    // Density-weighted pick: a home of count c is c× as likely to send someone out.
+    let r = rng.nextInt(total);
+    let home = homes[0]!;
+    for (const cand of homes) {
+      r -= cand.count;
+      if (r < 0) {
+        home = cand;
+        break;
+      }
+    }
+    // Stand the citizen on a walkable tile beside its home plot (the plot itself isn't walkable).
+    let sx = -1;
+    let sy = -1;
+    for (let d = 0; d < 4; d++) {
+      const nx = home.x + DIR_DX[d]!;
+      const ny = home.y + DIR_DY[d]!;
+      if (isWalkable(map, nx, ny)) {
+        sx = nx;
+        sy = ny;
+        break;
+      }
+    }
+    if (sx < 0) continue; // a hemmed-in home, nowhere to step out
+    const ped: Ped = {
+      x: sx,
+      y: sy,
+      dir: 0,
+      tx: sx,
+      ty: sy,
+      homeTile: map.idx(home.x, home.y),
+      itinerary: DAILY_ITINERARY,
+      itinStep: -1, // advanceItinerary sets the first stop (step 0 = Work)
+    };
+    if (advanceItinerary(ped, map)) state.peds.push(ped); // dropped if the district has no stops
+  }
+}
+
 /** The nearest lot stall free to park in: the closest lot whose centre is within PARK_RADIUS
  *  of the car, then its first stall not already taken by another parked car. Null if no lot
  *  is near or the nearest one is full (→ the caller falls back to a street curb). */
@@ -1275,9 +1342,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   }
   state.birds = state.birds.filter((f) => f.birds.length > 0);
 
-  // 2. Spawn peds/flocks map-wide up to the caps. Cars are NOT spawned here — they are
+  // 2. Spawn the daily-itinerary CITIZENS (the primary walkers — from the residential census),
+  //    then top up with ambient wanderers and bird flocks. Cars are NOT spawned here — they are
   //    the sim's O-D trips, ingested via ingestTrips on the traffic cadence (cars=trips).
   //    Last-mile walkers spawn on a car PARKING (see tryPark → spawnParkPed), not here.
+  spawnCitizens(state, map, rng);
   spawnPeds(state, map, rng);
   spawnFlocks(state, map, rng);
 
