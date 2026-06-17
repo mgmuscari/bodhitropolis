@@ -22,6 +22,7 @@ import type { GameMap } from '../engine/map';
 import { BuiltKind, isRoadKind } from '../engine/fabric';
 import { ZoneType, zoneTypeOf } from '../engine/zone';
 import { visitValue } from '../citizens/plots';
+import { stopCategoryOf, type StopCategory } from '../citizens/itinerary';
 import type { Rng } from '../engine/rng';
 
 /** Maximum elapsed time honoured in a single stepAmbient call, mirroring
@@ -75,6 +76,11 @@ const HEALTH_DECAY = 0.02;
  *  is walked (a pedestrian routes the whole way); longer trips drive. So as destinations come
  *  closer / streets calm, citizens shift out of cars — the heart of the congestion→bloom loop. */
 const WALK_RANGE = 10;
+
+/** How far a citizen on a daily round will look for the next stop's plot (a workplace, shop, or
+ *  third place). Larger than a last-mile radius — a citizen ranges across its district — but the
+ *  FUEL economy is what really bounds reach: a stop too far to walk burns the citizen out. */
+const CITIZEN_TRIP_RADIUS = 24;
 
 /** Wellbeing a walking citizen loses per substep spent trudging along a road/stroad — a long
  *  road walk brings home less (the unpleasant commute). Promenades/quiet streets/green cost
@@ -273,6 +279,12 @@ export interface Mover {
   /** Substeps a walking citizen has spent on a heavily-WORN (degraded) desire path this trip —
    *  also taxes the home deposit: a beaten path is convenient underfoot but bleak. */
   wornSteps?: number;
+  /** A citizen's daily round: the ordered stop CATEGORIES it visits (work, shop, lifestyle) before
+   *  heading home. Undefined ⇒ a single-stop walk (a sim trip). `itinStep` is the index of the stop
+   *  it is currently travelling to / visiting; on each `inside` it advances to the next reachable
+   *  stop, banking that visit's wellbeing at home, and heads home once the round is done. */
+  itinerary?: readonly StopCategory[];
+  itinStep?: number;
   /** A walking citizen's remaining FUEL (substeps) for the current leg. Lazily budgeted from the
    *  leg's start→target distance and re-budgeted (cleared) at each phase change. When it hits zero
    *  the citizen gives up — turns back home, or dies if the way home is blocked too. Guards against
@@ -804,6 +816,56 @@ function nearestDemandTile(map: GameMap, cx: number, cy: number): { x: number; y
   return bx < 0 ? null : { x: bx, y: by };
 }
 
+/** The nearest plot serving stop `category` (work/shop/lifestyle via stopCategoryOf) within
+ *  CITIZEN_TRIP_RADIUS of (cx, cy), by Manhattan distance; null if the district has none. */
+function nearestOfCategory(
+  map: GameMap,
+  cx: number,
+  cy: number,
+  category: StopCategory,
+): { x: number; y: number } | null {
+  let bx = -1;
+  let by = -1;
+  let bestD = 1e9;
+  for (let y = cy - CITIZEN_TRIP_RADIUS; y <= cy + CITIZEN_TRIP_RADIUS; y++) {
+    for (let x = cx - CITIZEN_TRIP_RADIUS; x <= cx + CITIZEN_TRIP_RADIUS; x++) {
+      if (!map.inBounds(x, y)) continue;
+      if (stopCategoryOf(map.built[map.idx(x, y)]!) !== category) continue;
+      const d = Math.abs(x - cx) + Math.abs(y - cy);
+      if (d < bestD) {
+        bestD = d;
+        bx = x;
+        by = y;
+      }
+    }
+  }
+  return bx < 0 ? null : { x: bx, y: by };
+}
+
+/** Advance a citizen to the NEXT reachable stop on its daily round: from its current position,
+ *  aim it at the nearest plot of the next itinerary category (skipping categories the district
+ *  lacks). Sets it walking ('to-building') toward that plot and resets the leg's walk tolls.
+ *  Returns false when no stops remain — the caller then sends it home. */
+function advanceItinerary(p: Ped, map: GameMap): boolean {
+  const itin = p.itinerary!;
+  const cx = Math.round(p.x);
+  const cy = Math.round(p.y);
+  for (let step = (p.itinStep ?? 0) + 1; step < itin.length; step++) {
+    const plot = nearestOfCategory(map, cx, cy, itin[step]!);
+    if (plot) {
+      p.itinStep = step;
+      p.phase = 'to-building';
+      p.walkTo = { x: plot.x, y: plot.y };
+      p.building = { x: plot.x, y: plot.y };
+      p.roadSteps = undefined; // a fresh leg — its tolls accrue anew
+      p.wornSteps = undefined;
+      return true;
+    }
+  }
+  p.itinStep = itin.length; // round exhausted
+  return false;
+}
+
 /** Advance one flock by one boids substep (cohesion + alignment + separation). */
 function advanceFlock(f: Flock): void {
   const n = f.birds.length;
@@ -1175,6 +1237,8 @@ function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
   p.recent = undefined;
   p.roadSteps = undefined;
   p.wornSteps = undefined;
+  p.itinerary = undefined; // a lost citizen's round ends; it rejoins the neighbourhood at home
+  p.itinStep = undefined;
   return true;
 }
 
@@ -1251,12 +1315,16 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         if (!car) return false; // its car already left → the ped vanishes too
         p.phase = 'to-car';
         p.walkTo = { x: car.x, y: car.y };
+      } else if (p.itinerary !== undefined && advanceItinerary(p, map)) {
+        // A citizen on a daily round moved on to its next stop (work → shop → lifestyle).
       } else {
-        // A WALK citizen heads back to its own home, carrying the visit's wellbeing.
+        // A single-stop walk citizen, or a round that's complete — head home. (Itinerary stops bank
+        // their wellbeing on arrival, so the home leg of a round carries nothing extra.)
         const hx = p.homeTile! % map.width;
         const hy = (p.homeTile! - hx) / map.width;
         p.phase = 'to-home';
         p.walkTo = { x: hx, y: hy };
+        if (p.itinerary !== undefined) p.building = undefined;
       }
       p.tx = Math.round(p.x); // recommit the Manhattan route from here toward the destination
       p.ty = Math.round(p.y);
@@ -1304,9 +1372,19 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       if (p.phase === 'to-building') {
         p.phase = 'inside';
         p.dwellInside = INSIDE_DWELL_MIN + rng.nextInt(INSIDE_DWELL_SPAN);
-        // A successful visit refuels the citizen by the plot's status/use (a good plot restores more).
         if (p.building) {
-          p.fuel = Math.min(FUEL_TANK, (p.fuel ?? 0) + refuelFor(map.built[map.idx(p.building.x, p.building.y)]!));
+          const kind = map.built[map.idx(p.building.x, p.building.y)]!;
+          // A successful visit refuels the citizen by the plot's status/use (a good plot restores more).
+          p.fuel = Math.min(FUEL_TANK, (p.fuel ?? 0) + refuelFor(kind));
+          // A citizen on a daily round BANKS each stop's wellbeing at home as it visits (less the
+          // leg's walk tolls), so its home health tracks where its people actually go. A single-stop
+          // walk citizen instead deposits once on getting home (below).
+          if (p.itinerary !== undefined && p.homeTile !== undefined) {
+            const penalty = Math.floor(
+              (p.roadSteps ?? 0) * ROAD_WALK_PENALTY + (p.wornSteps ?? 0) * WORN_WALK_PENALTY,
+            );
+            depositVisit(state, p.homeTile, p.building, map, penalty);
+          }
         }
         return true;
       }
