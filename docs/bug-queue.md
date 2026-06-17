@@ -5,6 +5,30 @@ Maddy reports bugs as she playtests; Claude **records them here** (need not fix 
 
 Status: 🔴 open · 🟡 in progress · ✅ fixed (note the PR)
 
+## PLAYTEST ROADMAP (Maddy, 2026-06-17) — sequenced
+
+The decline spiral "feels fairly accurate" (Detroit) — KEEP it; the game is decline ↔ **revival**.
+Revival = make a pocket worth living in (greens + calm → land value → occupancy → spreads). Build order:
+
+1. 🟡 **Bigger generated city / fill the map** — first increment SHIPPED (PR pending): ~2× the city
+   (alive parcels ~150→335) by scaling the GROWTH eras (era2 rings 2→6 + era2Parcels 90→200, era4
+   spurs 10→24 + houses 55→140), leaving era1 founding/site UNCHANGED (its params drive site scoring →
+   moving them clips the grid; learned the hard way). Core density left original so era4 offices keep
+   their room. Still ~half the map is green — can push rings/spurs further. Stretch (not done):
+   **satellite grids / density pockets connected by freeways**.
+2. 🔴 **Legibility quick-wins** (cheap, high value — she's flying blind): plot LETTERS SNES-style
+   (R1/R2/R3, C, I, civic glyphs) on each parcel; inspect tool NAMES the thing + gives real info
+   (currently just an id number); fix the TOOLBAR — fixed bottom location blocks the lower map after
+   techs unlock → categorize behind MENU TILES (transit / residential / civic / …) + make it not
+   occlude the map.
+3. 🔴 **Revival payoff (deterministic-growth seam)** — zero-occupancy homes decay to RUINS; sustained
+   healing rebuilds/densifies them. Sample the live occupancy signal into the hashed stock. (Subsumes
+   the old "building decay → ruins" item. May loosen the #51 occupancy floor so blocks can truly die.)
+4. 🔴 **DESIGN (paradigm, not a quick fix): classic construction tools** — Maddy wants "original"
+   tools: R/C/I zoning, plain streets, **power plants + a real power grid**. TODAY power is NOT
+   simulated (EnergyNode is just a placeable building, no grid); the model is tech-tree placement, not
+   zoning. Bringing back zoning + utilities is a paradigm decision — discuss scope before building.
+
 ## ACTIVE DIRECTION
 
 **Agent-driven simulation.** Mutate from SimCity's 1989 aggregate/cellular-automata layers into an
