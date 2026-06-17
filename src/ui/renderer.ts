@@ -747,14 +747,14 @@ export class Renderer {
     ctx.globalAlpha = 1;
 
     // Land value: a diverging tint on each inhabited plot — warm gold where it's prized, cold slate
-    // where it's blighted (mid reads through clean). On zone tiles, so it rarely overlaps the wear
+    // where it's decayed (mid reads through clean). On zone tiles, so it rarely overlaps the wear
     // (wild ground) or smog (roads) overlays. The desirability the other layers add up to.
     for (const [tile, lv] of ambient.landValue) {
       const lx = tile % mapW;
       const ly = (tile - lx) / mapW;
       const { sx, sy } = camera.worldToScreen(lx, ly);
       if (sx < -ts || sx > w + ts || sy < -ts || sy > h + ts) continue;
-      const f = (lv - 128) / 128; // -1 (blighted) .. +1 (prized)
+      const f = (lv - 128) / 128; // -1 (decayed) .. +1 (prized)
       ctx.globalAlpha = 0.4 * Math.min(1, Math.abs(f));
       ctx.fillStyle = f >= 0 ? '#e8c060' : '#39404e';
       ctx.fillRect(Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));

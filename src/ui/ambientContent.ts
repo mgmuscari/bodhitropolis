@@ -122,7 +122,7 @@ const PED_POLL_WEIGHT = 2.5; // a fully-smoggy tile costs about as much as a str
 
 /** Live DERIVED land value (0..LV_MAX), keyed by inhabited PLOT tile (zoneTypeOf !== None): a tile's
  *  desirability, recomputed on a slow cadence from the healed land + amenity neighbours MINUS the
- *  live nuisances (pollution, traffic, blight). Unlike traffic/pollution it isn't laid by agents —
+ *  live nuisances (pollution, traffic, decay). Unlike traffic/pollution it isn't laid by agents —
  *  it's a readout over the other layers, so it follows the water-runoff cadence pattern, not layField.
  *  Steers where citizens go and (next) how households grow. Live layer, never hashed. */
 const LV_MAX = 255;
@@ -133,7 +133,7 @@ const LV_AMENITY = 25; // + per nearby amenity, weighted by a linear falloff ove
 const LV_RADIUS = 4; // how far amenities lift / nuisances drag a plot (Manhattan)
 const LV_POLL_PEN = 70; // − the worst nearby smog (distance-weighted), the dominant nuisance
 const LV_TRAFFIC_PEN = 50; // − the worst nearby congestion (noise / danger of a jammed road)
-const LV_WEAR_PEN = 30; // − the worst nearby trampled, littered ground (blight)
+const LV_WEAR_PEN = 30; // − the worst nearby trampled, littered ground (decay)
 const LV_CADENCE = 20; // recompute every N substeps (~1s) — a slow, whole-map readout
 const LV_PULL = 10; // tiles of extra distance a max-value destination can justify over a drab one
 
@@ -161,17 +161,17 @@ const CITIZEN_SPAWN_PER_SUBSTEP = 2;
 /** AGENT-EMERGENT POPULATION (live, never hashed). Each residential home carries a live OCCUPANCY —
  *  how many people actually live there now — seeded from the deterministic census baseline, then
  *  drifting on a slow cadence: toward its building's capacity where the land is prized/clean/healthy,
- *  toward empty where it's blighted/smoggy. The seeded worldgen fixes the building STOCK (hashed);
+ *  toward empty where it's decayed/smoggy. The seeded worldgen fixes the building STOCK (hashed);
  *  only how many inhabit it is live. Total occupancy drives the spawn target + home weighting, closing
  *  the loop: more people → more trips → more traffic/pollution → lower land value → decline; healing
  *  reverses it. (Buildings actually appearing/disappearing is the deferred deterministic-growth seam.) */
 const OCC_CADENCE = 20; // re-evaluate occupancy every ~1s (a slow demographic drift)
 const OCC_RATE = 0.25; // people/cadence occupancy moves toward the ceiling / floor at a full signal (gentle)
 // LAND VALUE is the ANCHOR of occupancy (it self-corrects: fewer people → less traffic → higher value).
-// Neutral sits at the blighted car-city's live equilibrium so the start is metastable, not free-falling.
+// Neutral sits at the decayed car-city's live equilibrium so the start is metastable, not free-falling.
 const OCC_LV_NEUTRAL = 60;
 const OCC_POLL_W = 0.5; // how strongly local smog pushes residents out
-// Building health is a MINOR nudge, not the driver: in the blighted start most homes carry negative
+// Building health is a MINOR nudge, not the driver: in the decayed start most homes carry negative
 // health (unpleasant trips), so an unbounded health term death-spirals the city to empty. Cap it small.
 const OCC_HEALTH_SCALE = 120; // building-health magnitude mapped before the cap (HEALTH_MAX)
 const OCC_HEALTH_CAP = 0.15; // max ± the health term can contribute to the signal (a nudge, not a collapse)
@@ -474,14 +474,14 @@ export interface AmbientState {
    *  and it drags land value down. Renderer-side, never hashed — the smog emerges from the vehicles. */
   pollution: Map<number, number>;
   /** Live DERIVED land value (0..LV_MAX), keyed by inhabited plot tile: desirability recomputed on a
-   *  slow cadence from greenery + amenity neighbours minus pollution/traffic/blight. Steers citizen
+   *  slow cadence from greenery + amenity neighbours minus pollution/traffic/decay. Steers citizen
    *  destinations (and, next, household growth). Renderer-side, never hashed. */
   landValue: Map<number, number>;
   /** Substep counter gating the (whole-map) land-value recompute to LV_CADENCE. */
   lvTick: number;
   /** Live AGENT-EMERGENT population, keyed by residential home tile: how many people actually live
    *  there now. Seeded from the census baseline, drifts toward capacity (prized/clean/healthy) or
-   *  empty (blighted/smoggy) on a cadence. Drives the spawn target + home weighting. Never hashed. */
+   *  empty (decayed/smoggy) on a cadence. Drives the spawn target + home weighting. Never hashed. */
   occupancy: Map<number, number>;
   /** Substep counter gating the occupancy re-evaluation to OCC_CADENCE. */
   occTick: number;
@@ -1168,7 +1168,7 @@ function infraNear(map: GameMap, cx: number, cy: number, mode: TravelMode): bool
  *  is far AND no transit/bike/ped infrastructure serves it. WALK if close; else the best available
  *  active/transit mode whose network serves BOTH ends — rail, then streetcar, then a BIKE for a
  *  medium leg with calm/bike infra at both ends — and DRIVE as the fallback when only car infra
- *  exists. So the car-dependent blighted start (stroads) shifts to bikes/transit as the player
+ *  exists. So the car-dependent decayed start (stroads) shifts to bikes/transit as the player
  *  builds them: the congestion → mode-shift → bloom loop. Walks if nothing else fits. */
 export function chooseMode(map: GameMap, ox: number, oy: number, dx: number, dy: number): TravelMode {
   const d = Math.abs(ox - dx) + Math.abs(oy - dy);
@@ -1801,7 +1801,7 @@ function layPollution(state: AmbientState, map: GameMap, x: number, y: number, o
 
 /** A plot tile's DERIVED land value (0..LV_MAX, pure decision seam): the healed land it sits on +
  *  a bonus per adjacent amenity green, MINUS the live nuisances under/over it (air pollution, traffic
- *  congestion, trampled-ground blight). The live fields are optional so the contract is unit-testable
+ *  congestion, trampled-ground decay). The live fields are optional so the contract is unit-testable
  *  in isolation; absent ⇒ no nuisance. This is the readout the city's desirability emerges from. */
 export function landValueAt(
   map: GameMap,
@@ -2253,7 +2253,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   if (state.lvTick % LV_CADENCE === 0) recomputeLandValue(state, map);
 
   // 8. Population: on a slow cadence, drift each home's occupancy toward its capacity (prized/clean/
-  //    healthy) or empty (blighted/smoggy). Runs AFTER land value so it reads the fresh field. The
+  //    healthy) or empty (decayed/smoggy). Runs AFTER land value so it reads the fresh field. The
   //    spawn target + home weighting follow this — closing the agent-emergent population loop.
   state.occTick += 1;
   if (state.occTick % OCC_CADENCE === 0) stepOccupancy(state, map);
@@ -2304,11 +2304,11 @@ function urbanNeighbours(map: GameMap, x: number, y: number): number {
   return n;
 }
 
-/** Seed the live blight a century of car-culture left BEFORE the player arrives, so the city
+/** Seed the live decay a century of car-culture left BEFORE the player arrives, so the city
  *  starts degraded rather than pristine: empty urban ground is already trampled brown (wear,
  *  by how hemmed-in it is) and the shorelines are already polluted (runoff). Derived from the
  *  worldgen world; the live layers evolve from here as the player heals or neglects the city. */
-export function seedBlight(state: AmbientState, map: GameMap): void {
+export function seedDecay(state: AmbientState, map: GameMap): void {
   const PLOT_SEED_RADIUS = 5; // how far a home "feels" the plots around it
   for (let y = 0; y < map.height; y++) {
     for (let x = 0; x < map.width; x++) {
