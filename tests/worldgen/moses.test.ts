@@ -717,6 +717,32 @@ describe('era3Highways', () => {
   }
 });
 
+describe('era3Highways — routed through redlined districts', () => {
+  it('highways run through worse-graded ground than the surviving city', () => {
+    // The Moses signature, named: the corridor scorer prefers redlined-dense
+    // corridors, so the carved expressway sits on worse-graded ground than the
+    // parcels that survive beside it. Aggregate across seeds for robustness.
+    let hwSum = 0;
+    let hwN = 0;
+    let parcelSum = 0;
+    let parcelN = 0;
+    for (const seed of SEEDS) {
+      const { world } = runEras(seed, 3);
+      const { map } = world;
+      for (let i = 0; i < map.built.length; i++) {
+        if (map.built[i] === BuiltKind.RoadHighway) {
+          hwSum += map.redline[i]!;
+          hwN++;
+        } else if (map.parcel[i] !== 0) {
+          parcelSum += map.redline[i]!;
+          parcelN++;
+        }
+      }
+    }
+    expect(hwSum / hwN).toBeGreaterThan(parcelSum / parcelN);
+  });
+});
+
 const RESIDENTIAL_KINDS: number[] = [BuiltKind.HouseSingle, BuiltKind.Apartments, BuiltKind.Projects];
 
 // Nearest road tile to (cx, cy) — mirrors era4's network-distance source.

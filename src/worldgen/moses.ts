@@ -63,6 +63,7 @@ export interface MosesParams {
   era2Parcels: number; // extra houses/strips filling new frontage
   // Era 3 highways & urban renewal
   era3DensityRadius: number; // boxDensity radius for corridor scoring
+  era3GradeWeight: number; // how strongly corridor scoring prefers redlined fabric
   era3MinDemolish: number; // a corridor must cut through at least this many parcels
   corridorTopK: number; // rng jitter among the top-K scored corridors
   era3Projects: number; // tower-in-the-park Projects placed along the corridor
@@ -121,6 +122,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   //                    (fillFrontage walks tiles row-major + stops at the budget, so a budget below
   //                    the frontage always leaves the BOTTOM rows empty — pack the whole grid instead)
   era3DensityRadius: 3,
+  era3GradeWeight: 8,
   era3MinDemolish: 5,
   corridorTopK: 3,
   era3Projects: 5,
@@ -935,6 +937,7 @@ interface Corridor {
   lo: number; // land-run start along the axis
   hi: number; // land-run end along the axis
   sum: number; // boxDensity sum over the bbox-intersected run (corridor score)
+  gradeMean: number; // mean redline grade over the bbox-intersected run (0..255)
   parcels: number; // distinct parcels whose footprint touches the line
 }
 
@@ -1037,8 +1040,13 @@ export function era3Highways(world: WorldState, rng: Rng, p: MosesParams, state:
     const ix1 = Math.min(hi, pbx1);
     if (ix0 > ix1) continue;
     let sum = 0;
-    for (let x = ix0; x <= ix1; x++) sum += density[map.idx(x, y)]!;
-    const c: Corridor = { axis: 'row', index: y, lo, hi, sum, parcels: 0 };
+    let gradeSum = 0;
+    for (let x = ix0; x <= ix1; x++) {
+      sum += density[map.idx(x, y)]!;
+      gradeSum += map.redline[map.idx(x, y)]!;
+    }
+    const gradeMean = gradeSum / (ix1 - ix0 + 1);
+    const c: Corridor = { axis: 'row', index: y, lo, hi, sum, gradeMean, parcels: 0 };
     c.parcels = corridorParcels(map, c);
     cands.push(c);
   }
@@ -1049,16 +1057,26 @@ export function era3Highways(world: WorldState, rng: Rng, p: MosesParams, state:
     const iy1 = Math.min(hi, pby1);
     if (iy0 > iy1) continue;
     let sum = 0;
-    for (let y = iy0; y <= iy1; y++) sum += density[map.idx(x, y)]!;
-    const c: Corridor = { axis: 'col', index: x, lo, hi, sum, parcels: 0 };
+    let gradeSum = 0;
+    for (let y = iy0; y <= iy1; y++) {
+      sum += density[map.idx(x, y)]!;
+      gradeSum += map.redline[map.idx(x, y)]!;
+    }
+    const gradeMean = gradeSum / (iy1 - iy0 + 1);
+    const c: Corridor = { axis: 'col', index: x, lo, hi, sum, gradeMean, parcels: 0 };
     c.parcels = corridorParcels(map, c);
     cands.push(c);
   }
 
-  // Only corridors that cut through real fabric; densest-first.
+  // Only corridors that cut through real fabric; ranked by a GRADE-weighted density
+  // score (the Moses signature, named): a corridor through redlined fabric outscores
+  // an equally dense one through greenlined fabric, so the expressway is routed
+  // THROUGH the redlined districts. Density stays a multiplicative factor, so a
+  // sparse corridor never wins on grade alone.
+  const score = (c: Corridor): number => c.sum * (255 + p.era3GradeWeight * c.gradeMean);
   const viable = cands.filter((c) => c.parcels >= p.era3MinDemolish);
   const ranked = (viable.length > 0 ? viable : cands).sort(
-    (a, b) => b.sum - a.sum || (a.axis === b.axis ? a.index - b.index : a.axis === 'row' ? -1 : 1),
+    (a, b) => score(b) - score(a) || (a.axis === b.axis ? a.index - b.index : a.axis === 'row' ? -1 : 1),
   );
   const top = ranked.slice(0, Math.min(p.corridorTopK, ranked.length));
   const first = top[rng.fork('corridor').nextInt(top.length)]!;
