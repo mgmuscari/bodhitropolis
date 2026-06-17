@@ -16,6 +16,12 @@ import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 import { laneOffset, curbParkOffset, pedCurbOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
+import { TravelMode } from '../citizens/modes';
+
+/** Citizen sprite colour by travel mode (walk/bike/streetcar/elevated-rail/drive) — so the modal
+ *  shift the player engineers is visible: warm walkers, yellow cyclists, cyan tram + violet rail
+ *  riders, car-red drivers. Indexed by TravelMode. */
+const MODE_COLORS: readonly string[] = ['#efe6d2', '#ffd24a', '#5ad1e0', '#b48cff', '#c44e3d'];
 
 /** A previewed tile for the hover/drag overlay: world coords + validity tint. */
 export interface PreviewTile {
@@ -699,9 +705,10 @@ export class Renderer {
       }
     }
 
-    // Pedestrians: small warm dots. On a STREET a ped walks the kerb (sidewalk), pulled
-    // perpendicular off the lane; crossing open ground (a demand path) it stays centred.
-    ctx.fillStyle = '#efe6d2';
+    // Citizens on foot, coloured by TRAVEL MODE so the modal shift is legible: walkers are warm
+    // dots, cyclists yellow, tram riders cyan, rail riders violet. (Drivers are CARS — drawn above
+    // from ambient.cars — and their last-mile walk is a warm dot.) On a STREET a ped hugs the kerb
+    // (sidewalk); crossing open ground (a demand path) it stays centred.
     const pedSize = Math.max(1, ts * 0.16);
     for (const p of ambient.peds) {
       if (p.phase === 'inside') continue; // the citizen is inside the building, not on the street
@@ -714,6 +721,7 @@ export class Renderer {
       }
       const { sx, sy } = camera.worldToScreen(p.x + ox, p.y + oy);
       if (!onScreen(sx, sy)) continue;
+      ctx.fillStyle = MODE_COLORS[p.mode ?? TravelMode.Walk] ?? MODE_COLORS[TravelMode.Walk]!;
       ctx.fillRect(sx - pedSize / 2, sy - pedSize / 2, pedSize, pedSize);
     }
 

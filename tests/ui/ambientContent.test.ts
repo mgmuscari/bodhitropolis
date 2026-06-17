@@ -13,12 +13,14 @@ import { TECH_TREE } from '../../src/tech/tree';
 import { simTick, type SimDeps } from '../../src/civic/compose';
 import { parkingLots, parkingStalls } from '../../src/ui/parkingContent';
 import { StopCategory } from '../../src/citizens/itinerary';
+import { TravelMode } from '../../src/citizens/modes';
 import {
   createAmbientState,
   stepAmbient,
   ingestTrips,
   setParkingLots,
   setHouseholds,
+  chooseMode,
   curbParkOffset,
   isWearable,
   seedBlight,
@@ -1366,5 +1368,128 @@ describe('citizen daily itinerary (home → work → shop → lifestyle → home
     const rng = ambientFork('nocensus');
     for (let i = 0; i < 30; i++) stepAmbient(state, map, rng, 50);
     expect(state.peds.every((p) => p.itinerary === undefined)).toBe(true); // only ambient wanderers, no citizens
+  });
+});
+
+describe('multimodal travel (mode sets a citizen’s route + speed — Maddy /goal)', () => {
+  it('a streetcar rider covers more ground along a line than a walker', () => {
+    const make = (mode: TravelMode) => {
+      const map = new GameMap(40, 8);
+      for (let x = 0; x < 40; x++) map.built[map.idx(x, 4)] = BuiltKind.Streetcar; // a tram line
+      const state = createAmbientState();
+      state.peds.push({ x: 2, y: 4, dir: 1, tx: 2, ty: 4, walkTo: { x: 38, y: 4 }, fuel: 1e9, mode });
+      const rng = ambientFork('tram' + mode);
+      for (let i = 0; i < 60; i++) stepAmbient(state, map, rng, 50);
+      return state.peds[0]!.x;
+    };
+    expect(make(TravelMode.Streetcar)).toBeGreaterThan(make(TravelMode.Walk)); // rode the line faster
+  });
+
+  it('a driver cannot cross wild ground to an unroaded destination (a walker can)', () => {
+    const reaches = (mode: TravelMode): boolean => {
+      const map = new GameMap(16, 8);
+      map.built[map.idx(2, 4)] = BuiltKind.RoadStreet; // a 2-tile road stub at the start...
+      map.built[map.idx(3, 4)] = BuiltKind.RoadStreet;
+      map.built[map.idx(12, 4)] = BuiltKind.CommercialStrip; // ...the dest plot is out in the green
+      const state = createAmbientState();
+      state.peds.push({
+        x: 3, y: 4, dir: 1, tx: 3, ty: 4,
+        walkTo: { x: 12, y: 4 }, phase: 'to-building', building: { x: 12, y: 4 },
+        homeTile: map.idx(2, 4), mode,
+      });
+      const rng = ambientFork('cross' + mode);
+      for (let i = 0; i < 1500 && state.peds.length > 0; i++) {
+        stepAmbient(state, map, rng, 50);
+        if (state.peds[0]?.phase === 'inside') return true;
+      }
+      return false;
+    };
+    expect(reaches(TravelMode.Walk)).toBe(true); // a walker crosses the green and arrives
+    expect(reaches(TravelMode.Drive)).toBe(false); // a driver is stuck on the road stub — pavement-only
+  });
+});
+
+describe('mode choice (close → walk; car-dependent until calm/transit infra; then it shifts)', () => {
+  it('walks a short leg', () => {
+    const map = new GameMap(40, 40);
+    expect(chooseMode(map, 5, 5, 12, 5)).toBe(TravelMode.Walk); // d=7, within walking range
+  });
+
+  it('DRIVES a medium leg when only car infra (stroads) serves it — the car-dependent start', () => {
+    const map = new GameMap(40, 10);
+    for (let x = 0; x < 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet; // only roads
+    expect(chooseMode(map, 5, 5, 25, 5)).toBe(TravelMode.Drive); // d=20, no bike/transit infra → drive
+  });
+
+  it('BIKES that same medium leg once bike-friendly infra serves both ends — the shift', () => {
+    const map = new GameMap(40, 10);
+    for (let x = 0; x < 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(6, 5)] = BuiltKind.BikePath; // a calm/bike tile near the origin
+    map.built[map.idx(24, 5)] = BuiltKind.QuietStreet; // and near the destination
+    expect(chooseMode(map, 5, 5, 25, 5)).toBe(TravelMode.Bike); // d=20, now bike-friendly at both ends
+  });
+
+  it('drives a long leg when only roads connect it', () => {
+    const map = new GameMap(60, 10);
+    for (let x = 0; x < 60; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    expect(chooseMode(map, 3, 5, 50, 5)).toBe(TravelMode.Drive); // d=47 (beyond biking), roads at both ends
+  });
+
+  it('rides elevated rail when a line serves both ends — even far (transit beats driving)', () => {
+    const map = new GameMap(60, 10);
+    for (let x = 0; x < 60; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet; // roads exist too
+    map.built[map.idx(4, 5)] = BuiltKind.ElevatedRail; // a stop near the origin
+    map.built[map.idx(50, 5)] = BuiltKind.ElevatedRail; // and near the destination
+    expect(chooseMode(map, 3, 6, 50, 6)).toBe(TravelMode.ElevatedRail);
+  });
+
+  it('rides a streetcar when a line serves both ends and there is no rail', () => {
+    const map = new GameMap(60, 10);
+    map.built[map.idx(4, 5)] = BuiltKind.Streetcar;
+    map.built[map.idx(49, 5)] = BuiltKind.Streetcar;
+    expect(chooseMode(map, 3, 6, 50, 6)).toBe(TravelMode.Streetcar);
+  });
+});
+
+describe('citizen vehicle ownership (a driver parks a persistent car — Maddy: cars must not vanish)', () => {
+  it('a driving citizen parks a real car at its destination and banks the visit home', () => {
+    const map = new GameMap(50, 10);
+    for (let x = 2; x <= 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet; // a long arterial
+    map.built[map.idx(2, 4)] = BuiltKind.HouseSingle; // home, fronts the road
+    map.built[map.idx(38, 4)] = BuiltKind.Industrial; // a FAR workplace → a car commute (no bike/transit)
+    const state = createAmbientState();
+    setHouseholds(state, [{ x: 2, y: 4, count: 3 }]);
+    const rng = ambientFork('owncar');
+    let parkedNearWork = false;
+    let banked = false;
+    for (let i = 0; i < 1500; i++) {
+      stepAmbient(state, map, rng, 50);
+      // a persistent car PARKS at the plot (it does not vanish on arrival)
+      if (state.cars.some((c) => c.parked && Math.abs(Math.round(c.x) - 38) <= 3 && Math.abs(Math.round(c.y) - 5) <= 3)) {
+        parkedNearWork = true;
+      }
+      if ((state.buildingHealth.get(map.idx(2, 4)) ?? 0) !== 0) banked = true;
+      if (parkedNearWork && banked) break;
+    }
+    expect(parkedNearWork).toBe(true); // the car parked at the workplace — it didn't disappear
+    expect(banked).toBe(true);
+    expect(state.buildingHealth.get(map.idx(2, 4))!).toBeLessThan(0); // industrial visit → negative at home
+  });
+
+  it('census drivers are cars carrying an itinerary, not pedestrians rendered as cars', () => {
+    const map = new GameMap(50, 10);
+    for (let x = 2; x <= 40; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    map.built[map.idx(2, 4)] = BuiltKind.HouseSingle;
+    map.built[map.idx(38, 4)] = BuiltKind.Industrial;
+    const state = createAmbientState();
+    setHouseholds(state, [{ x: 2, y: 4, count: 3 }]);
+    const rng = ambientFork('owncar2');
+    let sawCitizenCar = false;
+    for (let i = 0; i < 400; i++) {
+      stepAmbient(state, map, rng, 50);
+      if (state.cars.some((c) => c.itinerary !== undefined)) sawCitizenCar = true;
+    }
+    expect(sawCitizenCar).toBe(true); // a driver is a Car entity with an itinerary
+    expect(state.peds.every((p) => p.mode !== TravelMode.Drive)).toBe(true); // no ped is ever "a car"
   });
 });

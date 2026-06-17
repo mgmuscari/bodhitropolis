@@ -23,6 +23,7 @@ import { BuiltKind, isRoadKind } from '../engine/fabric';
 import { ZoneType, zoneTypeOf } from '../engine/zone';
 import { visitValue } from '../citizens/plots';
 import { stopCategoryOf, DAILY_ITINERARY, type StopCategory } from '../citizens/itinerary';
+import { TravelMode, modeSpec, modeRidesNetwork, modeSpeedMult, MODE_CHOICE_ORDER } from '../citizens/modes';
 import type { Household } from '../citizens/census';
 import type { Rng } from '../engine/rng';
 
@@ -79,9 +80,17 @@ const HEALTH_DECAY = 0.02;
 const WALK_RANGE = 10;
 
 /** How far a citizen on a daily round will look for the next stop's plot (a workplace, shop, or
- *  third place). Larger than a last-mile radius — a citizen ranges across its district — but the
- *  FUEL economy is what really bounds reach: a stop too far to walk burns the citizen out. */
-const CITIZEN_TRIP_RADIUS = 24;
+ *  third place). A citizen ranges across the city for a far stop (a commute) — wider than BIKE_RANGE
+ *  so the longest legs genuinely warrant driving/transit, exercising the full mode spectrum. The
+ *  FUEL economy still bounds reach: a stop too far to reach burns the citizen out. */
+const CITIZEN_TRIP_RADIUS = 40;
+
+/** Mode choice: a leg up to BIKE_RANGE tiles can be cycled (bikes need no special infra — bike
+ *  paths just speed them); a transit/road mode is "available" only when its network is within
+ *  MODE_INFRA_RADIUS of BOTH ends of the leg. So building a tram/rail line lets the citizens whose
+ *  trips it serves ride it instead of driving — the road-diet → mode-shift → bloom loop. */
+const BIKE_RANGE = 30;
+const MODE_INFRA_RADIUS = 6;
 
 /** Target number of itinerary citizens to keep out living their daily round at once. Below the
  *  ped cap, so there's still room for ambient wanderers, last-mile walkers, and respawned citizens.
@@ -281,6 +290,13 @@ export interface Mover {
   phase?: 'to-building' | 'inside' | 'to-car' | 'to-home';
   building?: { x: number; y: number };
   dwellInside?: number;
+  /** A CITIZEN-CAR's current grid-route target (the plot it is driving to, or home). A car with an
+   *  `itinerary` is a citizen's OWNED vehicle: it drives stop→stop, parks (visibly, persistently) at
+   *  each, and its bound ped does the last-mile; on the ped's return the car advances to the next
+   *  stop. It never vanishes at a plot and never "becomes a walker" — car and rider stay distinct. */
+  driveTo?: { x: number; y: number };
+  /** A citizen-car whose round is done and is now driving home to park (then despawn). */
+  headingHome?: boolean;
   /** Substeps a walking citizen has spent on a road/stroad this trip — taxes the home deposit. */
   roadSteps?: number;
   /** Substeps a walking citizen has spent on a heavily-WORN (degraded) desire path this trip —
@@ -292,11 +308,15 @@ export interface Mover {
    *  stop, banking that visit's wellbeing at home, and heads home once the round is done. */
   itinerary?: readonly StopCategory[];
   itinStep?: number;
-  /** A walking citizen's remaining FUEL (substeps) for the current leg. Lazily budgeted from the
-   *  leg's start→target distance and re-budgeted (cleared) at each phase change. When it hits zero
-   *  the citizen gives up — turns back home, or dies if the way home is blocked too. Guards against
+  /** A walking citizen's remaining FUEL: a persistent energy tank (lazily FUEL_TANK), spent per
+   *  substep by the terrain underfoot and refilled at plots. When it hits zero the citizen gives up
+   *  — turns home on a limp reserve, or respawns at home if even that fails. Guards against
    *  oscillation toward an unreachable destination (a limit cycle the `recent` window can't catch). */
   fuel?: number;
+  /** The travel MODE for the current leg (walk/bike/streetcar/rail/drive). Undefined ⇒ Walk (the
+   *  default + back-compat). Chosen per leg by distance + nearby infra; sets which tiles the mover
+   *  can enter, which it hugs (the mode's network), and how fast it goes. */
+  mode?: TravelMode;
 }
 
 export type Car = Mover;
@@ -781,10 +801,34 @@ export function isWearable(map: GameMap, x: number, y: number): boolean {
   return map.built[i] === BuiltKind.None && map.water[i] === 0;
 }
 
-/** A routed pedestrian's next grid step (a Manhattan walk): the walkable, non-recent
- *  4-neighbour that most reduces Manhattan distance to (tgtx, tgty). Returns -1 when within
- *  one tile of the target (arrived — peds stop at a building's door, not inside it) OR when
- *  boxed in. Axis-aligned → no diagonals; obeys isWalkable → never through a plot. */
+/** Can a citizen on `mode` occupy the tile at (x,y)? A driver is PAVEMENT-ONLY (roads + parking,
+ *  no median) — it can't cross wild ground or a promenade; every other mode travels over the
+ *  pedestrian-walkable set, which already includes transit tiles (a rider boards by walking onto
+ *  the line, then rides it fast). */
+function modeCanEnter(mode: TravelMode, map: GameMap, x: number, y: number): boolean {
+  if (!map.inBounds(x, y)) return false;
+  return modeSpec(mode).pavementOnly ? carPassable(map, x, y) : isWalkable(map, x, y);
+}
+
+/** A mode's routing COST for a tile (lower = preferred): cheap ON the mode's network so the mover
+ *  hugs the bike path / tram line / rail / road; off-network it pays the pedestrian preference
+ *  cost (a driver, being pavement-only, is always on its road network). */
+function modeCost(
+  mode: TravelMode,
+  map: GameMap,
+  x: number,
+  y: number,
+  wear?: ReadonlyMap<number, number>,
+): number {
+  const k = map.built[map.idx(x, y)]!;
+  if (modeRidesNetwork(mode, k)) return modeSpec(mode).networkCost;
+  return modeSpec(mode).pavementOnly ? modeSpec(mode).networkCost : pedCost(map, x, y, wear);
+}
+
+/** A routed citizen's next grid step toward (tgtx, tgty) for travel `mode` (default Walk): the
+ *  mode-enterable, non-recent 4-neighbour that most reduces Manhattan distance, broken by the
+ *  mode's routing cost (so a rider hugs its line, a driver its roads). Returns -1 when within one
+ *  tile of the target (arrived) OR when boxed in. Axis-aligned → no diagonals. */
 function nextStepToward(
   map: GameMap,
   x: number,
@@ -793,6 +837,7 @@ function nextStepToward(
   tgty: number,
   recent?: readonly number[],
   wear?: ReadonlyMap<number, number>,
+  mode: TravelMode = TravelMode.Walk,
 ): number {
   if (Math.abs(x - tgtx) + Math.abs(y - tgty) <= 1) return -1; // at / adjacent to the target
   let best = -1;
@@ -800,10 +845,10 @@ function nextStepToward(
   for (let d = 0; d < 4; d++) {
     const nx = x + DIR_DX[d]!;
     const ny = y + DIR_DY[d]!;
-    if (!isWalkable(map, nx, ny)) continue;
+    if (!modeCanEnter(mode, map, nx, ny)) continue;
     if (recent && recent.includes(map.idx(nx, ny))) continue;
-    // Distance dominates (still reaches the target); pedCost nudges onto promenades, off stroads.
-    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + pedCost(map, nx, ny, wear);
+    // Distance dominates (still reaches the target); the mode cost hugs lines / shuns stroads.
+    const score = Math.abs(nx - tgtx) + Math.abs(ny - tgty) + modeCost(mode, map, nx, ny, wear);
     if (score < bestScore) {
       bestScore = score;
       best = d;
@@ -874,6 +919,8 @@ function advanceItinerary(p: Ped, map: GameMap): boolean {
       p.phase = 'to-building';
       p.walkTo = { x: plot.x, y: plot.y };
       p.building = { x: plot.x, y: plot.y };
+      // An active traveller picks walk/bike/transit; it owns no car, so a would-drive leg is walked.
+      p.mode = activeMode(chooseMode(map, cx, cy, plot.x, plot.y));
       p.roadSteps = undefined; // a fresh leg — its tolls accrue anew
       p.wornSteps = undefined;
       return true;
@@ -881,6 +928,151 @@ function advanceItinerary(p: Ped, map: GameMap): boolean {
   }
   p.itinStep = itin.length; // round exhausted
   return false;
+}
+
+/** Is a tile of `mode`'s network within MODE_INFRA_RADIUS of (cx, cy)? (Is this mode served here?) */
+function infraNear(map: GameMap, cx: number, cy: number, mode: TravelMode): boolean {
+  for (let y = cy - MODE_INFRA_RADIUS; y <= cy + MODE_INFRA_RADIUS; y++) {
+    for (let x = cx - MODE_INFRA_RADIUS; x <= cx + MODE_INFRA_RADIUS; x++) {
+      if (!map.inBounds(x, y)) continue;
+      if (modeRidesNetwork(mode, map.built[map.idx(x, y)]!)) return true;
+    }
+  }
+  return false;
+}
+
+/** Calm, bike-friendly infrastructure — a citizen will cycle a leg only when one of these serves
+ *  both ends (a dedicated path, or a calmed street / promenade pleasant to ride). A stroad-only
+ *  district is NOT bike-friendly, so its citizens drive until the player calms it. */
+const BIKE_FRIENDLY: ReadonlySet<number> = new Set<number>([
+  BuiltKind.BikePath,
+  BuiltKind.QuietStreet,
+  BuiltKind.Promenade,
+]);
+
+/** Is bike-friendly infrastructure within MODE_INFRA_RADIUS of (cx, cy)? */
+function bikeFriendlyNear(map: GameMap, cx: number, cy: number): boolean {
+  for (let y = cy - MODE_INFRA_RADIUS; y <= cy + MODE_INFRA_RADIUS; y++) {
+    for (let x = cx - MODE_INFRA_RADIUS; x <= cx + MODE_INFRA_RADIUS; x++) {
+      if (!map.inBounds(x, y)) continue;
+      if (BIKE_FRIENDLY.has(map.built[map.idx(x, y)]!)) return true;
+    }
+  }
+  return false;
+}
+
+/** Choose a citizen's travel MODE for a leg origin→dest, after Maddy's rule — drive only when it
+ *  is far AND no transit/bike/ped infrastructure serves it. WALK if close; else the best available
+ *  active/transit mode whose network serves BOTH ends — rail, then streetcar, then a BIKE for a
+ *  medium leg with calm/bike infra at both ends — and DRIVE as the fallback when only car infra
+ *  exists. So the car-dependent blighted start (stroads) shifts to bikes/transit as the player
+ *  builds them: the congestion → mode-shift → bloom loop. Walks if nothing else fits. */
+export function chooseMode(map: GameMap, ox: number, oy: number, dx: number, dy: number): TravelMode {
+  const d = Math.abs(ox - dx) + Math.abs(oy - dy);
+  if (d <= WALK_RANGE) return TravelMode.Walk;
+  for (const mode of MODE_CHOICE_ORDER) {
+    if (mode === TravelMode.Bike) {
+      // bikeable only on a medium leg the player has made calm/bike-friendly at both ends.
+      if (d <= BIKE_RANGE && bikeFriendlyNear(map, ox, oy) && bikeFriendlyNear(map, dx, dy)) {
+        return TravelMode.Bike;
+      }
+      continue;
+    }
+    // rail / streetcar / drive: available when their network serves BOTH ends of the leg.
+    if (infraNear(map, ox, oy, mode) && infraNear(map, dx, dy, mode)) return mode;
+  }
+  return TravelMode.Walk;
+}
+
+/** An ACTIVE traveller owns no car, so a leg that would drive is walked instead (walk/bike/transit
+ *  only). Drivers are spawned as citizen-cars up front; this keeps a ped from needing a vehicle
+ *  mid-round. */
+function activeMode(mode: TravelMode): TravelMode {
+  return mode === TravelMode.Drive ? TravelMode.Walk : mode;
+}
+
+/** Advance a CITIZEN-CAR to the next stop on its owner's round: aim it at the nearest plot of the
+ *  next itinerary category (skipping absent ones), or — when the round is done — home, to park and
+ *  linger. Called when the last-mile bound ped returns to the car. The car drives there next tick
+ *  and parks again, so the owned vehicle threads the whole day, never vanishing or turning into a
+ *  walker. */
+function advanceCarItinerary(car: Car, map: GameMap): void {
+  const cx = Math.round(car.x);
+  const cy = Math.round(car.y);
+  const itin = car.itinerary!;
+  car.parked = false;
+  car.lotIdx = undefined;
+  car.stallIdx = undefined;
+  car.curbDir = undefined;
+  car.recent = undefined;
+  for (let step = (car.itinStep ?? 0) + 1; step < itin.length; step++) {
+    const plot = nearestOfCategory(map, cx, cy, itin[step]!);
+    if (plot) {
+      car.itinStep = step;
+      car.building = { x: plot.x, y: plot.y };
+      car.driveTo = { x: plot.x, y: plot.y };
+      return;
+    }
+  }
+  // round done → drive home and park there.
+  car.itinStep = itin.length;
+  car.headingHome = true;
+  car.building = undefined;
+  if (car.homeTile !== undefined) {
+    const hx = car.homeTile % map.width;
+    const hy = (car.homeTile - hx) / map.width;
+    car.driveTo = { x: hx, y: hy };
+  } else {
+    car.driveTo = undefined; // no home → it'll park-and-linger wherever it is
+  }
+}
+
+/** Park a home-bound citizen-car at its home kerb and demote it to a plain lingering parked car
+ *  (no bound ped, no deposit) — it sits "parked at home", then leaves on its dwell timeout. */
+function parkAtHome(state: AmbientState, car: Car, map: GameMap): boolean {
+  const ax = Math.round(car.x);
+  const ay = Math.round(car.y);
+  const curb = findCurbSpot(state, map, ax, ay);
+  if (!curb) return false; // nowhere to stop → despawn
+  car.x = curb.x;
+  car.y = curb.y;
+  car.curbDir = undefined;
+  for (let d = 0; d < 4; d++) {
+    const nx = curb.x + DIR_DX[d]!;
+    const ny = curb.y + DIR_DY[d]!;
+    if (!map.inBounds(nx, ny) || !carTraversable(map.built[map.idx(nx, ny)]!)) {
+      car.curbDir = d;
+      break;
+    }
+  }
+  car.parked = true;
+  car.itinerary = undefined; // a plain parked car now — dwell out and leave
+  car.itinStep = undefined;
+  car.headingHome = undefined;
+  car.building = undefined;
+  car.dwell = PARK_MAX_WAIT;
+  return true;
+}
+
+/** The nearest car-drivable tile (a road/parking the citizen's car starts from) within a small ring
+ *  of its home, or null if the home is land-locked. */
+function nearestDriveStart(map: GameMap, hx: number, hy: number): { x: number; y: number } | null {
+  let bx = -1;
+  let by = -1;
+  let bestD = 1e9;
+  for (let y = hy - 4; y <= hy + 4; y++) {
+    for (let x = hx - 4; x <= hx + 4; x++) {
+      if (!map.inBounds(x, y)) continue;
+      if (!carTraversable(map.built[map.idx(x, y)]!)) continue;
+      const d = Math.abs(x - hx) + Math.abs(y - hy);
+      if (d < bestD) {
+        bestD = d;
+        bx = x;
+        by = y;
+      }
+    }
+  }
+  return bx < 0 ? null : { x: bx, y: by };
 }
 
 /** Advance one flock by one boids substep (cohesion + alignment + separation). */
@@ -1037,11 +1229,21 @@ function spawnPeds(state: AmbientState, map: GameMap, rng: Rng): void {
   }
 }
 
+/** How many daily-itinerary citizens are out right now — counting both active travellers (peds with
+ *  an itinerary) and DRIVERS (citizen-cars with an itinerary), so the population cap covers both. */
+function citizenCount(state: AmbientState): number {
+  let n = 0;
+  for (const p of state.peds) if (p.itinerary !== undefined) n++;
+  for (const c of state.cars) if (c.itinerary !== undefined) n++;
+  return n;
+}
+
 /** Top the daily-itinerary population up from the residential census: pick a home (weighted by its
- *  citizen count, so denser buildings send out more people), stand a citizen just outside it, and
- *  send it off toward the first reachable stop of its round (work → shop → lifestyle). A citizen
- *  whose district has none of those stops makes no trip (dropped). Census citizens are PRIMARY —
- *  spawned before the ambient wanderers so they fill most of the ped pool. */
+ *  citizen count, so denser buildings send out more people) and send a citizen on its round. The
+ *  round's PRIMARY mode is decided by the work leg — a car-dependent commute spawns a DRIVER (an
+ *  owned citizen-CAR that drives stop→stop, parks at each, and is walked to/from), otherwise an
+ *  ACTIVE traveller (a ped that walks/bikes/rides transit per leg). Census citizens are PRIMARY —
+ *  spawned before the ambient wanderers. */
 function spawnCitizens(state: AmbientState, map: GameMap, rng: Rng): void {
   const homes = state.households;
   if (!homes || homes.length === 0) return;
@@ -1049,7 +1251,7 @@ function spawnCitizens(state: AmbientState, map: GameMap, rng: Rng): void {
   for (const h of homes) total += h.count;
   if (total <= 0) return;
   for (let s = 0; s < CITIZEN_SPAWN_PER_SUBSTEP; s++) {
-    if (state.peds.length >= CITIZEN_POP_TARGET) return;
+    if (citizenCount(state) >= CITIZEN_POP_TARGET) return;
     // Density-weighted pick: a home of count c is c× as likely to send someone out.
     let r = rng.nextInt(total);
     let home = homes[0]!;
@@ -1073,13 +1275,41 @@ function spawnCitizens(state: AmbientState, map: GameMap, rng: Rng): void {
       }
     }
     if (sx < 0) continue; // a hemmed-in home, nowhere to step out
+    const homeTile = map.idx(home.x, home.y);
+
+    // Decide the round's primary mode by the work (first) leg.
+    const work = nearestOfCategory(map, sx, sy, DAILY_ITINERARY[0]!);
+    const mode = work ? chooseMode(map, sx, sy, work.x, work.y) : TravelMode.Walk;
+    if (mode === TravelMode.Drive && work) {
+      // A DRIVER: an owned car parked at home drives the round. It carries the itinerary, parks
+      // (visibly, persistently) at each stop, and its bound ped does the last mile.
+      const road = nearestDriveStart(map, home.x, home.y);
+      if (road) {
+        state.cars.push({
+          x: road.x,
+          y: road.y,
+          dir: 0,
+          tx: road.x,
+          ty: road.y,
+          itinerary: DAILY_ITINERARY,
+          itinStep: 0,
+          homeTile,
+          building: { x: work.x, y: work.y },
+          driveTo: { x: work.x, y: work.y },
+          tint: (Math.imul(homeTile ^ (s + 1), 0x9e3779b1) >>> 0) % 0x10000,
+        });
+        continue;
+      }
+      // no road near home → fall through and walk the round instead
+    }
+    // An ACTIVE traveller: a ped that walks/bikes/rides transit per leg.
     const ped: Ped = {
       x: sx,
       y: sy,
       dir: 0,
       tx: sx,
       ty: sy,
-      homeTile: map.idx(home.x, home.y),
+      homeTile,
       itinerary: DAILY_ITINERARY,
       itinStep: -1, // advanceItinerary sets the first stop (step 0 = Work)
     };
@@ -1152,7 +1382,8 @@ function findCurbSpot(
 function tryPark(state: AmbientState, c: Car, map: GameMap): boolean {
   const ax = Math.round(c.x);
   const ay = Math.round(c.y);
-  const building = nearestDemandTile(map, ax, ay);
+  // A citizen-car knows the exact plot it drove to; a sim/freight car deposits at the nearest one.
+  const building = c.building ?? nearestDemandTile(map, ax, ay);
   const lot = findLotStall(state, c);
   if (lot) {
     c.lotIdx = lot.lotIdx;
@@ -1306,6 +1537,7 @@ function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
   p.wornSteps = undefined;
   p.itinerary = undefined; // a lost citizen's round ends; it rejoins the neighbourhood at home
   p.itinStep = undefined;
+  p.mode = undefined;
   return true;
 }
 
@@ -1362,6 +1594,18 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     // A freeway moves traffic twice as fast as a surface street.
     const onFreeway = map.built[map.idx(Math.round(c.x), Math.round(c.y))] === BuiltKind.RoadHighway;
     const sp = onFreeway ? CAR_SPEED * 2 : CAR_SPEED;
+    if (c.driveTo !== undefined) {
+      // A CITIZEN-CAR grid-routes (Drive mode — roads + parking only) toward its target plot/home;
+      // on arrival (or boxed in) it parks. Heading home it parks-and-lingers; at a stop it parks +
+      // sends its bound ped on the last mile (tryPark), and advances its round when the ped returns.
+      const dt = c.driveTo;
+      const alive = advanceMover(c, sp, map, (x, y, _fromDir, recent) =>
+        nextStepToward(map, x, y, dt.x, dt.y, recent, undefined, TravelMode.Drive),
+      );
+      if (alive) return true;
+      c.driveTo = undefined;
+      return c.headingHome ? parkAtHome(state, c, map) : tryPark(state, c, map);
+    }
     if (c.path !== undefined) {
       const alive = advanceMover(c, sp, map, (x, y) => pathStep(map, c, x, y));
       return alive ? true : tryPark(state, c, map);
@@ -1393,7 +1637,10 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         const hy = (p.homeTile! - hx) / map.width;
         p.phase = 'to-home';
         p.walkTo = { x: hx, y: hy };
-        if (p.itinerary !== undefined) p.building = undefined;
+        if (p.itinerary !== undefined) {
+          p.building = undefined;
+          p.mode = activeMode(chooseMode(map, Math.round(p.x), Math.round(p.y), hx, hy)); // the trip home too
+        }
       }
       p.tx = Math.round(p.x); // recommit the Manhattan route from here toward the destination
       p.ty = Math.round(p.y);
@@ -1421,13 +1668,19 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
           p.ty = Math.round(p.y);
           p.recent = undefined;
           p.fuel = FUEL_LIMP_HOME; // a reserve to drag itself home (not a full tank)
+          p.mode = TravelMode.Walk; // exhausted → limp home on foot
           depositHealth(state, p.homeTile, -GIVE_UP_PENALTY);
           return true;
         }
         return respawnAtHome(state, p, map); // couldn't even get home → respawn there (or despawn if homeless)
       }
-      const moving = advanceMover(p, PED_SPEED, map, (x, y, _fromDir, recent) =>
-        nextStepToward(map, x, y, tgtx, tgty, recent, state.wear),
+      // The travel MODE sets the route (which tiles, which it hugs) and the speed (fast on its
+      // network — a tram on its line, a driver on roads — slower walking to/from a stop).
+      const mode = p.mode ?? TravelMode.Walk;
+      const hereKind = map.built[map.idx(Math.round(p.x), Math.round(p.y))]!;
+      const speed = PED_SPEED * modeSpeedMult(mode, hereKind);
+      const moving = advanceMover(p, speed, map, (x, y, _fromDir, recent) =>
+        nextStepToward(map, x, y, tgtx, tgty, recent, state.wear, mode),
       );
       if (moving) return true; // still walking this leg
       // advanceMover stopped: arrived (within a tile of the target) or boxed in.
@@ -1459,8 +1712,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       }
       if (p.phase === 'to-car') {
         const car = findCar(state, p.carId!);
-        if (car) car.dwell = 0; // got back in → release the car to leave (deposit was on arrival)
-        return false;
+        if (car) {
+          if (car.itinerary !== undefined) advanceCarItinerary(car, map); // drive on to the next stop / home
+          else car.dwell = 0; // a sim/freight car: got back in → release it to leave
+        }
+        return false; // the last-mile ped despawns; the car carries on (or was released)
       }
       if (p.phase === 'to-home') {
         // Walked home → deposit the visit's wellbeing, less the toll of any road-walking trudge
