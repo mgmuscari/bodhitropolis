@@ -2466,3 +2466,35 @@ describe('freeway ramps (RoadRamp — the limited-access interchange, Maddy 2026
     expect(freewayLane(m, 11, 7)).toEqual({ role: 'outer', dir: 1, outward: 2 });
   });
 });
+
+describe('canDrive level crossings (Maddy: streetcars must not block cross traffic at intersections)', () => {
+  it('a car CROSSES a streetcar line straight-through to the road beyond', () => {
+    const m = new GameMap(12, 8);
+    for (const x of [4, 5, 7, 8]) m.built[m.idx(x, 5)] = BuiltKind.RoadStreet; // road…gap…road
+    m.built[m.idx(6, 5)] = BuiltKind.Streetcar; // a tram line crossing the street
+    expect(canDrive(m, 5, 5, 6, 5)).toBe(true); // enter the tram crossing eastbound (road beyond) ✓
+    expect(canDrive(m, 6, 5, 7, 5)).toBe(true); // …and out the far side ✓
+  });
+
+  it('a car may NOT drive ALONG a tram line (no road straight beyond)', () => {
+    const m = new GameMap(12, 8);
+    m.built[m.idx(5, 5)] = BuiltKind.RoadStreet;
+    m.built[m.idx(6, 5)] = BuiltKind.Streetcar;
+    m.built[m.idx(7, 5)] = BuiltKind.Streetcar; // the tram continues — not a crossing, a line
+    expect(canDrive(m, 5, 5, 6, 5)).toBe(false); // can't enter: the tile beyond is more tram, not road
+  });
+
+  it('a cross street crosses an avenue/streetcar/avenue median (the reported case)', () => {
+    const m = new GameMap(14, 14);
+    for (let x = 0; x < 14; x++) {
+      m.built[m.idx(x, 5)] = BuiltKind.RoadAvenue; // north flanking avenue
+      m.built[m.idx(x, 6)] = BuiltKind.Streetcar; // streetcar median
+      m.built[m.idx(x, 7)] = BuiltKind.RoadAvenue; // south flanking avenue
+    }
+    for (let y = 0; y < 14; y++) if (y < 5 || y > 7) m.built[m.idx(8, y)] = BuiltKind.RoadStreet; // cross street
+    expect(canDrive(m, 8, 4, 8, 5)).toBe(true); // street → north avenue
+    expect(canDrive(m, 8, 5, 8, 6)).toBe(true); // avenue → streetcar median (level crossing)
+    expect(canDrive(m, 8, 6, 8, 7)).toBe(true); // streetcar → south avenue
+    expect(canDrive(m, 8, 7, 8, 8)).toBe(true); // south avenue → street (crossed it)
+  });
+});
