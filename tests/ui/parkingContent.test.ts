@@ -27,12 +27,14 @@ describe('parkingStalls (per-tile, tile-aligned grid)', () => {
     const stalls = parkingStalls(lot);
     const per = STALLS_PER_AXIS * STALLS_PER_AXIS;
     expect(stalls.length).toBe(4 * per); // one sub-grid per tile, capacity scales with size
+    // Valid tile-relative sub-positions: (c + 0.5) / STALLS_PER_AXIS for each axis cell.
+    const fracs = Array.from({ length: STALLS_PER_AXIS }, (_, c) => (c + 0.5) / STALLS_PER_AXIS);
+    const isFrac = (v: number): boolean => fracs.some((f) => Math.abs(v - f) < 1e-9);
     for (const s of stalls) {
-      // every stall sits at a tile-relative sub-position (0.25 / 0.75 for STALLS_PER_AXIS=2)
       const fx = s.x - Math.floor(s.x);
       const fy = s.y - Math.floor(s.y);
-      expect([0.25, 0.75]).toContain(fx);
-      expect([0.25, 0.75]).toContain(fy);
+      expect(isFrac(fx)).toBe(true);
+      expect(isFrac(fy)).toBe(true);
       expect(s.x).toBeGreaterThanOrEqual(lot.x0);
       expect(s.x).toBeLessThan(lot.x1 + 1);
       expect(s.y).toBeGreaterThanOrEqual(lot.y0);

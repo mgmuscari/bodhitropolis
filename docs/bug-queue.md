@@ -143,10 +143,9 @@ layer (non-deterministic).
   LOW in wilds. Root cause: `biodiversityField` used Simpson's index over habitat CLASSES, which
   rewards heterogeneity — mixed urban/edge patchwork scores highest, uniform wild lowest. Redesign to
   ecological RICHNESS (flora × fauna, smoothed): high where both plants + animals thrive, low in urban.
-- 🔴 **Parking display caps at 4** (Maddy 2026-06-17) — lots now fill many stalls (STALLS_PER_AXIS²
-  per tile) but only ~4 show; she wants up to 9. Likely STALLS_PER_AXIS=2 (→4/tile); bump to 3 (→9),
-  and/or check the renderer draws every parked car (it iterates ambient.cars, so the cap is the stall
-  count). Verify cars render on all stalls.
+- ✅ **Parking display caps at 4** (Maddy 2026-06-17; PR pending) — the cap was the stall count
+  (STALLS_PER_AXIS=2 → 4/tile); bumped to 3 (→ a 3×3 = 9-car grid per tile). The renderer already
+  draws every parked car, so a single-tile lot now holds + shows up to 9.
 - ✅ **Parking lots only ever held ONE car** (Maddy 2026-06-17; PR merged) — owned cars curb-parked and
   never used lot stalls; now they route to the nearest lot and claim a free stall (parkOwnedCarSomewhere
   → findLotStall), filling to capacity. (Display cap is the separate open bug above.)
