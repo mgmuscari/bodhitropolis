@@ -36,6 +36,7 @@ import {
   type OverlayKind,
 } from './ui/civicOverlayContent';
 import { redlineOverlayTint, redlineLegendLine } from './ui/redlineOverlayContent';
+import { policeLegendLine } from './ui/policeViolenceOverlayContent';
 import { pulseLine } from './ui/pulseContent';
 import { mountPulseDock } from './ui/pulseDock';
 import { isRepairTool } from './ui/repairTools';
@@ -367,7 +368,10 @@ export function main(): void {
   // (id 0) are not tinted.
   const overlayWater = world.map.water;
   const applyOverlay = (): void => {
-    if (activeOverlay === null) {
+    // Police violence is a LIVE field, drawn per-frame (not in the cached base) so it tracks
+    // arrests + decay; every other kind clears that flag and uses the base overlay source.
+    renderer.setLiveOverlay(activeOverlay?.kind === 'police' ? 'police' : null);
+    if (activeOverlay === null || activeOverlay.kind === 'police') {
       renderer.setOverlay(null);
       return;
     }
@@ -431,7 +435,9 @@ export function main(): void {
           ? legendLine(activeOverlay.view as OverlayView)
           : activeOverlay.kind === 'redline'
             ? redlineLegendLine('grade')
-            : civicLegendLine(activeOverlay.view as CivicOverlayView);
+            : activeOverlay.kind === 'police'
+              ? policeLegendLine('violence')
+              : civicLegendLine(activeOverlay.view as CivicOverlayView);
     toolbar.setStatus(legend);
     markDirty(); // the overlay tint lives in the cached base → invalidate it
     toolbar.refreshMeta(); // the active overlay changed → dock [Eco]/[Civic] state

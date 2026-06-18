@@ -2,14 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { metaButtons } from '../../src/ui/dockContent';
 
 describe('metaButtons', () => {
-  it('has fixed labels in tech/eco/civic/redline/life order', () => {
+  it('has fixed labels in tech/eco/civic/redline/police/life order', () => {
     const bs = metaButtons(false, null, false);
-    expect(bs.map((b) => b.id)).toEqual(['tech', 'eco', 'civic', 'redline', 'life']);
+    expect(bs.map((b) => b.id)).toEqual(['tech', 'eco', 'civic', 'redline', 'police', 'life']);
     expect(bs.map((b) => b.label)).toEqual([
       'Tech (T)',
       'Eco (E)',
       'Civic (C)',
       'Redline (R)',
+      'Police (P)',
       'Life (L)',
     ]);
   });
@@ -19,6 +20,13 @@ describe('metaButtons', () => {
     expect(bs.find((b) => b.id === 'redline')!.active).toBe(true);
     expect(bs.find((b) => b.id === 'eco')!.active).toBe(false);
     expect(bs.find((b) => b.id === 'civic')!.active).toBe(false);
+  });
+
+  it('marks Police active iff the police overlay is up (others not)', () => {
+    const bs = metaButtons(false, { kind: 'police' }, false);
+    expect(bs.find((b) => b.id === 'police')!.active).toBe(true);
+    expect(bs.find((b) => b.id === 'redline')!.active).toBe(false);
+    expect(bs.find((b) => b.id === 'life')!.active).toBe(false);
   });
 
   it('marks none active when the panel is closed, no overlay is up, and ambient is off', () => {

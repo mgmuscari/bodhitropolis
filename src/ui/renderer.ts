@@ -18,6 +18,7 @@ import { parcelGlyph } from './glyphContent';
 import { isPowerConsumer } from '../growth/power';
 import { laneOffset, curbParkOffset, pedCurbOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
+import { policeViolenceTint } from './policeViolenceOverlayContent';
 import { TravelMode } from '../citizens/modes';
 
 /** Citizen sprite colour by travel mode (walk/bike/streetcar/elevated-rail/drive) — so the modal
@@ -466,6 +467,9 @@ export class Renderer {
   private cssHeight = 0;
   private preview: readonly PreviewTile[] | null = null;
   private overlay: OverlaySource | null = null;
+  // A LIVE field overlay drawn per-frame in drawSprites (fresh every frame, unlike the cached-base
+  // `overlay`). 'police' tints ambient.policeViolence — the Police Violence map. null = off.
+  private liveOverlay: string | null = null;
   // Anchor tiles of POWERED consumer parcels (the live power grid). A consumer not
   // in this set draws an "unpowered" pip. null = grid unknown (no marks).
   private powered: Set<number> | null = null;
@@ -485,6 +489,12 @@ export class Renderer {
   /** Set (or clear) the ecology heatmap overlay drawn under the preview. */
   setOverlay(source: OverlaySource | null): void {
     this.overlay = source;
+  }
+
+  /** Set (or clear) the per-frame live-field overlay ('police' → the Police Violence map). Drawn
+   *  fresh each frame from the ambient field, so it tracks a continuously-changing field. */
+  setLiveOverlay(kind: string | null): void {
+    this.liveOverlay = kind;
   }
 
   /** Publish the live power grid (powered consumer anchor tiles). Unpowered consumers
@@ -803,6 +813,23 @@ export class Renderer {
         const size = c.parked ? parkedSize : carSize;
         ctx.fillRect(Math.floor(sx - size / 2), Math.floor(sy - size / 2), size, size);
       }
+    }
+
+    // Police Violence map (toggled, P): a blood-red stain on every tile where the state has done
+    // harm (arrests), drawn per-frame from the live field so it tracks arrests + decay. The inverse
+    // of a crime map — concentrated in the redlined districts the cruisers hunt.
+    if (this.liveOverlay === 'police') {
+      for (const [tile, v] of ambient.policeViolence) {
+        const vx = tile % mapW;
+        const vy = (tile - vx) / mapW;
+        const { sx, sy } = camera.worldToScreen(vx, vy);
+        if (sx < -ts || sx > w + ts || sy < -ts || sy > h + ts) continue;
+        const t = policeViolenceTint(v);
+        ctx.globalAlpha = t[3];
+        ctx.fillStyle = `rgb(${t[0]},${t[1]},${t[2]})`;
+        ctx.fillRect(Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
+      }
+      ctx.globalAlpha = 1;
     }
 
     // Police cruisers: a dark institutional body with a FLASHING red/blue light bar (alternating

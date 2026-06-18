@@ -7,7 +7,7 @@
 
 /** One dock meta button: which control it is, its label, and whether it's active. */
 export interface MetaButton {
-  id: 'tech' | 'eco' | 'civic' | 'redline' | 'life';
+  id: 'tech' | 'eco' | 'civic' | 'redline' | 'police' | 'life';
   label: string;
   active: boolean;
 }
@@ -18,6 +18,7 @@ const META_LABELS: Record<MetaButton['id'], string> = {
   eco: 'Eco (E)',
   civic: 'Civic (C)',
   redline: 'Redline (R)',
+  police: 'Police (P)',
   life: 'Life (L)',
 };
 
@@ -31,7 +32,7 @@ const META_LABELS: Record<MetaButton['id'], string> = {
  */
 export function metaButtons(
   panelOpen: boolean,
-  activeOverlay: { kind: 'eco' | 'civic' | 'redline' } | null,
+  activeOverlay: { kind: 'eco' | 'civic' | 'redline' | 'police' } | null,
   ambientOn: boolean,
 ): MetaButton[] {
   return [
@@ -39,6 +40,7 @@ export function metaButtons(
     { id: 'eco', label: META_LABELS.eco, active: activeOverlay?.kind === 'eco' },
     { id: 'civic', label: META_LABELS.civic, active: activeOverlay?.kind === 'civic' },
     { id: 'redline', label: META_LABELS.redline, active: activeOverlay?.kind === 'redline' },
+    { id: 'police', label: META_LABELS.police, active: activeOverlay?.kind === 'police' },
     { id: 'life', label: META_LABELS.life, active: ambientOn },
   ];
 }
