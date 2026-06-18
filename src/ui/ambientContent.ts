@@ -255,6 +255,7 @@ const RUNOFF_URBAN = 2; // a paved/built ground neighbour
 const RUNOFF_WILD = 0.4; // a wild/empty ground neighbour
 const RUNOFF_WORN = 2; // extra when that ground is a beaten desire path
 const RUNOFF_INDUSTRY = 4; // an industrial neighbour (the toxic source), grade-scaled up to 2x
+const WATER_FLOW_FRACTION = 0.25; // share of a tile's pollution that flows downstream per cadence
 
 /** Substeps a pedestrian spends INSIDE its destination building before walking back to the
  *  car: a base plus a seeded spread so visitors don't all return together. ~3–13s. */
@@ -2252,7 +2253,10 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   // 6. Water runoff: on a slow cadence, each coastal water tile collects pollution from the
   //    ground around it and grows heavily polluted over time (impassable, so it never wears).
   state.waterTick += 1;
-  if (state.waterTick % WATER_RUNOFF_CADENCE === 0) accumulateWaterRunoff(state, map);
+  if (state.waterTick % WATER_RUNOFF_CADENCE === 0) {
+    accumulateWaterRunoff(state, map);
+    flowWaterPollution(state, map); // carry the contamination downstream to the banks below
+  }
 
   // 7. Land value: on a slow cadence, recompute each plot's desirability from the healed land +
   //    amenities minus the live nuisances. A readout over the other layers — derived, not laid.
@@ -2299,6 +2303,40 @@ export function accumulateWaterRunoff(state: AmbientState, map: GameMap): void {
       if (runoff === 0) continue;
       layField(state.waterPollution, i, runoff, WATER_POLL_MAX);
     }
+  }
+}
+
+/**
+ * Flow water pollution DOWNSTREAM: each polluted water tile pushes WATER_FLOW_FRACTION
+ * of its load to its lower-elevation water neighbours. Processed high→low elevation so
+ * contamination cascades downhill in a single pass — so a community DOWNSTREAM of the
+ * redlined industry is poisoned even with no polluting neighbour of its own (the
+ * Hackensack: the harm is sited upstream, borne downstream). Live/non-hashed;
+ * deterministic (sorted order); integer/rational only.
+ */
+export function flowWaterPollution(state: AmbientState, map: GameMap): void {
+  if (state.waterPollution.size === 0) return;
+  const tiles = [...state.waterPollution.keys()].filter((i) => map.water[i] !== 0);
+  tiles.sort((a, b) => map.elevation[b]! - map.elevation[a]! || a - b);
+  for (const i of tiles) {
+    const p = state.waterPollution.get(i) ?? 0;
+    if (p <= 0) continue;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const e = map.elevation[i]!;
+    const lower: number[] = [];
+    for (let d = 0; d < 4; d++) {
+      const nx = x + DIR_DX[d]!;
+      const ny = y + DIR_DY[d]!;
+      if (!map.inBounds(nx, ny)) continue;
+      const ni = map.idx(nx, ny);
+      if (map.water[ni] !== 0 && map.elevation[ni]! < e) lower.push(ni);
+    }
+    if (lower.length === 0) continue;
+    const move = (p * WATER_FLOW_FRACTION) / lower.length;
+    if (move <= 0) continue;
+    for (const ni of lower) layField(state.waterPollution, ni, move, WATER_POLL_MAX);
+    state.waterPollution.set(i, p - move * lower.length);
   }
 }
 

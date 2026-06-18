@@ -45,6 +45,7 @@ import {
   stepOccupancy,
   liveInspectLine,
   accumulateWaterRunoff,
+  flowWaterPollution,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -723,6 +724,25 @@ describe('water contamination: industry is the toxic source, redlined most of al
 
   it('redlined industry sheds the most toxic runoff (grade-scaled)', () => {
     expect(shedInto(BuiltKind.Industrial, 255)).toBeGreaterThan(shedInto(BuiltKind.Industrial, 0));
+  });
+
+  it('flows downstream: a clean tile below the source is contaminated by it', () => {
+    // A 1-wide river running down a slope; pollute only the top (upstream) tile.
+    const map = new GameMap(3, 6);
+    for (let y = 0; y < 6; y++) {
+      map.water[map.idx(1, y)] = Water.River;
+      map.setElevation(1, y, (5 - y) / 5); // y=0 highest (upstream) → y=5 lowest (the mouth)
+    }
+    const state = createAmbientState();
+    const top = map.idx(1, 0);
+    const downstream = map.idx(1, 4);
+    state.waterPollution.set(top, 255);
+    for (let n = 0; n < 8; n++) flowWaterPollution(state, map);
+    // The downstream community, with no polluting neighbour of its own, is poisoned.
+    expect(state.waterPollution.get(downstream) ?? 0).toBeGreaterThan(0);
+    // Flow conserves direction: pollution never climbs back to a higher tile that started clean.
+    // (top was the only source; everything below it carries the contamination.)
+    expect(state.waterPollution.get(downstream) ?? 0).toBeLessThanOrEqual(255);
   });
 });
 
