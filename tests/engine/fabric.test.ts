@@ -10,6 +10,7 @@ import {
   placeParcel,
   canPlaceTransport,
   placeTransport,
+  placeBridge,
   checkParcelAgreement,
   transportMask,
   transportCategory,
@@ -25,6 +26,8 @@ import {
 } from '../../src/engine/fabric';
 import { GameMap, Water } from '../../src/engine/map';
 import { runPipeline } from '../../src/worldgen/pipeline';
+import { terrainStage } from '../../src/worldgen/terrain';
+import { mosesCenturyStage } from '../../src/worldgen/moses';
 
 describe('BuiltKind taxonomy', () => {
   it('reserves 0 for None and packs transport into 1..4', () => {
@@ -1036,5 +1039,58 @@ describe('checkParcelAgreement detects dead-entry references', () => {
     const violations = checkParcelAgreement(map, store);
     expect(violations.length).toBeGreaterThan(0);
     expect(violations.some((v) => /demolished/.test(v))).toBe(true);
+  });
+});
+
+describe('placeBridge (transport spans water — freeways/roads cross inlets, Maddy 2026-06-18)', () => {
+  it('decks a road/highway OVER water and keeps the water underneath (a bridge, not a causeway)', () => {
+    const m = new GameMap(8, 8);
+    m.water[m.idx(3, 3)] = Water.Ocean;
+    expect(placeBridge(m, 3, 3, BuiltKind.RoadHighway)).toBe(true);
+    expect(m.built[m.idx(3, 3)]).toBe(BuiltKind.RoadHighway); // the deck is built
+    expect(m.water[m.idx(3, 3)]).toBe(Water.Ocean); // water stays — it's a bridge
+  });
+
+  it('on land behaves exactly like placeTransport', () => {
+    const bridge = new GameMap(8, 8);
+    const plain = new GameMap(8, 8);
+    expect(placeBridge(bridge, 2, 2, BuiltKind.RoadHighway)).toBe(placeTransport(plain, 2, 2, BuiltKind.RoadHighway));
+    expect(bridge.built[bridge.idx(2, 2)]).toBe(plain.built[plain.idx(2, 2)]);
+    expect(bridge.water[bridge.idx(2, 2)]).toBe(Water.None);
+  });
+
+  it('merges road-over-road at a bridge junction (max kind)', () => {
+    const m = new GameMap(8, 8);
+    m.water[m.idx(5, 5)] = Water.Ocean;
+    m.built[m.idx(5, 5)] = BuiltKind.RoadStreet;
+    expect(placeBridge(m, 5, 5, BuiltKind.RoadHighway)).toBe(true);
+    expect(m.built[m.idx(5, 5)]).toBe(BuiltKind.RoadHighway); // max(street, highway)
+    expect(m.water[m.idx(5, 5)]).toBe(Water.Ocean);
+  });
+
+  it('refuses to deck a building tile (no bridge over a structure)', () => {
+    const m = new GameMap(8, 8);
+    m.water[m.idx(4, 4)] = Water.Ocean;
+    m.built[m.idx(4, 4)] = BuiltKind.HouseSingle;
+    expect(placeBridge(m, 4, 4, BuiltKind.RoadHighway)).toBe(false);
+    expect(m.built[m.idx(4, 4)]).toBe(BuiltKind.HouseSingle); // unchanged
+  });
+});
+
+describe('freeway corridors bridge water (Maddy 2026-06-18: freeway at 85,86 skipped for water)', () => {
+  it('a full-century world decks RoadHighway OVER water where a corridor crosses an inlet', () => {
+    // The era3 highway carve used to skip water tiles, leaving gaps in the freeway; with placeBridge
+    // it spans them. On the game's default seed the central corridor crosses a small inlet — assert
+    // at least one RoadHighway tile now sits over water (a bridge), and the water layer is preserved.
+    const world = runPipeline({ seed: 'bodhitropolis', width: 128, height: 128 }, [
+      terrainStage(),
+      mosesCenturyStage(),
+    ]);
+    const m = world.map;
+    let bridges = 0;
+    for (let i = 0; i < m.width * m.height; i++) {
+      if (m.built[i] === BuiltKind.RoadHighway && m.water[i] !== Water.None) bridges++;
+    }
+    expect(bridges).toBeGreaterThan(0);
   });
 });

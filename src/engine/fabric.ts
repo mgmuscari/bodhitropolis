@@ -411,6 +411,31 @@ export function placeTransport(map: GameMap, x: number, y: number, kind: number)
 }
 
 /**
+ * Lay a transport DECK that may span WATER — a bridge. On land it is identical to placeTransport.
+ * Over water it decks the span onto open water or merges road-over-road (keeping the water layer
+ * underneath, so the tile still reads as water to the renderer + the runoff/parking systems — a
+ * bridge, not a causeway), but never decks a building. Worldgen freeway corridors use this to cross
+ * an inlet instead of leaving a gap; transport-over-transport overpasses (elevated rail over roads,
+ * promenades over freeways) are the natural future extension of the same primitive.
+ */
+export function placeBridge(map: GameMap, x: number, y: number, kind: number): boolean {
+  if (!isTransportKind(kind)) return false;
+  if (!map.inBounds(x, y)) return false;
+  const i = map.idx(x, y);
+  if (map.water[i] === Water.None) return placeTransport(map, x, y, kind); // land: normal placement
+  const existing = map.built[i]!;
+  if (existing === 0) {
+    map.built[i] = kind; // deck over open water
+    return true;
+  }
+  if (isRoadKind(kind) && isRoadKind(existing)) {
+    map.built[i] = Math.max(existing, kind); // a bridge junction (two corridors cross over water)
+    return true;
+  }
+  return false; // a building (or rail/transit clash) under the span — don't deck it
+}
+
+/**
  * True iff the transport tile at (x, y) can be converted to `to`: the tile must
  * hold a `from` kind whose {@link TRANSPORT_CONVERSIONS} entry contains `to`.
  * Empty tiles, building tiles, and off-table (from, to) pairs all return false.
