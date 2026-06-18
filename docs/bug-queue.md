@@ -223,6 +223,13 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
 
 ### Freeway/build follow-ups (Maddy 2026-06-18)
 
+- ✅ **Avenues had the same lane-math problem as freeways** (PR pending) — committed routes (A*/
+  `roadPath`) used `canDrive`, which returned true for at-grade avenues regardless of direction, so
+  cars drove the WRONG WAY on the one-way avenue lanes (free-driving already respected one-way via
+  freewayStep; committed routes didn't). Fix: `canDrive` enforces a divided avenue's outer-lane
+  one-way (can't enter against `dir`), but UNLIKE a freeway keeps it crossable (a cross street may
+  cross perpendicular to a road beyond). Unit-tested + live-verified: 0 wrong-way avenue cars,
+  occupancy decline normal (−24%/120s, no stranding).
 - ✅ **Ramp in the middle of the freeway cross** (PR pending) — `placeCorridorRamps`' `sideRoad` check
   accepted ANY `isRoadKind` (incl. the perpendicular freeway) as a "flanking road," so a ramp landed
   at the freeway×freeway interchange. Fix: a ramp must connect to a SURFACE road (street/avenue) —
