@@ -51,8 +51,11 @@ import {
   spawnCruisers,
   stepCruisers,
   nextPatrolStep,
+  huntTarget,
+  policePhase,
   stepArrests,
   arrestChance,
+  buildSafeZones,
   parkOwnedCarSomewhere,
   pedDespawns,
   AMBIENT_MAX_FRAME_MS,
@@ -847,21 +850,55 @@ describe('police cruisers (over-policing made visible)', () => {
     return map;
   };
 
-  it('patrol seeks redlined ground at a junction (no one to chase)', () => {
+  it('patrol seeks redlined ground at a junction (no target)', () => {
     const map = crossMap();
     map.redline.fill(20);
     map.redline[map.idx(5, 4)] = 240; // the NORTH branch is the redlined one
     // Coming from the west (fromDir=West=3); options N/E/S — picks the redlined branch.
-    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('seek'), [], [])).toBe(0); // 0 = North
+    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('seek'), [], null)).toBe(0); // 0 = North
   });
 
-  it('patrol hunts a nearby citizen, overriding the grade preference', () => {
+  it('patrol heads for the target, overriding the grade preference', () => {
     const map = crossMap();
     map.redline.fill(20);
     map.redline[map.idx(5, 4)] = 240; // north is the most redlined...
-    const peds = [{ x: 9, y: 5, dir: 1, tx: 9, ty: 5, phase: 'to-building' as const }];
-    // ...but a citizen sits to the EAST — the cruiser closes on the person, not the grade.
-    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('hunt'), [], peds)).toBe(1); // 1 = East
+    // ...but the target sits to the EAST — the cruiser closes on it, not the grade.
+    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('hunt'), [], { x: 9, y: 5 })).toBe(1); // 1 = East
+  });
+
+  it('scatter/chase phase cycles (the ghost cadence)', () => {
+    expect(policePhase(0)).toBe('scatter'); // opens calm
+    expect(policePhase(300)).toBe('chase'); // then sweeps
+    expect(policePhase(0)).toBe(policePhase(540)); // periodic (SCATTER_LEN + CHASE_LEN = 540)
+  });
+
+  it('chase personalities aim differently (direct / ambush / shy)', () => {
+    const peds = [{ x: 10, y: 5, dir: 1, tx: 10, ty: 5, phase: 'to-building' as const }]; // citizen heading East (1)
+    const aim = (personality: number, cx: number) =>
+      huntTarget({ x: cx, y: 5, dir: 1, tx: cx, ty: 5, personality }, peds);
+    expect(aim(0, 4)).toEqual({ x: 10, y: 5 }); // direct (Blinky): the citizen's tile
+    expect(aim(1, 4)).toEqual({ x: 14, y: 5 }); // ambush (Pinky): 4 tiles AHEAD of its heading
+    expect(aim(2, 4)).toBeNull(); // shy (Clyde): too far → patrols
+    expect(aim(2, 8)).toEqual({ x: 10, y: 5 }); // shy: close enough → pounces
+  });
+
+  it('community safe-zones repel cruisers: refuge tiles are avoided and never swept', () => {
+    const map = crossMap();
+    map.redline.fill(255); // redlined everywhere
+    map.built[map.idx(5, 4)] = BuiltKind.HealingCommons; // community power on the NORTH branch
+    const safe = buildSafeZones(map);
+    expect(safe.has(map.idx(5, 4))).toBe(true); // the commons + its bubble is refuge
+    // At the junction with a target NORTH (into the refuge), the cruiser refuses north and takes a
+    // non-refuge branch instead (or reverses) — it will not enter the community's bubble.
+    const dir = nextPatrolStep(map, 5, 5, 3, ambientFork('safe'), [], { x: 5, y: 1 }, safe);
+    expect(dir).not.toBe(0); // 0 = North, into the refuge — refused
+    // And a cruiser standing inside a refuge makes no arrest, even redlined + with a citizen present.
+    const state = createAmbientState();
+    state.cruisers.push({ x: 5, y: 4, dir: 0, tx: 5, ty: 4, recent: [] }); // on the commons (refuge)
+    state.peds.push({ x: 5, y: 4, dir: 0, tx: 5, ty: 4, homeTile: map.idx(5, 4), phase: 'to-building' });
+    const rng = ambientFork('safe2');
+    for (let n = 0; n < 40; n++) stepArrests(state, map, rng, safe);
+    expect(state.peds.length).toBe(1); // never arrested inside the community refuge
   });
 
   it('patrols the road grid and recycles when its shift ends', () => {
