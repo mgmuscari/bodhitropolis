@@ -48,6 +48,11 @@ import {
   flowWaterPollution,
   treatWaterPollution,
   stepRoadDecay,
+  spawnCruisers,
+  stepCruisers,
+  nextPatrolStep,
+  stepArrests,
+  arrestChance,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -774,6 +779,115 @@ describe('water contamination: industry is the toxic source, redlined most of al
     // Flow conserves direction: pollution never climbs back to a higher tile that started clean.
     // (top was the only source; everything below it carries the contamination.)
     expect(state.waterPollution.get(downstream) ?? 0).toBeLessThanOrEqual(255);
+  });
+});
+
+describe('police cruisers (over-policing made visible)', () => {
+  it('spawns a cruiser out of a precinct onto an adjacent road', () => {
+    const map = new GameMap(8, 8);
+    for (const [x, y] of [[3, 3], [4, 3], [3, 4], [4, 4]] as const) map.built[map.idx(x, y)] = BuiltKind.Precinct;
+    map.built[map.idx(5, 3)] = BuiltKind.RoadStreet; // a road beside the precinct
+    map.built[map.idx(5, 4)] = BuiltKind.RoadStreet;
+    const state = createAmbientState();
+    spawnCruisers(state, map, ambientFork('cr'));
+    expect(state.cruisers.length).toBeGreaterThan(0);
+  });
+
+  it('spawns no cruisers where there is no precinct', () => {
+    const state = createAmbientState();
+    spawnCruisers(state, gridMap(), ambientFork('cr')); // roads, no precinct
+    expect(state.cruisers.length).toBe(0);
+  });
+
+  // A + junction at (5,5) on an 11x11 grid (horizontal y=5, vertical x=5).
+  const crossMap = (): GameMap => {
+    const map = new GameMap(11, 11);
+    for (let x = 0; x < 11; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    for (let y = 0; y < 11; y++) map.built[map.idx(5, y)] = BuiltKind.RoadStreet;
+    return map;
+  };
+
+  it('patrol seeks redlined ground at a junction (no one to chase)', () => {
+    const map = crossMap();
+    map.redline.fill(20);
+    map.redline[map.idx(5, 4)] = 240; // the NORTH branch is the redlined one
+    // Coming from the west (fromDir=West=3); options N/E/S — picks the redlined branch.
+    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('seek'), [], [])).toBe(0); // 0 = North
+  });
+
+  it('patrol hunts a nearby citizen, overriding the grade preference', () => {
+    const map = crossMap();
+    map.redline.fill(20);
+    map.redline[map.idx(5, 4)] = 240; // north is the most redlined...
+    const peds = [{ x: 9, y: 5, dir: 1, tx: 9, ty: 5, phase: 'to-building' as const }];
+    // ...but a citizen sits to the EAST — the cruiser closes on the person, not the grade.
+    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('hunt'), [], peds)).toBe(1); // 1 = East
+  });
+
+  it('patrols the road grid and recycles when its shift ends', () => {
+    const map = new GameMap(12, 12);
+    for (let x = 1; x < 11; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    const state = createAmbientState();
+    state.cruisers.push({ x: 5, y: 5, dir: 1, tx: 5, ty: 5, dwell: 2, recent: [] });
+    const rng = ambientFork('cr');
+    stepCruisers(state, map, rng); // dwell 2 -> 1
+    expect(state.cruisers.length).toBe(1);
+    stepCruisers(state, map, rng); // dwell 1 -> 0
+    stepCruisers(state, map, rng); // dwell 0 -> recycle (despawn)
+    expect(state.cruisers.length).toBe(0);
+  });
+});
+
+describe('arrests: cruisers drain the redlined community for nothing', () => {
+  function policedStreet(grade: number) {
+    const map = new GameMap(10, 10);
+    map.redline.fill(grade);
+    for (let x = 0; x < 10; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    const home = map.idx(5, 6);
+    map.built[home] = BuiltKind.HouseSingle;
+    const state = createAmbientState();
+    state.occupancy.set(home, 5);
+    state.cruisers.push({ x: 5, y: 5, dir: 1, tx: 5, ty: 5, recent: [] });
+    state.peds.push({ x: 5, y: 5, dir: 1, tx: 5, ty: 5, homeTile: home, phase: 'to-building' });
+    return { map, state, home };
+  }
+
+  it('a cruiser in a redlined zone seizes a citizen and drains the household', () => {
+    const { map, state, home } = policedStreet(255);
+    const rng = ambientFork('arrest');
+    for (let n = 0; n < 40 && state.peds.length > 0; n++) stepArrests(state, map, rng);
+    expect(state.peds.length).toBe(0); // taken off the street
+    expect(state.occupancy.get(home)).toBe(4); // a person removed from the household
+  });
+
+  it('arrest probability scales with the redline grade (0 at greenlined, max at redlined)', () => {
+    expect(arrestChance(0)).toBe(0); // greenlined ground: no over-policing
+    expect(arrestChance(255)).toBeGreaterThan(arrestChance(128)); // monotonic in grade
+    expect(arrestChance(128)).toBeGreaterThan(arrestChance(0));
+    expect(arrestChance(255)).toBeGreaterThan(0);
+  });
+
+  it('never sweeps grade-0 ground (the disparity floor)', () => {
+    const { map, state } = policedStreet(0); // not redlined → arrestChance 0
+    const rng = ambientFork('arrest');
+    for (let n = 0; n < 40; n++) stepArrests(state, map, rng);
+    expect(state.peds.length).toBe(1); // never arrested where there's no redlining
+  });
+
+  it('craters the household wellbeing (the trauma of an arrest)', () => {
+    const { map, state, home } = policedStreet(255);
+    const rng = ambientFork('arrest');
+    for (let n = 0; n < 40 && state.peds.length > 0; n++) stepArrests(state, map, rng);
+    expect(state.peds.length).toBe(0); // someone was taken
+    expect(state.buildingHealth.get(home) ?? 0).toBeLessThan(-40); // wellbeing devastated, not nudged
+  });
+
+  it('makes no arrests once the precinct is defunded (no cruisers)', () => {
+    const { map, state } = policedStreet(255);
+    state.cruisers = []; // defunded — the cruisers are gone
+    const rng = ambientFork('arrest');
+    for (let n = 0; n < 40; n++) stepArrests(state, map, rng);
+    expect(state.peds.length).toBe(1); // no cruiser, no arrest
   });
 });
 
