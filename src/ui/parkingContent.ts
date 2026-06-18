@@ -7,9 +7,8 @@ import { BuiltKind } from '../engine/fabric';
 
 /** Stalls per lot TILE per axis: a STALLS_PER_AXIS×STALLS_PER_AXIS grid in every tile, so
  *  cars pack cleanly and tile-aligned on lots of ANY size (capacity = this² × tile count).
- *  A whole-bbox grid only aligned to tile centres when a lot side was 1 or 3 tiles, which
- *  left 2-wide lots showing offset cars — per-tile placement fixes that. */
-export const STALLS_PER_AXIS = 2;
+ *  3 → a 3×3 = 9-car grid per tile (a single-tile lot holds + shows up to 9, not 4). */
+export const STALLS_PER_AXIS = 3;
 
 /** A connected ParkingLot component and its bounding box. */
 export interface Lot {
