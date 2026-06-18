@@ -197,11 +197,28 @@ only on non-freeway surfaces).
   cars arrive, and stalls filled row-major from a far corner. Fix: select by clamped-BBOX distance
   and take the free stall NEAREST the arrival, so blocks fill tile-by-tile from the destination side.
   Live-verified: curb-parks 29->3, a 234-stall lot 0->15 cars, lots now hold up to 31 (was ~1).
-- 🔴 **Freeway lanes alternate per-tile** (Maddy 2026-06-18) — a 3-tile-wide freeway alternates lane
-  DIRECTION tile-by-tile; it should be split DIRECTIONALLY (one carriageway each way), not alternating
-  across the 3 tiles.
-- 🔴 **Streetcars block cross traffic at intersections** (Maddy 2026-06-18) — streetcars in the middle
-  of flanking avenues prevent cars from crossing at intersections; cars should still be able to cross.
+### Divided-road / lane redesign (Maddy 2026-06-18, spec'd) — needs edge-aware passability
+
+Both are in `freewayLane` / `carPassable` / `nextRoadStep` (oscillation-prone — TDD carefully). The two
+road types want OPPOSITE crossing rules, which is the missing abstraction: limited-access freeways vs
+at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
+
+- 🔴 **Freeway lanes + limited access** (Maddy 2026-06-18, spec'd) — TARGET (Maddy): for a 3-wide
+  freeway, **south lane goes east, north lane goes west, middle goes both** (a two-way through lane,
+  NOT today's dead `median`). A **planted no-traffic median** is a future upgrade once road diets
+  unlock (reserve the `median` role for it). **Freeways are LIMITED-ACCESS: no cross traffic except
+  at freeway interchanges or at their ends.** Diagnosis: the "alternating" look is the dead median +
+  two opposing outer lanes; the cross-traffic leak is that `carPassable` is direction-AGNOSTIC (a
+  perpendicular car can step onto a freeway tile) plus ~135/584 freeway tiles classify `null` →
+  general routing. Real fix = EDGE-aware passability (entering tile B from A is allowed only if not
+  perpendicular into a freeway mid-span) + middle becomes a two-way `through` role. Outer-lane
+  directions are already correct.
+- 🔴 **Avenues block cross traffic at intersections (the "streetcar" bug)** (Maddy 2026-06-18) — a
+  streetcar/tram running in the middle of flanking avenues blocks cars from crossing the intersection
+  (the tram tile isn't `carPassable` and the one-way outer lanes shunt the cross car along the
+  avenue). UNLIKE freeways, avenues SHOULD allow cross traffic at intersections. Fix pairs with the
+  freeway redesign: at a true perpendicular intersection an avenue (and the transit tile it crosses)
+  must be crossable.
 
 ## Fixed
 
