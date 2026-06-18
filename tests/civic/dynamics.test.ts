@@ -134,6 +134,57 @@ describe('civicTick: trust', () => {
   });
 });
 
+describe('civicTick: over-policing (precinct suppresses voice & trust in redlined zones)', () => {
+  function hood(withPrecinct: boolean, grade: number) {
+    const { map, parcels } = blank(5, 5);
+    map.redline.fill(grade);
+    placeParcel(map, parcels, { x: 2, y: 2, width: 1, height: 1, kind: BuiltKind.HouseSingle, condition: 200 });
+    if (withPrecinct) {
+      placeParcel(map, parcels, { x: 2, y: 3, width: 1, height: 1, kind: BuiltKind.Precinct, condition: 200 });
+    }
+    const partition = computeNeighborhoods(map);
+    const civic = createCivicState(partition);
+    const nid = partition.tileToNeighborhood[map.idx(2, 2)]!;
+    return { map, parcels, partition, civic, nid };
+  }
+
+  it('a precinct in a redlined neighborhood suppresses voice & trust vs an unpoliced control', () => {
+    const policed = hood(true, 255);
+    const control = hood(false, 255);
+    civicTick(policed.map, policed.parcels, policed.partition, policed.civic, NO_CAPS, 10);
+    civicTick(control.map, control.parcels, control.partition, control.civic, NO_CAPS, 10);
+    expect(policed.civic.getValues(policed.nid).voice).toBeLessThan(control.civic.getValues(control.nid).voice);
+    expect(policed.civic.getValues(policed.nid).trust).toBeLessThan(control.civic.getValues(control.nid).trust);
+  });
+
+  it('a precinct in a GREENLINED neighborhood does not suppress (intensity scales with grade)', () => {
+    const greenPoliced = hood(true, 0);
+    const control = hood(false, 0);
+    civicTick(greenPoliced.map, greenPoliced.parcels, greenPoliced.partition, greenPoliced.civic, NO_CAPS, 10);
+    civicTick(control.map, control.parcels, control.partition, control.civic, NO_CAPS, 10);
+    expect(greenPoliced.civic.getValues(greenPoliced.nid).voice).toBe(control.civic.getValues(control.nid).voice);
+  });
+
+  it('community alternatives (caps) recover the voice the precinct silences', () => {
+    const all: CivicCaps = { circles: true, participatoryBudgeting: true, giftCircles: true };
+    const organized = hood(true, 255);
+    const silenced = hood(true, 255);
+    civicTick(organized.map, organized.parcels, organized.partition, organized.civic, all, 10);
+    civicTick(silenced.map, silenced.parcels, silenced.partition, silenced.civic, NO_CAPS, 10);
+    expect(organized.civic.getValues(organized.nid).voice).toBeGreaterThan(
+      silenced.civic.getValues(silenced.nid).voice,
+    );
+  });
+
+  it('honors the trust floor even under sustained over-policing', () => {
+    const policed = hood(true, 255);
+    for (let t = 1; t <= 120; t++) {
+      civicTick(policed.map, policed.parcels, policed.partition, policed.civic, NO_CAPS, t);
+    }
+    expect(policed.civic.getValues(policed.nid).trust).toBe(TRUST_FLOOR);
+  });
+});
+
 describe('civicTick: bounds, determinism, isolation', () => {
   it('keeps every value in [0,255] and trust ≥ TRUST_FLOOR across a long run', () => {
     const { map, parcels } = oneParcel(BuiltKind.CommunityGarden, 200);

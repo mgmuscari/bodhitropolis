@@ -39,6 +39,12 @@ const TRUST_GAIN = 2; // trust gained per tick with a recent repair
 const TRUST_DECAY = 1; // trust lost per tick without one (slow)
 /** Trust never falls below this floor — the PRD's design call, pinned. */
 export const TRUST_FLOOR = 40;
+// Over-policing: a precinct in a neighborhood suppresses civic voice & trust, scaled
+// by how redlined it is (redlined + policed = worst). NOT a service — the player undoes
+// it by DEFUNDING (convert the precinct to a Healing Commons) and by community
+// alternatives (the voice caps below), which can outweigh the suppression.
+const POLICE_VOICE_PEN = 3; // voice lost per tick in a fully-redlined policed neighborhood
+const POLICE_TRUST_PEN = 2; // trust lost per tick in a fully-redlined policed neighborhood
 const RECENT_WINDOW = 100; // a repair counts as "recent" within this many ticks
 
 // Gathering places: a belonging bonus when ≥1 sits inside the neighborhood. Park
@@ -97,17 +103,21 @@ export function civicTick(
   const condSum = new Float64Array(count);
   const condTiles = new Int32Array(count);
   const gathering = new Uint8Array(count); // 0/1: a gathering place is present
+  const gradeSum = new Float64Array(count); // redline grade summed (for the policing intensity)
+  const precinctTiles = new Int32Array(count); // 0+ : police presence in the neighborhood
   for (let i = 0; i < n; i++) {
     const id = t2n[i]!;
     if (id === 0 || id > count) continue;
     const k = id - 1;
     tileCount[k]!++;
     ecoSum[k]! += map.soilHealth[i]! + map.floraVitality[i]! + map.faunaPresence[i]!;
+    gradeSum[k]! += map.redline[i]!;
     const pid = map.parcel[i]!;
     if (pid !== 0) {
       condSum[k]! += parcels.conditionAt(pid - 1);
       condTiles[k]!++;
       if (GATHERING_KINDS.has(map.built[i]!)) gathering[k] = 1;
+      if (map.built[i]! === BuiltKind.Precinct) precinctTiles[k]!++;
     }
   }
 
@@ -143,6 +153,11 @@ export function civicTick(
     const ecoMean = Math.floor(ecoSum[k]! / (3 * tc));
     const condMean = condTiles[k]! > 0 ? Math.floor(condSum[k]! / condTiles[k]!) : 0;
     const isolated = fragTouch[k]! >= ISOLATION_FRAGMENTS;
+    // Over-policing: a precinct suppresses voice & trust, scaled by how redlined the
+    // neighborhood is (redlined + policed = worst). Zero where there's no precinct.
+    const policing = precinctTiles[k]! > 0 ? gradeSum[k]! / (255 * tc) : 0; // 0..1
+    const policeVoice = Math.floor(policing * POLICE_VOICE_PEN);
+    const policeTrust = Math.floor(policing * POLICE_TRUST_PEN);
 
     let bDelta = 0;
     if (condMean >= COND_THRESHOLD) bDelta += 1;
@@ -151,14 +166,17 @@ export function civicTick(
     if (isolated) bDelta -= ISOLATION_PENALTY;
     const belonging = clampByte(prev.belonging + bDelta);
 
-    // Voice consumes the caps, scaled by the belonging band the neighborhood was
-    // held at this tick. Locked caps (capBase 0) ⇒ exactly flat.
-    const voice = clampByte(prev.voice + voiceBand(prev.belonging) * capBase);
+    // Voice consumes the caps (scaled by the belonging band) MINUS over-policing.
+    // Community alternatives (the caps) can outweigh the suppression — that's the
+    // point: organizing recovers the voice the precinct silences. Locked caps with a
+    // precinct present ⇒ voice declines.
+    const voice = clampByte(prev.voice + voiceBand(prev.belonging) * capBase - policeVoice);
 
-    // Trust rises on a recent repair, slow-decays otherwise, floored at TRUST_FLOOR.
+    // Trust rises on a recent repair, slow-decays otherwise, minus over-policing,
+    // floored at TRUST_FLOOR. Policing accelerates the erosion; repairs counter it.
     const ring = civic.getRing(id);
     const recentRepair = ring.length > 0 && ring[0]! >= tick - RECENT_WINDOW;
-    let trust = prev.trust + (recentRepair ? TRUST_GAIN : -TRUST_DECAY);
+    let trust = prev.trust + (recentRepair ? TRUST_GAIN : -TRUST_DECAY) - policeTrust;
     if (trust > 255) trust = 255;
     if (trust < TRUST_FLOOR) trust = TRUST_FLOOR;
 
