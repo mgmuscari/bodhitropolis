@@ -1036,7 +1036,21 @@ export function canDrive(map: GameMap, fx: number, fy: number, tx: number, ty: n
   }
   const fromHwy = map.built[map.idx(fx, fy)] === BuiltKind.RoadHighway;
   const toHwy = map.built[map.idx(tx, ty)] === BuiltKind.RoadHighway;
-  if (!fromHwy && !toHwy) return true; // both at-grade → plain passability (unchanged)
+  if (!fromHwy && !toHwy) {
+    // At-grade. A divided AVENUE's outer lane is one-way (like a freeway lane) so committed routes
+    // can't drive the wrong way — but UNLIKE a freeway it stays crossable: a cross street may cross
+    // it perpendicular (a road continues straight beyond). Non-lane at-grade tiles are free.
+    const L = freewayLane(map, tx, ty);
+    if (L && L.role === 'outer') {
+      const d = moveDir(fx, fy, tx, ty);
+      if (d === L.dir) return true; // along the one-way lane
+      if (d === opposite(L.dir)) return false; // wrong-way along the avenue
+      const bx = tx + DIR_DX[d]!; // perpendicular → only as a straight crossing to a road beyond
+      const by = ty + DIR_DY[d]!;
+      return map.inBounds(bx, by) && carTraversable(map.built[map.idx(bx, by)]!);
+    }
+    return true;
+  }
   const d = moveDir(fx, fy, tx, ty);
   if (fromHwy) {
     const L = freewayLane(map, fx, fy); // EXIT: leave a freeway only along it (or an outer ramp)

@@ -2498,3 +2498,31 @@ describe('canDrive level crossings (Maddy: streetcars must not block cross traff
     expect(canDrive(m, 8, 7, 8, 8)).toBe(true); // south avenue → street (crossed it)
   });
 });
+
+describe('canDrive on divided avenues (Maddy: avenues had the same lane-math problem as freeways)', () => {
+  function avenue(): GameMap {
+    const m = new GameMap(20, 12);
+    for (let x = 0; x < 20; x++) {
+      m.built[m.idx(x, 5)] = BuiltKind.RoadAvenue; // north lane → West
+      m.built[m.idx(x, 6)] = BuiltKind.RoadAvenue; // south lane → East
+    }
+    return m;
+  }
+
+  it('a divided avenue lane is one-way — committed routes cannot drive the wrong way', () => {
+    const m = avenue();
+    expect(canDrive(m, 11, 5, 10, 5)).toBe(true); // West along the north lane ✓
+    expect(canDrive(m, 10, 5, 11, 5)).toBe(false); // East = wrong-way on the north lane ✗
+    expect(canDrive(m, 10, 6, 11, 6)).toBe(true); // East along the south lane ✓
+    expect(canDrive(m, 11, 6, 10, 6)).toBe(false); // West = wrong-way on the south lane ✗
+  });
+
+  it('but a cross street still CROSSES the avenue perpendicular (at-grade, unlike a freeway)', () => {
+    const m = avenue();
+    m.built[m.idx(8, 4)] = BuiltKind.RoadStreet; // cross street north of the avenue
+    m.built[m.idx(8, 7)] = BuiltKind.RoadStreet; // and south of it
+    expect(canDrive(m, 8, 4, 8, 5)).toBe(true); // street → north lane (crossing)
+    expect(canDrive(m, 8, 5, 8, 6)).toBe(true); // across to the south lane
+    expect(canDrive(m, 8, 6, 8, 7)).toBe(true); // out to the street on the far side
+  });
+});
