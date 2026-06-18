@@ -1,19 +1,25 @@
 // The redline grade — Bodhitropolis's discriminatory social geography.
 //
 // "Redlining" is named here CRITICALLY, scoped to the oppressive-planning history
-// this worldgen models. The HOLC / redevelopment apparatus drew maps that graded
-// neighborhoods A–D and painted Black and immigrant districts "D / hazardous"
-// (red) — a discriminatory social map dressed up with pseudo-objective pretexts
-// ("flood-prone", "declining"). That grade then JUSTIFIED withholding investment,
-// siting hazards, and routing highways through those communities. West Oakland was
-// graded red and razed under it.
+// this worldgen models. Be precise about what it WAS: redlining was the DENIAL OF
+// HOUSING. The HOLC (1930s) and the FHA graded neighborhoods A–D and marked Black
+// and immigrant districts "D / hazardous" (red); the government and banks then
+// refused mortgages and federal backing in the red — and in any neighborhood that
+// might integrate. So Black families were BARRED from the "good" (A/B) neighborhoods
+// and SEGREGATED into the red zones (racial covenants + FHA underwriting enforced
+// it). The grade was dressed up with pseudo-objective pretexts ("flood-prone",
+// "declining"), but its function was racial confinement. The red zones were THEN
+// made dumping grounds: starved of investment and loans, they got the industry, the
+// highways, the pollution — the burdens follow the segregation. West Oakland was
+// graded red and razed under the apparatus.
 //
 // This module reproduces the MOVE in order to indict it: the grade is drawn FIRST
-// as seeded discrimination (terrain-independent), and terrain is layered on only as
-// COVER — the pretext. The grade DETERMINES later burdens (dirty power, industry,
-// decay, highways are sited by it); burdens are NOT emergent from geography, which
-// would launder the discrimination as nature. The neutral live result the player
-// inherits and repairs is "decay"; only this apparatus is named "redlining".
+// as seeded discrimination (terrain-independent) — the segregation map — and terrain
+// is layered on only as COVER, the pretext. The grade DETERMINES later burdens
+// (dirty power, industry, decay, highways are sited by it); burdens are NOT emergent
+// from geography, which would launder the discrimination as nature. The neutral live
+// result the player inherits and repairs is "decay"; only this apparatus is named
+// "redlining".
 //
 // Worldgen layer: no DOM, no transcendental Math (the architecture guard scans it);
 // the field uses seeded value noise (rng lattice + polynomial smoothstep) only.

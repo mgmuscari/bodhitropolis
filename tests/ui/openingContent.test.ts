@@ -136,18 +136,23 @@ describe('challengeText', () => {
   it('ends with the imperative to begin and never emits "undefined"', () => {
     const paras = challengeText('Marrowfield', FOUNDED_REPORT, CHRONICLE);
     expect(paras.length).toBeGreaterThanOrEqual(2);
-    expect(paras.length).toBeLessThanOrEqual(4); // + the redline indictment para
+    expect(paras.length).toBeLessThanOrEqual(5); // + the two-part redline indictment
     expect(paras[paras.length - 1]).toMatch(/begin/i);
     expect(paras.join('\n')).not.toContain('undefined');
   });
 
-  it('names the redlining policy when the city has redlined ground (omits it at 0)', () => {
+  it('names redlining precisely — housing denial + segregation, then dumping ground', () => {
     const named = challengeText('Marrowfield', FOUNDED_REPORT, CHRONICLE).join('\n');
-    expect(named).toContain('redlined');
+    // The CAUSE: Black families denied the good neighborhoods and segregated.
+    expect(named).toContain('Black families');
+    expect(named).toMatch(/barred|denied/);
+    // The CONSEQUENCE: the red zones made dumping grounds, with the real %.
+    expect(named).toContain('dumping ground');
     expect(named).toContain(`${Math.round(FOUNDED_REPORT.redlinedShare * 100)}%`);
-    // No redlined ground (all-water) → the indictment paragraph is omitted.
+    // No redlined ground (all-water) → the indictment is omitted entirely.
     const none = challengeText('Tidehollow', ALL_WATER_REPORT, ALL_WATER_CHRONICLE).join('\n');
-    expect(none).not.toContain('redlined');
+    expect(none).not.toContain('dumping ground');
+    expect(none).not.toContain('Black families');
   });
 
   it('keeps every paragraph within 90 chars', () => {

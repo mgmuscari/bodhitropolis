@@ -2,8 +2,10 @@
 // — the four discrete grade bands, their colours and legend. No DOM, no
 // transcendental Math (the architecture guard's pure-ui allowlist scans this
 // file). This shows the apparatus's discriminatory map CRITICALLY, so the player
-// can see WHAT produced the decay: the redlined districts (D, red) are where the
-// dirty power, the industry, the highways, and the harshest disinvestment landed.
+// can see WHAT produced the decay. Redlining was the denial of housing: Black
+// families were barred from the green/blue (A/B) neighborhoods and segregated into
+// the red (D), which were THEN made dumping grounds — the dirty power, industry,
+// highways, and disinvestment all follow the red. The map IS the segregation.
 //
 // The continuous 0..255 grade is bucketed into the four HOLC grades for legibility
 // (the historical maps were discrete A/B/C/D, four flat colours). The exclusivity
