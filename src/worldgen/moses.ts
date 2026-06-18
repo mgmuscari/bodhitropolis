@@ -20,6 +20,7 @@ import {
   BuiltKind,
   isRoadKind,
   isPowerPlant,
+  isPrecinct,
   canPlaceParcel,
   placeParcel,
   placeTransport,
@@ -65,6 +66,7 @@ export interface MosesParams {
   era3DensityRadius: number; // boxDensity radius for corridor scoring
   era3GradeWeight: number; // how strongly corridor scoring prefers redlined fabric
   era3Power: number; // legacy coal/gas plants sited on surviving redlined frontage
+  era3Precincts: number; // police precincts sited in the redlined districts (the apparatus of control)
   era3MinDemolish: number; // a corridor must cut through at least this many parcels
   corridorTopK: number; // rng jitter among the top-K scored corridors
   era3Projects: number; // tower-in-the-park Projects placed along the corridor
@@ -124,6 +126,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era3DensityRadius: 3,
   era3GradeWeight: 8,
   era3Power: 4,
+  era3Precincts: 4,
   era3MinDemolish: 5,
   corridorTopK: 3,
   era3Projects: 5,
@@ -1138,8 +1141,26 @@ export function era3Highways(world: WorldState, rng: Rng, p: MosesParams, state:
     if (placeAdjacent(map, parcels, x, y, 3, 3, kind, powerRng, undefined, PLANT_ATTRS) !== -1) power++;
   }
 
+  // Police precincts, SITED BY GRADE in the redlined districts — the apparatus of
+  // control over-provided exactly where housing and investment were WITHHELD. They
+  // persist through era-5 disinvestment (the state maintains policing where it
+  // maintains nothing else). NOT in the player's build table; the player DEFUNDS
+  // them (converts them to a Healing Commons). They suppress civic voice & trust
+  // (see civic/dynamics) — "redlining" continued by other means.
+  const precinctRng = rng.fork('precinct');
+  let precincts = 0;
+  for (const i of roadTiles) {
+    if (precincts >= p.era3Precincts) break;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    if (placeAdjacent(map, parcels, x, y, 2, 2, BuiltKind.Precinct, precinctRng, undefined, PLANT_ATTRS) !== -1) {
+      precincts++;
+    }
+  }
+
   world.log.push(
-    `era3: urban renewal — ${demolished} parcels demolished, ${projects} projects, ${civic} civic, ${power} power`,
+    `era3: urban renewal — ${demolished} parcels demolished, ${projects} projects, ` +
+      `${civic} civic, ${power} power, ${precincts} precincts`,
   );
 }
 
@@ -1501,10 +1522,12 @@ export function era5Disinvestment(world: WorldState, rng: Rng, p: MosesParams, s
     const loss = Math.floor((p.maxDecay * grade) / 255) + decayRng.nextInt(p.decayNoise + 1);
     parcels.setCondition(idx, parcels.conditionAt(idx) - loss);
     decayed++;
-    // Power plants age but are NOT abandoned — the utility keeps the legacy grid
-    // running through disinvestment, so the redlined dirty power survives worldgen
-    // and the city does not restart 100% dark.
-    if (isPowerPlant(parcels.kindAt(idx))) continue;
+    // Power plants and precincts age but are NOT abandoned — the utility keeps the
+    // legacy grid running and the state keeps policing the redlined districts through
+    // disinvestment (the dirty power survives so the city isn't 100% dark; the
+    // precincts survive so the over-policing the player must undo persists).
+    const k = parcels.kindAt(idx);
+    if (isPowerPlant(k) || isPrecinct(k)) continue;
     if (parcels.conditionAt(idx) < p.abandonThreshold) doomed.push(idx);
   }
 

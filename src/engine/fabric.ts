@@ -34,6 +34,12 @@ export const BuiltKind = {
   QuietStreet: 7,
   ElevatedRail: 8,
   Promenade: 9,
+  // Police precinct 31 — NOT a service. Redlining over-policed the districts it
+  // disinvested; the precinct is the apparatus of control, sited in the redlined
+  // zones, that suppresses civic voice & trust (see civic/dynamics). The player
+  // does NOT build it — they DEFUND it (convert it to a Healing Commons). Named
+  // critically, scoped to the oppressive-planning history.
+  Precinct: 31,
   // Moses-era buildings 16..23 (24..47 reserved)
   HouseSingle: 16,
   Apartments: 17,
@@ -85,6 +91,8 @@ export const isTransportKind = (k: number): boolean => k >= 1 && k <= 15;
 export const isBuildingKind = (k: number): boolean => k >= 16 && k <= 127;
 /** A central power plant (coal/gas/hydro/nuclear/wind/solar/fusion, 24..30). */
 export const isPowerPlant = (k: number): boolean => k >= 24 && k <= 30;
+/** A police precinct (the apparatus of control sited in redlined zones, 31). */
+export const isPrecinct = (k: number): boolean => k === 31;
 
 // --- Parcels -------------------------------------------------------------
 //

@@ -57,6 +57,7 @@ const BUILDING_RENDER_KINDS: readonly number[] = [
   BuiltKind.Industrial,
   BuiltKind.ParkingLot,
   BuiltKind.Civic,
+  BuiltKind.Precinct,
   BuiltKind.CoalPlant,
   BuiltKind.GasPlant,
   BuiltKind.HydroPlant,

@@ -474,6 +474,53 @@ describe('era2MotorAge — industry concentration by grade', () => {
   });
 });
 
+describe('era3 — police precincts sited in redlined districts (the apparatus of control)', () => {
+  const parcelMeanGrade = (world: WorldState, i: number): number => {
+    const { map, parcels } = world;
+    const e = parcels.get(i);
+    let sum = 0;
+    let n = 0;
+    for (let dy = 0; dy < e.height; dy++) {
+      for (let dx = 0; dx < e.width; dx++) {
+        sum += map.redline[map.idx(e.x + dx, e.y + dy)]!;
+        n++;
+      }
+    }
+    return sum / n;
+  };
+
+  for (const seed of SEEDS) {
+    it(`seed "${seed}": precincts persist through the full century`, () => {
+      const world = runFullStage(seed);
+      const precincts = world.parcels
+        .aliveIndices()
+        .filter((i) => world.parcels.kindAt(i) === BuiltKind.Precinct);
+      expect(precincts.length).toBeGreaterThanOrEqual(2); // state keeps policing through disinvestment
+    });
+  }
+
+  it('precincts sit on worse-graded ground than the average surviving building', () => {
+    let precSum = 0;
+    let precN = 0;
+    let otherSum = 0;
+    let otherN = 0;
+    for (const seed of SEEDS) {
+      const world = runFullStage(seed);
+      for (const i of world.parcels.aliveIndices()) {
+        const g = parcelMeanGrade(world, i);
+        if (world.parcels.kindAt(i) === BuiltKind.Precinct) {
+          precSum += g;
+          precN++;
+        } else {
+          otherSum += g;
+          otherN++;
+        }
+      }
+    }
+    expect(precSum / precN).toBeGreaterThan(otherSum / otherN);
+  });
+});
+
 describe('placeParkingField (all-or-nothing, unit)', () => {
   it('places cols*rows lots on a fully-free region as one contiguous field', () => {
     const map = new GameMap(20, 20);
@@ -694,6 +741,7 @@ describe('era3Highways', () => {
       const projPlaced = Number(/(\d+) projects/.exec(line)![1]);
       const civicPlaced = Number(/(\d+) civic/.exec(line)![1]);
       const powerPlaced = Number(/(\d+) power/.exec(line)![1]);
+      const precinctsPlaced = Number(/(\d+) precincts/.exec(line)![1]);
 
       expect(demolished).toBeGreaterThanOrEqual(5);
       // Chronicle honesty: projects are placed only after carving and none
@@ -701,9 +749,11 @@ describe('era3Highways', () => {
       // placement count (a corridor cannot demolish a project).
       expect(aliveKindCount(world, BuiltKind.Projects) - projBefore).toBe(projPlaced);
       // Every alive-count change in era 3 is accounted for: demolitions out,
-      // projects + civic + power plants in. (Net kind-deltas would conflate a
+      // projects + civic + power + precincts in. (Net kind-deltas would conflate a
       // demolished era-1 civic with a placed one — the chronicled counts do not.)
-      expect(aliveAfter).toBe(aliveBefore - demolished + projPlaced + civicPlaced + powerPlaced);
+      expect(aliveAfter).toBe(
+        aliveBefore - demolished + projPlaced + civicPlaced + powerPlaced + precinctsPlaced,
+      );
     });
 
     it(`seed "${seed}": the streetcar is ripped out (rail <= 10% of peak)`, () => {
@@ -745,10 +795,10 @@ describe('era3Highways — routed through redlined districts', () => {
           hwSum += map.redline[i]!;
           hwN++;
         } else if (map.parcel[i] !== 0) {
-          // Exclude power plants: they're deliberately sited on the worst frontage,
-          // so they'd inflate the "average building" baseline unfairly.
+          // Exclude power plants AND precincts (24..31): both are deliberately sited
+          // on the worst frontage, so they'd inflate the "average building" baseline.
           const k = world.parcels.kindAt(map.parcel[i]! - 1);
-          if (k >= 24 && k <= 30) continue;
+          if (k >= 24 && k <= 31) continue;
           parcelSum += map.redline[i]!;
           parcelN++;
         }
