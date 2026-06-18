@@ -24,6 +24,8 @@ import {
   placeParkingField,
   promoteDenseStreets,
   placeCorridorRamps,
+  layBridgeToRoad,
+  otherMassEntries,
   DEFAULT_MOSES_PARAMS,
   type MosesParams,
   type MosesState,
@@ -1287,3 +1289,60 @@ describe('placeCorridorRamps — ramps connect to the surface grid, not at the f
     expect(map.built[map.idx(12, 7)]).toBe(BuiltKind.RoadHighway);
   });
 });
+
+describe('layBridgeToRoad — bridges the city across water to another land mass (Maddy feat)', () => {
+  // Mass A (cols 0–6) with a road, a water channel (cols 7–9), mass B (cols 10–15) with a site.
+  function twoMasses(): GameMap {
+    const m = new GameMap(16, 16);
+    for (let y = 0; y < 16; y++) for (const x of [7, 8, 9]) m.setWater(x, y, Water.River);
+    m.built[m.idx(6, 8)] = BuiltKind.RoadStreet; // the existing road on mass A's edge
+    return m;
+  }
+
+  it('decks a bridge over the water connecting the far site to the road network', () => {
+    const m = twoMasses();
+    const distToRoad = distanceField(m, (i) => isRoadKind(m.built[i]!));
+    expect(layBridgeToRoad(m, 12, 8, distToRoad, 18)).toBe(true);
+    // the water channel is decked with highway-over-water (a bridge, water layer preserved)
+    for (const x of [7, 8, 9]) {
+      expect(m.built[m.idx(x, 8)]).toBe(BuiltKind.RoadHighway);
+      expect(m.water[m.idx(x, 8)]).not.toBe(Water.None);
+    }
+    // the far site is now linked, and the bridge meets the existing road
+    expect(m.built[m.idx(12, 8)]).toBe(BuiltKind.RoadHighway);
+    expect(isRoadKind(m.built[m.idx(6, 8)]!)).toBe(true);
+    // mass A and mass B are now one connected road component
+    const net = roadNetwork(m);
+    expect(net.largestComponent).toBe(net.total);
+  });
+
+  it('refuses to bridge a crossing longer than maxBridge', () => {
+    const m = twoMasses();
+    const distToRoad = distanceField(m, (i) => isRoadKind(m.built[i]!));
+    expect(layBridgeToRoad(m, 12, 8, distToRoad, 3)).toBe(false); // crossing is 6 > 3
+    expect(m.built[m.idx(8, 8)]).toBe(BuiltKind.None); // nothing decked
+  });
+})
+
+describe('otherMassEntries — finds other land masses to bridge to (Maddy feat)', () => {
+  function twoMasses(): GameMap {
+    const m = new GameMap(16, 16);
+    for (let y = 0; y < 16; y++) for (const x of [7, 8, 9]) m.setWater(x, y, Water.River);
+    m.built[m.idx(6, 8)] = BuiltKind.RoadStreet; // road on mass A (cols 0–6)
+    return m;
+  }
+
+  it('returns the other mass with its nearest-road bridgehead, skipping the core mass', () => {
+    const m = twoMasses();
+    const distToRoad = distanceField(m, (i) => isRoadKind(m.built[i]!));
+    const entries = otherMassEntries(m, 2, 8, distToRoad, 10); // core at (2,8) on mass A
+    expect(entries.length).toBe(1); // only mass B; mass A holds the core and is excluded
+    expect(entries[0]!.x).toBe(10); // bridgehead = mass B's col nearest the road, across the water
+  });
+
+  it('honours the minimum mass size', () => {
+    const m = twoMasses(); // mass B is 6×16 = 96 tiles
+    const distToRoad = distanceField(m, (i) => isRoadKind(m.built[i]!));
+    expect(otherMassEntries(m, 2, 8, distToRoad, 200).length).toBe(0); // too small to bother bridging
+  });
+})
