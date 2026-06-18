@@ -475,6 +475,26 @@ export function main(): void {
       });
       return;
     }
+    if (view === 'airPollution') {
+      // The live agent-driven smog field (cars + dirty plants emit it), over LAND — a heatmap that
+      // refreshes as the base redraws on the eco cadence. Clean where the player has calmed traffic.
+      const poll = ambientState.pollution;
+      renderer.setOverlay({
+        tint: (i) =>
+          overlayWater[i] !== Water.None ? null : overlayTint('airPollution', Math.min(255, poll.get(i) ?? 0)),
+      });
+      return;
+    }
+    if (view === 'waterPollution') {
+      // The live runoff field, over WATER — the dingy creeks downstream of redlined industry. Clean
+      // blue where the water is healthy, murky where contamination collects.
+      const wp = ambientState.waterPollution;
+      renderer.setOverlay({
+        tint: (i) =>
+          overlayWater[i] === Water.None ? null : overlayTint('waterPollution', Math.min(255, wp.get(i) ?? 0)),
+      });
+      return;
+    }
     const layer =
       view === 'soil'
         ? world.map.soilHealth
