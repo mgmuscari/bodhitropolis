@@ -134,6 +134,7 @@ const LV_RADIUS = 4; // how far amenities lift / nuisances drag a plot (Manhatta
 const LV_POLL_PEN = 70; // − the worst nearby smog (distance-weighted), the dominant nuisance
 const LV_TRAFFIC_PEN = 50; // − the worst nearby congestion (noise / danger of a jammed road)
 const LV_WEAR_PEN = 30; // − the worst nearby trampled, littered ground (decay)
+const LV_WATER_PEN = 60; // − the worst nearby contaminated water (the poisoned creek on the banks)
 const LV_CADENCE = 20; // recompute every N substeps (~1s) — a slow, whole-map readout
 const LV_PULL = 10; // tiles of extra distance a max-value destination can justify over a drab one
 
@@ -253,6 +254,10 @@ const WATER_RUNOFF_CADENCE = 20;
 const RUNOFF_URBAN = 2; // a paved/built ground neighbour
 const RUNOFF_WILD = 0.4; // a wild/empty ground neighbour
 const RUNOFF_WORN = 2; // extra when that ground is a beaten desire path
+const RUNOFF_INDUSTRY = 4; // an industrial neighbour (the toxic source), grade-scaled up to 2x
+const WATER_FLOW_FRACTION = 0.25; // share of a tile's pollution that flows downstream per cadence
+const WATER_TREAT_RADIUS = 6; // a wastewater works cleans water within this Manhattan radius
+const WATER_TREAT_AMOUNT = 30; // pollution removed at the works per cadence (falls off with distance)
 
 /** Substeps a pedestrian spends INSIDE its destination building before walking back to the
  *  car: a base plus a seeded spread so visitors don't all return together. ~3–13s. */
@@ -1516,6 +1521,7 @@ export interface LiveSamples {
   health?: number;
   traffic?: number;
   pollution?: number;
+  water?: number;
 }
 
 /**
@@ -1530,6 +1536,7 @@ export function liveInspectLine(s: LiveSamples): string {
   if (s.health !== undefined) parts.push(`health ${Math.round(s.health)}`);
   if (s.traffic !== undefined) parts.push(`traffic ${Math.round(s.traffic)}`);
   if (s.pollution !== undefined) parts.push(`smog ${Math.round(s.pollution)}`);
+  if (s.water !== undefined) parts.push(`water ${Math.round(s.water)} contaminated`);
   return parts.join(' · ');
 }
 
@@ -1810,6 +1817,7 @@ export function landValueAt(
   pollution?: ReadonlyMap<number, number>,
   traffic?: ReadonlyMap<number, number>,
   wear?: ReadonlyMap<number, number>,
+  water?: ReadonlyMap<number, number>,
 ): number {
   const i = map.idx(x, y);
   let v = LV_BASE + (map.floraVitality[i]! / 255) * LV_FLORA + (map.faunaPresence[i]! / 255) * LV_FAUNA;
@@ -1821,6 +1829,7 @@ export function landValueAt(
   let pollNear = 0;
   let trafNear = 0;
   let wearNear = 0;
+  let waterNear = 0;
   for (let dy = -LV_RADIUS; dy <= LV_RADIUS; dy++) {
     for (let dx = -LV_RADIUS; dx <= LV_RADIUS; dx++) {
       const dist = Math.abs(dx) + Math.abs(dy);
@@ -1835,12 +1844,15 @@ export function landValueAt(
       if (pollution) pollNear = Math.max(pollNear, sampleField(pollution, ni) * falloff);
       if (traffic) trafNear = Math.max(trafNear, sampleField(traffic, ni) * falloff);
       if (wear) wearNear = Math.max(wearNear, sampleField(wear, ni) * falloff);
+      // The contaminated creek on the banks: the worst nearby water pollution drags the plot.
+      if (water) waterNear = Math.max(waterNear, sampleField(water, ni) * falloff);
     }
   }
   v += amenity * LV_AMENITY;
   v -= (pollNear / POLL_MAX) * LV_POLL_PEN;
   v -= (trafNear / TRAFFIC_MAX) * LV_TRAFFIC_PEN;
   v -= (wearNear / WEAR_MAX) * LV_WEAR_PEN;
+  v -= (waterNear / WATER_POLL_MAX) * LV_WATER_PEN;
   return v < 0 ? 0 : v > LV_MAX ? LV_MAX : v;
 }
 
@@ -1855,7 +1867,7 @@ export function recomputeLandValue(state: AmbientState, map: GameMap): void {
     for (let x = 0; x < W; x++) {
       const i = map.idx(x, y);
       if (zoneTypeOf(map.built[i]!) === ZoneType.None) continue; // only inhabited plots carry a value
-      state.landValue.set(i, landValueAt(map, x, y, state.pollution, state.traffic, state.wear));
+      state.landValue.set(i, landValueAt(map, x, y, state.pollution, state.traffic, state.wear, state.waterPollution));
     }
   }
 }
@@ -2245,7 +2257,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   // 6. Water runoff: on a slow cadence, each coastal water tile collects pollution from the
   //    ground around it and grows heavily polluted over time (impassable, so it never wears).
   state.waterTick += 1;
-  if (state.waterTick % WATER_RUNOFF_CADENCE === 0) accumulateWaterRunoff(state, map);
+  if (state.waterTick % WATER_RUNOFF_CADENCE === 0) {
+    accumulateWaterRunoff(state, map);
+    flowWaterPollution(state, map); // carry the contamination downstream to the banks below
+    treatWaterPollution(state, map); // the player's wastewater works heals it back
+  }
 
   // 7. Land value: on a slow cadence, recompute each plot's desirability from the healed land +
   //    amenities minus the live nuisances. A readout over the other layers — derived, not laid.
@@ -2262,7 +2278,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
 /** One water-runoff pass: every water tile with ground neighbours collects their runoff
  *  (paved/built/worn ground sheds most), accumulating toward WATER_POLL_MAX. Open water with no
  *  ground neighbours stays clean. Whole-map scan — gated to WATER_RUNOFF_CADENCE by the caller. */
-function accumulateWaterRunoff(state: AmbientState, map: GameMap): void {
+export function accumulateWaterRunoff(state: AmbientState, map: GameMap): void {
   const W = map.width;
   const H = map.height;
   for (let y = 0; y < H; y++) {
@@ -2277,13 +2293,89 @@ function accumulateWaterRunoff(state: AmbientState, map: GameMap): void {
         const ni = map.idx(nx, ny);
         if (map.water[ni] !== 0) continue; // a water neighbour sheds nothing
         const k = map.built[ni]!;
-        runoff += isRoadKind(k) || k === BuiltKind.ParkingLot || zoneTypeOf(k) !== ZoneType.None
-          ? RUNOFF_URBAN
-          : RUNOFF_WILD;
+        if (zoneTypeOf(k) === ZoneType.Industrial) {
+          // Industry is the toxic source; redlined industry sheds the MOST (least
+          // regulated, concentrated there by policy) — scale by the tile's grade.
+          // This is the Hackensack: the contamination starts at the redlined plant.
+          runoff += RUNOFF_INDUSTRY * (1 + map.redline[ni]! / 255);
+        } else if (isRoadKind(k) || k === BuiltKind.ParkingLot || zoneTypeOf(k) !== ZoneType.None) {
+          // Redlined built ground sheds more toxic runoff — the disinvested district
+          // (no drainage, dumping, industrial legacy) poisons its own water. Grade-
+          // scaled so the mechanic holds even where worldgen gutted the industry.
+          runoff += RUNOFF_URBAN * (1 + map.redline[ni]! / 255);
+        } else {
+          runoff += RUNOFF_WILD; // wilderness is not a toxic source, regardless of grade
+        }
         if ((state.wear.get(ni) ?? 0) > 40) runoff += RUNOFF_WORN;
       }
       if (runoff === 0) continue;
       layField(state.waterPollution, i, runoff, WATER_POLL_MAX);
+    }
+  }
+}
+
+/**
+ * Flow water pollution DOWNSTREAM: each polluted water tile pushes WATER_FLOW_FRACTION
+ * of its load to its lower-elevation water neighbours. Processed high→low elevation so
+ * contamination cascades downhill in a single pass — so a community DOWNSTREAM of the
+ * redlined industry is poisoned even with no polluting neighbour of its own (the
+ * Hackensack: the harm is sited upstream, borne downstream). Live/non-hashed;
+ * deterministic (sorted order); integer/rational only.
+ */
+export function flowWaterPollution(state: AmbientState, map: GameMap): void {
+  if (state.waterPollution.size === 0) return;
+  const tiles = [...state.waterPollution.keys()].filter((i) => map.water[i] !== 0);
+  tiles.sort((a, b) => map.elevation[b]! - map.elevation[a]! || a - b);
+  for (const i of tiles) {
+    const p = state.waterPollution.get(i) ?? 0;
+    if (p <= 0) continue;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const e = map.elevation[i]!;
+    const lower: number[] = [];
+    for (let d = 0; d < 4; d++) {
+      const nx = x + DIR_DX[d]!;
+      const ny = y + DIR_DY[d]!;
+      if (!map.inBounds(nx, ny)) continue;
+      const ni = map.idx(nx, ny);
+      if (map.water[ni] !== 0 && map.elevation[ni]! < e) lower.push(ni);
+    }
+    if (lower.length === 0) continue;
+    const move = (p * WATER_FLOW_FRACTION) / lower.length;
+    if (move <= 0) continue;
+    for (const ni of lower) layField(state.waterPollution, ni, move, WATER_POLL_MAX);
+    state.waterPollution.set(i, p - move * lower.length);
+  }
+}
+
+/**
+ * Reparation: a WastewaterWorks cleans contaminated water within WATER_TREAT_RADIUS,
+ * strongest at the works and falling off with distance. The player's heal for the
+ * poisoned creek — restore the water, restore the bankside community's land value and
+ * health (the inverse of the harm). Rewilding the banks also helps implicitly (wild
+ * ground sheds almost nothing). Live/non-hashed; few works, so cheap.
+ */
+export function treatWaterPollution(state: AmbientState, map: GameMap): void {
+  if (state.waterPollution.size === 0) return;
+  for (let wi = 0; wi < map.built.length; wi++) {
+    if (map.built[wi] !== BuiltKind.WastewaterWorks) continue;
+    const wx = wi % map.width;
+    const wy = (wi - wx) / map.width;
+    for (let dy = -WATER_TREAT_RADIUS; dy <= WATER_TREAT_RADIUS; dy++) {
+      for (let dx = -WATER_TREAT_RADIUS; dx <= WATER_TREAT_RADIUS; dx++) {
+        const dist = Math.abs(dx) + Math.abs(dy);
+        if (dist > WATER_TREAT_RADIUS) continue;
+        const nx = wx + dx;
+        const ny = wy + dy;
+        if (!map.inBounds(nx, ny)) continue;
+        const ni = map.idx(nx, ny);
+        if (map.water[ni] === 0) continue;
+        const cur = state.waterPollution.get(ni);
+        if (cur === undefined) continue;
+        const nv = cur - WATER_TREAT_AMOUNT * (1 - dist / (WATER_TREAT_RADIUS + 1));
+        if (nv <= 0) state.waterPollution.delete(ni);
+        else state.waterPollution.set(ni, nv);
+      }
     }
   }
 }

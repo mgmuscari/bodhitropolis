@@ -500,6 +500,8 @@ export function main(): void {
         health: ambientState.buildingHealth.get(anchor),
         traffic: ambientState.traffic.get(i),
         pollution: ambientState.pollution.get(i),
+        // On a water tile, surface its contamination (the poisoned creek made legible).
+        water: world.map.water[i] !== Water.None ? ambientState.waterPollution.get(i) : undefined,
       });
       if (live) line += ` · ${live}`;
       // Power status: a plant shows its output; a consumer shows powered/unpowered.

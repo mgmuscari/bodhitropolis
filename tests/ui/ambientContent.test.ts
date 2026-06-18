@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { GameMap } from '../../src/engine/map';
+import { GameMap, Water } from '../../src/engine/map';
 import { ParcelStore, BuiltKind, hashWorld } from '../../src/engine/fabric';
 import { createRng } from '../../src/engine/rng';
 import { runPipeline } from '../../src/worldgen/pipeline';
@@ -44,6 +44,9 @@ import {
   spawnTargetFor,
   stepOccupancy,
   liveInspectLine,
+  accumulateWaterRunoff,
+  flowWaterPollution,
+  treatWaterPollution,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -679,6 +682,15 @@ describe('land value: derived from amenities minus live nuisances', () => {
     expect(busy).toBeLessThan(quiet);
   });
 
+  it('is lower beside contaminated water (the dingy creek hurts the banks)', () => {
+    const map = new GameMap(8, 8);
+    map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
+    map.water[map.idx(3, 5)] = Water.River; // a creek two tiles south
+    const clean = landValueAt(map, 3, 3, undefined, undefined, undefined, new Map());
+    const poisoned = landValueAt(map, 3, 3, undefined, undefined, undefined, new Map([[map.idx(3, 5), 255]]));
+    expect(poisoned).toBeLessThan(clean);
+  });
+
   it('clamps to [0, 255]', () => {
     const map = new GameMap(8, 8);
     map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
@@ -691,6 +703,66 @@ describe('land value: derived from amenities minus live nuisances', () => {
     const i = map.idx(3, 3);
     const bad = landValueAt(map, 3, 3, new Map([[i, 255]]), new Map([[i, 255]]), new Map([[i, 255]]));
     expect(bad).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('water contamination: industry is the toxic source, redlined most of all', () => {
+  // A water tile with one ground neighbour; vary that neighbour and read the
+  // runoff it sheds into the water after one accumulate pass.
+  const shedInto = (neighbourKind: number, grade: number): number => {
+    const map = new GameMap(6, 6);
+    map.water[map.idx(2, 2)] = Water.River;
+    map.built[map.idx(2, 3)] = neighbourKind; // the one ground neighbour (south)
+    map.redline[map.idx(2, 3)] = grade;
+    const state = createAmbientState();
+    accumulateWaterRunoff(state, map);
+    return state.waterPollution.get(map.idx(2, 2)) ?? 0;
+  };
+
+  it('industry sheds more than ordinary urban ground', () => {
+    expect(shedInto(BuiltKind.Industrial, 0)).toBeGreaterThan(shedInto(BuiltKind.RoadStreet, 0));
+  });
+
+  it('redlined industry sheds the most toxic runoff (grade-scaled)', () => {
+    expect(shedInto(BuiltKind.Industrial, 255)).toBeGreaterThan(shedInto(BuiltKind.Industrial, 0));
+  });
+
+  it('redlined ground sheds more than greenlined ground (the disinvested district)', () => {
+    // Not just industry: any redlined built ground sheds heavier toxic runoff, so
+    // the mechanic holds even where the worldgen gutted the industry to nothing.
+    expect(shedInto(BuiltKind.RoadStreet, 255)).toBeGreaterThan(shedInto(BuiltKind.RoadStreet, 0));
+  });
+
+  it('a wastewater works cleans nearby contaminated water (the player heals it)', () => {
+    const map = new GameMap(12, 12);
+    for (let y = 0; y < 12; y++) map.water[map.idx(2, y)] = Water.River; // a polluted river
+    const state = createAmbientState();
+    for (let y = 0; y < 12; y++) state.waterPollution.set(map.idx(2, y), 200);
+    map.built[map.idx(3, 6)] = BuiltKind.WastewaterWorks; // a works on the bank, mid-river
+    treatWaterPollution(state, map);
+    const near = state.waterPollution.get(map.idx(2, 6)) ?? 0;
+    const far = state.waterPollution.get(map.idx(2, 0)) ?? 0;
+    expect(near).toBeLessThan(200); // cleaned
+    expect(near).toBeLessThan(far); // more cleaning closer to the works
+  });
+
+  it('flows downstream: a clean tile below the source is contaminated by it', () => {
+    // A 1-wide river running down a slope; pollute only the top (upstream) tile.
+    const map = new GameMap(3, 6);
+    for (let y = 0; y < 6; y++) {
+      map.water[map.idx(1, y)] = Water.River;
+      map.setElevation(1, y, (5 - y) / 5); // y=0 highest (upstream) → y=5 lowest (the mouth)
+    }
+    const state = createAmbientState();
+    const top = map.idx(1, 0);
+    const downstream = map.idx(1, 4);
+    state.waterPollution.set(top, 255);
+    for (let n = 0; n < 8; n++) flowWaterPollution(state, map);
+    // The downstream community, with no polluting neighbour of its own, is poisoned.
+    expect(state.waterPollution.get(downstream) ?? 0).toBeGreaterThan(0);
+    // Flow conserves direction: pollution never climbs back to a higher tile that started clean.
+    // (top was the only source; everything below it carries the contamination.)
+    expect(state.waterPollution.get(downstream) ?? 0).toBeLessThanOrEqual(255);
   });
 });
 
@@ -1803,6 +1875,10 @@ describe('liveInspectLine (inspect live-sample formatting)', () => {
 
   it('formats a road: traffic and smog only', () => {
     expect(liveInspectLine({ traffic: 30, pollution: 8 })).toBe('traffic 30 · smog 8');
+  });
+
+  it('formats a contaminated water tile', () => {
+    expect(liveInspectLine({ water: 180 })).toBe('water 180 contaminated');
   });
 
   it('omits absent fields and returns empty when nothing is present', () => {
