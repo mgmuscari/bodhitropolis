@@ -53,6 +53,7 @@ import {
   nextPatrolStep,
   stepArrests,
   arrestChance,
+  parkOwnedCarSomewhere,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -277,6 +278,33 @@ describe('anti-loop routing: recent-tile avoidance (Maddy playtest — tight loo
     }
     expect(state.cars.length).toBe(0); // boxed in by its own path → despawned, not an infinite loop
     expect(steps).toBeLessThan(400);
+  });
+});
+
+describe('parking lots fill to capacity (Maddy: lots should accept up to 9, not one)', () => {
+  it('owned cars take distinct stalls — a lot holds many, not one', () => {
+    const map = new GameMap(16, 16);
+    // a 2x2 parking lot the cars will pull into
+    for (const [x, y] of [[7, 7], [8, 7], [7, 8], [8, 8]] as const) map.built[map.idx(x, y)] = BuiltKind.ParkingLot;
+    const state = createAmbientState();
+    setParkingLots(
+      state,
+      parkingLots(map).map((lot) => ({
+        cx: (lot.x0 + lot.x1) / 2,
+        cy: (lot.y0 + lot.y1) / 2,
+        stalls: parkingStalls(lot),
+      })),
+    );
+    const cars: Array<{ x: number; y: number; dir: number; tx: number; ty: number; owned: boolean; stallIdx?: number }> = [];
+    for (let n = 0; n < 6; n++) {
+      const car = { x: 7, y: 7, dir: 1, tx: 7, ty: 7, owned: true };
+      state.cars.push(car);
+      parkOwnedCarSomewhere(state, map, car);
+      cars.push(car);
+    }
+    const stalls = new Set(cars.map((c) => c.stallIdx));
+    expect(stalls.size).toBe(6); // six cars → six distinct stalls (the lot holds many)
+    expect(cars.every((c) => c.stallIdx !== undefined)).toBe(true); // all parked in the lot, none curbed
   });
 });
 
