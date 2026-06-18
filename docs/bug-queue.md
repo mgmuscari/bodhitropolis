@@ -133,10 +133,9 @@ layer (non-deterministic).
   term. Fix (architectural): land value is the ANCHOR, building-health a minor bounded nudge; add a
   per-home population FLOOR (a city thins but never fully empties); re-anchor OCC_LV_NEUTRAL at the
   live equilibrium so the start is metastable, not free-falling.
-- 🟡 **Driving-ped substrate exemption is implicit** — a hidden `'driving'` ped survives the
-  substrate-despawn (ambientContent substep step 1) only because boarding leaves a stale `walkTo` set.
-  Make it explicit (`p.phase === 'driving'` in the exemption) so it can't break if `walkTo` is cleared.
-  Surfaced while testing pollution; low priority, no live symptom.
+- ✅ **Driving-ped substrate exemption is implicit** (PR pending) — extracted `pedDespawns(map, p)`,
+  which exempts a driving ped EXPLICITLY by `phase === 'driving'` (no longer relying on a stale
+  `walkTo`). Unit-tested: driving ped on a freeway survives; idle one despawns.
 - ✅ **Tech tree can't be closed when it covers the menu bar** (Maddy 2026-06-17; PR pending) — added an
   always-visible ✕ in the panel header (the panel top never scrolls, so it's reachable even over the
   dock) + Escape-to-close. Live-verified both.

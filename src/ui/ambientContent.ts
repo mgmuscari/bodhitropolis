@@ -2248,12 +2248,21 @@ export function stepArrests(state: AmbientState, map: GameMap, rng: Rng): void {
   }
 }
 
+/**
+ * A pedestrian is despawned when its substrate vanished — UNLESS it's a last-mile walker (a `walkTo`
+ * is set; it crosses lots/roads off-grid and self-despawns on arrival) or a hidden DRIVER (`phase
+ * 'driving'`; it rides inside its car, off the ped network by design). The driving exemption is
+ * EXPLICIT by phase so it can't break if the stale `walkTo` left over from boarding is ever cleared.
+ */
+export function pedDespawns(map: GameMap, p: Ped): boolean {
+  return p.phase !== 'driving' && p.walkTo === undefined && pedOffNetwork(map, p);
+}
+
 function substep(state: AmbientState, map: GameMap, rng: Rng): void {
-  // 1. Despawn anything whose substrate vanished (read-only self-healing). Last-mile
-  //    walkers (walkTo set) are exempt — they cross lots/roads off-grid and self-despawn
-  //    on arrival, so the substrate test would wrongly kill them mid-walk.
+  // 1. Despawn anything whose substrate vanished (read-only self-healing). See pedDespawns for the
+  //    exemptions (last-mile walkers + hidden drivers).
   state.cars = state.cars.filter((c) => !carOffNetwork(map, c));
-  state.peds = state.peds.filter((p) => p.walkTo !== undefined || !pedOffNetwork(map, p));
+  state.peds = state.peds.filter((p) => !pedDespawns(map, p));
   for (const f of state.birds) {
     const t = flockTile(map, f);
     if (!birdSpawnAt(map, t.x, t.y)) f.birds.pop();
