@@ -1293,8 +1293,57 @@ function ensureOwnedCar(state: AmbientState, p: Ped, map: GameMap): Car | null {
 
 /** A free, available parking spot (a drivable tile not already holding a parked car) near (x, y) —
  *  where a citizen-car drives to and parks before its owner walks the last mile. Null if none. */
+/** The centre tile of the nearest parking lot within PARK_RADIUS of (x, y), or null. The route
+ *  target for a parking citizen — so owned cars head INTO the lots (and fill their stalls) rather
+ *  than only curb-parking near the destination. */
+function nearestLotCenter(state: AmbientState, x: number, y: number): { x: number; y: number } | null {
+  const lots = state.parkingLots;
+  if (!lots || lots.length === 0) return null;
+  let best = -1;
+  let bestD = PARK_RADIUS * PARK_RADIUS;
+  for (let i = 0; i < lots.length; i++) {
+    const dx = lots[i]!.cx - x;
+    const dy = lots[i]!.cy - y;
+    const d = dx * dx + dy * dy;
+    if (d <= bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  if (best < 0) return null;
+  return { x: Math.round(lots[best]!.cx), y: Math.round(lots[best]!.cy) };
+}
+
 function findParkingNear(state: AmbientState, map: GameMap, x: number, y: number): { x: number; y: number } | null {
-  return findCurbSpot(state, map, x, y);
+  // Head for a lot if one is near (cars fill the stalls); otherwise a street curb.
+  return nearestLotCenter(state, x, y) ?? findCurbSpot(state, map, x, y);
+}
+
+/**
+ * Park an owned car when its drive ends: pull into a FREE lot stall if a lot is in reach (so lots
+ * fill to capacity, not one car each), else a street curb. Stays OWNED so it persists until its
+ * owner returns. The stall path mirrors the trip-car convention (x = stall.x - 0.5; renderer draws
+ * the centre on the stall) and records lotIdx/stallIdx so findLotStall counts it.
+ */
+export function parkOwnedCarSomewhere(state: AmbientState, map: GameMap, car: Car): void {
+  const stall = findLotStall(state, Math.round(car.x), Math.round(car.y));
+  if (stall) {
+    car.lotIdx = stall.lotIdx;
+    car.stallIdx = stall.stallIdx;
+    car.x = stall.x - 0.5;
+    car.y = stall.y - 0.5;
+    car.tx = car.x;
+    car.ty = car.y;
+    car.curbDir = undefined;
+    car.parked = true;
+    car.recent = undefined;
+    return;
+  }
+  const spot = findCurbSpot(state, map, Math.round(car.x), Math.round(car.y)) ?? {
+    x: Math.round(car.x),
+    y: Math.round(car.y),
+  };
+  parkOwnedCar(car, map, spot);
 }
 
 /** Park an owned car at `spot` (a drivable tile), recording the kerb side, and keep it OWNED so it
@@ -1690,15 +1739,16 @@ function spawnCitizens(state: AmbientState, map: GameMap, rng: Rng): void {
  *  is near or the nearest one is full (→ the caller falls back to a street curb). */
 function findLotStall(
   state: AmbientState,
-  c: Car,
+  x: number,
+  y: number,
 ): { lotIdx: number; stallIdx: number; x: number; y: number } | null {
   const lots = state.parkingLots;
   if (!lots || lots.length === 0) return null;
   let best = -1;
   let bestD = PARK_RADIUS * PARK_RADIUS;
   for (let i = 0; i < lots.length; i++) {
-    const dx = lots[i]!.cx - c.x;
-    const dy = lots[i]!.cy - c.y;
+    const dx = lots[i]!.cx - x;
+    const dy = lots[i]!.cy - y;
     const d = dx * dx + dy * dy;
     if (d <= bestD) {
       bestD = d;
@@ -1752,7 +1802,7 @@ function tryPark(state: AmbientState, c: Car, map: GameMap): boolean {
   const ay = Math.round(c.y);
   // A citizen-car knows the exact plot it drove to; a sim/freight car deposits at the nearest one.
   const building = c.building ?? nearestDemandTile(map, ax, ay);
-  const lot = findLotStall(state, c);
+  const lot = findLotStall(state, c.x, c.y);
   if (lot) {
     c.lotIdx = lot.lotIdx;
     c.stallIdx = lot.stallIdx;
@@ -2313,12 +2363,8 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       p.x = car.x; // ride along (hidden)
       p.y = car.y;
       if (moving) return true;
-      // route done → park in a FREE, non-freeway spot near the car, then walk the last mile.
-      const spot = findParkingNear(state, map, Math.round(car.x), Math.round(car.y)) ?? {
-        x: Math.round(car.x),
-        y: Math.round(car.y),
-      };
-      parkOwnedCar(car, map, spot);
+      // route done → pull into a free lot stall (lots fill up), else a street curb; then walk the last mile.
+      parkOwnedCarSomewhere(state, map, car);
       car.path = undefined;
       car.leg = undefined;
       p.x = car.x;
