@@ -62,6 +62,7 @@ import {
   pedDespawns,
   isParkable,
   nearestWalkable,
+  canDrive,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -619,20 +620,19 @@ function freewayH(): GameMap {
   return m;
 }
 
-describe('freewayLane (divided multi-lane roads — outer one-way, middle median)', () => {
-  // Maddy playtest: "each tile is bidirectional in the length of the freeway. the two
-  // outer tiles should be unidirectional, and turns should only be possible at a true
-  // junction." A widened road is a divided highway: two one-way outer carriageways
-  // (right-hand traffic) and a median (no traffic) in the middle of a 3+-wide road.
-  it('classifies the two outer lanes one-way (opposite) and the middle as median', () => {
+describe('freewayLane (divided multi-lane roads — outer one-way, middle two-way through)', () => {
+  // Maddy playtest: "south goes east, north goes west, middle goes both." A widened road is a
+  // divided highway: two one-way outer carriageways (right-hand traffic) and a two-way `through`
+  // lane in the middle of a 3+-wide road (the planted median is a future road-diet upgrade).
+  it('classifies the two outer lanes one-way (opposite) and the middle as a two-way through lane', () => {
     const m = freewayH();
     // outward edge is the non-road side; dir is the right-hand-traffic heading.
     expect(freewayLane(m, 10, 5)).toEqual({ role: 'outer', dir: 3, outward: 0 }); // north lane → West
-    expect(freewayLane(m, 10, 6)).toEqual({ role: 'median' });
+    expect(freewayLane(m, 10, 6)).toEqual({ role: 'through', horizontal: true }); // middle → both
     expect(freewayLane(m, 10, 7)).toEqual({ role: 'outer', dir: 1, outward: 2 }); // south lane → East
   });
 
-  it('classifies a vertical freeway: west lane south, east lane north', () => {
+  it('classifies a vertical freeway: west lane south, east lane north, middle two-way', () => {
     const m = new GameMap(14, 20);
     for (let y = 0; y < 20; y++) {
       m.built[m.idx(5, y)] = BuiltKind.RoadHighway;
@@ -640,7 +640,7 @@ describe('freewayLane (divided multi-lane roads — outer one-way, middle median
       m.built[m.idx(7, y)] = BuiltKind.RoadHighway;
     }
     expect(freewayLane(m, 5, 10)).toEqual({ role: 'outer', dir: 2, outward: 3 }); // west lane → South
-    expect(freewayLane(m, 6, 10)).toEqual({ role: 'median' });
+    expect(freewayLane(m, 6, 10)).toEqual({ role: 'through', horizontal: false }); // middle → both
     expect(freewayLane(m, 7, 10)).toEqual({ role: 'outer', dir: 0, outward: 1 }); // east lane → North
   });
 
@@ -653,7 +653,51 @@ describe('freewayLane (divided multi-lane roads — outer one-way, middle median
     expect(freewayLane(m, 10, 6)).toEqual({ role: 'outer', dir: 3, outward: 0 }); // north → West
     expect(freewayLane(m, 10, 7)).toEqual({ role: 'outer', dir: 1, outward: 2 }); // south → East
   });
+});
 
+describe('canDrive (limited-access freeways — Maddy: no cross traffic except interchanges/ends)', () => {
+  it('travels ALONG an outer lane in its one-way dir, never against it', () => {
+    const m = freewayH(); // rows 5 (N→West), 6 (through), 7 (S→East)
+    expect(canDrive(m, 11, 5, 10, 5)).toBe(true); // West along the north lane ✓
+    expect(canDrive(m, 10, 5, 11, 5)).toBe(false); // East = wrong-way on the north lane ✗
+    expect(canDrive(m, 10, 7, 11, 7)).toBe(true); // East along the south lane ✓
+    expect(canDrive(m, 11, 7, 10, 7)).toBe(false); // West = wrong-way on the south lane ✗
+  });
+
+  it('carries the through middle BOTH ways along the axis, but not perpendicular', () => {
+    const m = freewayH();
+    expect(canDrive(m, 11, 6, 10, 6)).toBe(true); // West along the middle ✓
+    expect(canDrive(m, 10, 6, 11, 6)).toBe(true); // East along the middle ✓ (two-way)
+    expect(canDrive(m, 10, 5, 10, 6)).toBe(false); // N outer → middle (perpendicular lane change) ✗
+  });
+
+  it('blocks a cross street from entering the freeway mid-span (limited access)', () => {
+    const m = freewayH();
+    m.built[m.idx(10, 4)] = BuiltKind.RoadStreet; // a street touching the freeway's north edge
+    m.built[m.idx(10, 8)] = BuiltKind.RoadStreet; // and resuming on the south edge
+    expect(canDrive(m, 10, 4, 10, 5)).toBe(false); // street can't cut INTO the freeway perpendicular ✗
+    expect(canDrive(m, 10, 5, 10, 4)).toBe(true); // but the freeway CAN ramp off via its outward edge ✓
+  });
+
+  it('allows free crossing/turning at a freeway END/interchange (a null lane tile)', () => {
+    const m = new GameMap(10, 10);
+    m.built[m.idx(5, 5)] = BuiltKind.RoadHighway; // a lone 1-wide highway stub → freewayLane null
+    m.built[m.idx(5, 4)] = BuiltKind.RoadStreet;
+    m.built[m.idx(4, 5)] = BuiltKind.RoadStreet;
+    expect(canDrive(m, 5, 4, 5, 5)).toBe(true); // enter the stub from the north ✓
+    expect(canDrive(m, 5, 5, 4, 5)).toBe(true); // and turn off it westward ✓
+  });
+
+  it('leaves at-grade streets/avenues fully permissive (cross traffic unchanged)', () => {
+    const m = new GameMap(10, 10);
+    for (let x = 0; x < 10; x++) m.built[m.idx(x, 5)] = BuiltKind.RoadStreet;
+    for (let y = 0; y < 10; y++) m.built[m.idx(5, y)] = BuiltKind.RoadStreet;
+    expect(canDrive(m, 4, 5, 5, 5)).toBe(true); // East through the crossing
+    expect(canDrive(m, 5, 4, 5, 5)).toBe(true); // South through the crossing (cross traffic OK)
+  });
+});
+
+describe('freewayLane — 1-wide roads + staggered junctions stay null', () => {
   it('returns null for a 1-wide road (general routing applies)', () => {
     const m = new GameMap(20, 14);
     for (let x = 0; x < 20; x++) m.built[m.idx(x, 6)] = BuiltKind.RoadStreet;
