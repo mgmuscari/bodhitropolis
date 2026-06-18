@@ -54,6 +54,7 @@ import {
   stepArrests,
   arrestChance,
   parkOwnedCarSomewhere,
+  pedDespawns,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -586,6 +587,17 @@ describe('birdSpawnAt + flock sizing', () => {
       expect(f.birds.length).toBeGreaterThanOrEqual(3);
       expect(f.birds.length).toBeLessThanOrEqual(7);
     }
+  });
+});
+
+describe('ambient despawn: driving-ped exemption is explicit (no stale-walkTo reliance)', () => {
+  it('exempts a driving ped off the ped network; despawns an idle one', () => {
+    const map = new GameMap(8, 8);
+    for (let x = 0; x < 8; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadHighway; // freeway: NOT ped substrate
+    const driving = { x: 3, y: 4, dir: 1, tx: 3, ty: 4, phase: 'driving' as const }; // hidden in its car, no walkTo
+    const idle = { x: 3, y: 4, dir: 1, tx: 3, ty: 4 }; // not driving, no walkTo, off the ped network
+    expect(pedDespawns(map, driving)).toBe(false); // explicitly exempt by phase
+    expect(pedDespawns(map, idle)).toBe(true); // substrate gone → despawns
   });
 });
 
