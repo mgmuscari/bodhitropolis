@@ -45,6 +45,14 @@ const FLOCK_CAP = 32;
 // face of the over-policing the civic layer models). One per precinct, capped.
 const CRUISER_CAP = 8;
 const CRUISER_LIFE = 400; // substeps a patrol runs before recycling back to its precinct (~20s)
+// Arrests: a cruiser in a redlined zone takes a nearby citizen off the street FOR NOTHING and
+// drains a person from their household — the violence of over-policing, made tangible. Only in
+// redlined zones (the disparity); the player ends it by defunding (no precinct → no cruisers).
+const ARREST_CADENCE = 40; // substeps between arrest sweeps (~2s)
+const ARREST_CHANCE = 0.5; // per cruiser per sweep, in a redlined zone
+const ARREST_RADIUS = 4; // a cruiser seizes an on-foot citizen within this Manhattan distance
+const ARREST_GRADE_MIN = 128; // only in redlined (C/D) ground — never the greenlined neighborhoods
+const ARREST_DRAIN = 1; // people removed from the household per arrest
 
 // Rejection-sampling budget per substep per kind: sample K random tiles and test
 // the spawn predicate, never an O(mapArea) full-map scan (CRITIC-YP1).
@@ -467,6 +475,8 @@ export interface AmbientState {
    *  redlined districts. They wander the local roads (flashing lights, renderer-side) and
    *  make arrests that drain the community (see stepArrests). Live, never hashed. */
   cruisers: Mover[];
+  /** Substep counter gating the arrest sweep to ARREST_CADENCE. */
+  arrestTick: number;
   birds: Flock[];
   /** Leftover sub-substep time carried between stepAmbient calls. */
   accMs: number;
@@ -531,6 +541,7 @@ export function createAmbientState(): AmbientState {
     cars: [],
     peds: [],
     cruisers: [],
+    arrestTick: 0,
     birds: [],
     accMs: 0,
     buildingHealth: new Map(),
@@ -2047,6 +2058,43 @@ export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng): void 
   });
 }
 
+/**
+ * Arrest sweep: each cruiser standing on redlined ground (grade ≥ ARREST_GRADE_MIN) may, with
+ * ARREST_CHANCE, seize the nearest on-foot citizen within ARREST_RADIUS — removing them from the
+ * street AND draining a person from their household's occupancy. For nothing: no cause, only the
+ * grade. Greenlined neighborhoods are never swept (the disparity). The player ends it by defunding
+ * the precinct (no precinct → no cruisers → no arrests). Renderer-side; deterministic in `rng`.
+ */
+export function stepArrests(state: AmbientState, map: GameMap, rng: Rng): void {
+  if (state.cruisers.length === 0 || state.peds.length === 0) return;
+  for (const c of state.cruisers) {
+    const cx = Math.round(c.x);
+    const cy = Math.round(c.y);
+    if (!map.inBounds(cx, cy)) continue;
+    if (map.redline[map.idx(cx, cy)]! < ARREST_GRADE_MIN) continue; // only the redlined districts
+    if (!rng.chance(ARREST_CHANCE)) continue;
+    // Nearest on-foot citizen within reach (riders/indoors aren't on the street).
+    let victim = -1;
+    let best = ARREST_RADIUS + 1;
+    for (let i = 0; i < state.peds.length; i++) {
+      const p = state.peds[i]!;
+      if (p.phase === 'inside' || p.phase === 'driving') continue;
+      const d = Math.abs(Math.round(p.x) - cx) + Math.abs(Math.round(p.y) - cy);
+      if (d < best) {
+        best = d;
+        victim = i;
+      }
+    }
+    if (victim < 0) continue;
+    const taken = state.peds[victim]!;
+    if (taken.homeTile !== undefined) {
+      const cur = state.occupancy.get(taken.homeTile);
+      if (cur !== undefined) state.occupancy.set(taken.homeTile, Math.max(0, cur - ARREST_DRAIN));
+    }
+    state.peds.splice(victim, 1); // taken off the street, for nothing
+  }
+}
+
 function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   // 1. Despawn anything whose substrate vanished (read-only self-healing). Last-mile
   //    walkers (walkTo set) are exempt — they cross lots/roads off-grid and self-despawn
@@ -2093,8 +2141,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     );
   });
 
-  // 3a. Move the police cruisers (patrol the redlined streets from their precincts).
+  // 3a. Move the police cruisers (patrol the redlined streets from their precincts), then on a
+  //     slow cadence run the arrest sweep — citizens taken off the street, the household drained.
   stepCruisers(state, map, rng);
+  state.arrestTick += 1;
+  if (state.arrestTick % ARREST_CADENCE === 0) stepArrests(state, map, rng);
 
   // 3b. Move the pedestrians. A walk target (walkTo) is reached by a MANHATTAN walk — an
   //     axis-aligned, tile-by-tile route over walkable tiles (never diagonally, never through
