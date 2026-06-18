@@ -45,6 +45,7 @@ const FLOCK_CAP = 32;
 // face of the over-policing the civic layer models). One per precinct, capped.
 const CRUISER_CAP = 8;
 const CRUISER_LIFE = 400; // substeps a patrol runs before recycling back to its precinct (~20s)
+const HUNT_RADIUS = 8; // a cruiser homes in on an on-foot citizen within this Manhattan distance
 // Arrests: a cruiser in a redlined zone takes a nearby citizen off the street FOR NOTHING and
 // drains a person from their household — the violence of over-policing, made tangible. Only in
 // redlined zones (the disparity); the player ends it by defunding (no precinct → no cruisers).
@@ -2053,10 +2054,86 @@ export function spawnCruisers(state: AmbientState, map: GameMap, rng: Rng): void
   }
 }
 
+/** The nearest on-foot citizen to (x, y) within HUNT_RADIUS, as a rounded tile, or null. */
+function nearestHuntTarget(peds: readonly Ped[], x: number, y: number): { x: number; y: number } | null {
+  let best = HUNT_RADIUS + 1;
+  let tx = 0;
+  let ty = 0;
+  let found = false;
+  for (const p of peds) {
+    if (p.phase === 'inside' || p.phase === 'driving') continue; // not on the street
+    const px = Math.round(p.x);
+    const py = Math.round(p.y);
+    const d = Math.abs(px - x) + Math.abs(py - y);
+    if (d < best) {
+      best = d;
+      tx = px;
+      ty = py;
+      found = true;
+    }
+  }
+  return found ? { x: tx, y: ty } : null;
+}
+
 /**
- * Move every cruiser one substep: wander the local road grid (despawn if its road was bulldozed
- * or it boxes itself in), counting down its patrol life so the fleet recirculates from the
- * precincts rather than drifting away. Renderer-side; deterministic in `rng`.
+ * Deliberate cruiser patrol (replaces the old random wander): among the passable, non-reversing,
+ * non-recent road neighbours, pick the one that (a) closes on the nearest on-foot citizen if one
+ * is within HUNT_RADIUS — the cruiser HUNTS — else (b) climbs toward more redlined ground (higher
+ * grade), so patrols seek the redlined streets instead of drifting into greenlined ones. A small
+ * rng jitter breaks ties. Returns the reverse on a dead-end, or -1 when boxed in (caller despawns).
+ * Deterministic in `rng`.
+ */
+export function nextPatrolStep(
+  map: GameMap,
+  x: number,
+  y: number,
+  fromDir: number,
+  rng: Rng,
+  recent: readonly number[] | undefined,
+  peds: readonly Ped[],
+): number {
+  const options: number[] = [];
+  let uTurn = -1;
+  for (let d = 0; d < 4; d++) {
+    const nx = x + DIR_DX[d]!;
+    const ny = y + DIR_DY[d]!;
+    if (!map.inBounds(nx, ny) || !carPassable(map, nx, ny)) continue;
+    if (d === fromDir) {
+      uTurn = d;
+      continue;
+    }
+    options.push(d);
+  }
+  if (options.length === 0) return uTurn; // dead-end: reverse, or -1 if truly isolated
+  let pool = options;
+  if (recent && recent.length > 0) {
+    const fresh = options.filter((d) => !recent.includes(map.idx(x + DIR_DX[d]!, y + DIR_DY[d]!)));
+    if (fresh.length === 0) return -1; // boxed in by its own path → despawn
+    pool = fresh;
+  }
+  const target = nearestHuntTarget(peds, x, y);
+  let bestDir = pool[0]!;
+  let bestScore = -Infinity;
+  for (const d of pool) {
+    const nx = x + DIR_DX[d]!;
+    const ny = y + DIR_DY[d]!;
+    // Hunt: distance to the citizen dominates (×10). Else seek the redline grade. +jitter tiebreak.
+    const score = target
+      ? -(Math.abs(nx - target.x) + Math.abs(ny - target.y)) * 10 + rng.nextInt(3)
+      : map.redline[map.idx(nx, ny)]! + rng.nextInt(3);
+    if (score > bestScore) {
+      bestScore = score;
+      bestDir = d;
+    }
+  }
+  return bestDir;
+}
+
+/**
+ * Move every cruiser one substep: a DELIBERATE patrol (hunt nearby citizens, else seek redlined
+ * streets — see nextPatrolStep), despawning if its road was bulldozed or it boxes itself in, and
+ * counting down its patrol life so the fleet recirculates from the precincts. Renderer-side;
+ * deterministic in `rng`.
  */
 export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng): void {
   state.cruisers = state.cruisers.filter((c) => {
@@ -2064,7 +2141,7 @@ export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng): void 
     c.dwell! -= 1;
     if (!carPassable(map, Math.round(c.x), Math.round(c.y))) return false; // road gone
     return advanceMover(c, CAR_SPEED, map, (x, y, fromDir, recent) =>
-      nextRoadStep(map, x, y, fromDir, rng, recent),
+      nextPatrolStep(map, x, y, fromDir, rng, recent, state.peds),
     );
   });
 }

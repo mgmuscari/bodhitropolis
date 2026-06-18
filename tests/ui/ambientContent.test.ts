@@ -50,6 +50,7 @@ import {
   stepRoadDecay,
   spawnCruisers,
   stepCruisers,
+  nextPatrolStep,
   stepArrests,
   arrestChance,
   AMBIENT_MAX_FRAME_MS,
@@ -796,6 +797,31 @@ describe('police cruisers (over-policing made visible)', () => {
     const state = createAmbientState();
     spawnCruisers(state, gridMap(), ambientFork('cr')); // roads, no precinct
     expect(state.cruisers.length).toBe(0);
+  });
+
+  // A + junction at (5,5) on an 11x11 grid (horizontal y=5, vertical x=5).
+  const crossMap = (): GameMap => {
+    const map = new GameMap(11, 11);
+    for (let x = 0; x < 11; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    for (let y = 0; y < 11; y++) map.built[map.idx(5, y)] = BuiltKind.RoadStreet;
+    return map;
+  };
+
+  it('patrol seeks redlined ground at a junction (no one to chase)', () => {
+    const map = crossMap();
+    map.redline.fill(20);
+    map.redline[map.idx(5, 4)] = 240; // the NORTH branch is the redlined one
+    // Coming from the west (fromDir=West=3); options N/E/S — picks the redlined branch.
+    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('seek'), [], [])).toBe(0); // 0 = North
+  });
+
+  it('patrol hunts a nearby citizen, overriding the grade preference', () => {
+    const map = crossMap();
+    map.redline.fill(20);
+    map.redline[map.idx(5, 4)] = 240; // north is the most redlined...
+    const peds = [{ x: 9, y: 5, dir: 1, tx: 9, ty: 5, phase: 'to-building' as const }];
+    // ...but a citizen sits to the EAST — the cruiser closes on the person, not the grade.
+    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('hunt'), [], peds)).toBe(1); // 1 = East
   });
 
   it('patrols the road grid and recycles when its shift ends', () => {
