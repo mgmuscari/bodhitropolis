@@ -65,8 +65,9 @@ Plan: `~/.claude/plans/love-this-so-far-silly-moonbeam.md`.
 - ✅ **R2 — legibility (the indictment)** (PR #71) — HOLC overlay (`redlineOverlayContent.ts`, R key
   / dock button) + inspect grade line + opening-briefing `RedlineReport`. Plus PR #72: name redlining
   PRECISELY (housing denial + segregation, cause→consequence), not "disinvestment".
-- 🔴 **R3 — live service coverage (fire/health):** `growth/services.ts` BFS coverage (mirrors
-  power), redlined zones under-served, feeds land value/occupancy; player extends = repair. ONLY UNBUILT ITEM.
+- ✅ **R3 — live service coverage (fire/health)** (PR merged) — FireStation kind provided to greenlined
+  zones (withheld from redlined); live `computeCoverage` (ambient); under-served plots lose land value;
+  player extends coverage to repair. Inspect served/under-served + a Coverage overlay (V).
 - ✅ **R4 — police-oppression civic dynamic** (PR #75) — worldgen `Precinct` concentrated in redlined
   zones (persists through era5); `civicTick` over-policing penalty (voice/trust down, grade-scaled),
   countered by community alternatives. Player defunds (bulldoze → Healing Commons); never builds police.
@@ -75,8 +76,10 @@ Plan: `~/.claude/plans/love-this-so-far-silly-moonbeam.md`.
   cared-for recover, land-value drag). Both feed the decay loop.
 - ✅ **Police live layer** (PR #76) — patrol cruisers from precincts (flashing lights), grade-scaled
   arrests that drain occupancy AND crater household wellbeing, deliberate patrol (hunt citizens / seek
-  redlined streets). 🟡 IN PROGRESS (this branch): Police Violence overlay + ghost AI (scatter/chase
-  phases, distinct chase personalities, community safe-zones that repel cruisers).
+  redlined streets).
+- ✅ **Police Violence overlay** (PR #77) — the inverse of a crime map: where the STATE does harm.
+- ✅ **Ghost AI** (PR merged) — scatter/chase phases, distinct chase personalities (Blinky/Pinky/Clyde),
+  and community safe-zones that REPEL cruisers (the player builds refuge by building community power).
 
 ## TOOLBAR + TECH TREE OVERHAUL (overnight 2026-06-17)
 
@@ -139,10 +142,9 @@ layer (non-deterministic).
 - ✅ **Tech tree can't be closed when it covers the menu bar** (Maddy 2026-06-17; PR pending) — added an
   always-visible ✕ in the panel header (the panel top never scrolls, so it's reachable even over the
   dock) + Escape-to-close. Live-verified both.
-- 🟡 **Biodiversity overlay reads inverted** (Maddy 2026-06-17; fix pending) — marked HIGH in urban,
-  LOW in wilds. Root cause: `biodiversityField` used Simpson's index over habitat CLASSES, which
-  rewards heterogeneity — mixed urban/edge patchwork scores highest, uniform wild lowest. Redesign to
-  ecological RICHNESS (flora × fauna, smoothed): high where both plants + animals thrive, low in urban.
+- ✅ **Biodiversity overlay reads inverted** (Maddy 2026-06-17; PR merged) — was Simpson's index over
+  habitat CLASSES (rewarded urban/edge heterogeneity). Redesigned `biodiversityField` to ecological
+  RICHNESS (flora × fauna, smoothed): high in thriving wilds, low in the sealed city.
 - ✅ **Parking display caps at 4** (Maddy 2026-06-17; PR pending) — the cap was the stall count
   (STALLS_PER_AXIS=2 → 4/tile); bumped to 3 (→ a 3×3 = 9-car grid per tile). The renderer already
   draws every parked car, so a single-tile lot now holds + shows up to 9.
