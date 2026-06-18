@@ -2294,9 +2294,12 @@ export function accumulateWaterRunoff(state: AmbientState, map: GameMap): void {
           // This is the Hackensack: the contamination starts at the redlined plant.
           runoff += RUNOFF_INDUSTRY * (1 + map.redline[ni]! / 255);
         } else if (isRoadKind(k) || k === BuiltKind.ParkingLot || zoneTypeOf(k) !== ZoneType.None) {
-          runoff += RUNOFF_URBAN;
+          // Redlined built ground sheds more toxic runoff — the disinvested district
+          // (no drainage, dumping, industrial legacy) poisons its own water. Grade-
+          // scaled so the mechanic holds even where worldgen gutted the industry.
+          runoff += RUNOFF_URBAN * (1 + map.redline[ni]! / 255);
         } else {
-          runoff += RUNOFF_WILD;
+          runoff += RUNOFF_WILD; // wilderness is not a toxic source, regardless of grade
         }
         if ((state.wear.get(ni) ?? 0) > 40) runoff += RUNOFF_WORN;
       }

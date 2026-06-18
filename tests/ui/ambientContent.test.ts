@@ -726,6 +726,12 @@ describe('water contamination: industry is the toxic source, redlined most of al
     expect(shedInto(BuiltKind.Industrial, 255)).toBeGreaterThan(shedInto(BuiltKind.Industrial, 0));
   });
 
+  it('redlined ground sheds more than greenlined ground (the disinvested district)', () => {
+    // Not just industry: any redlined built ground sheds heavier toxic runoff, so
+    // the mechanic holds even where the worldgen gutted the industry to nothing.
+    expect(shedInto(BuiltKind.RoadStreet, 255)).toBeGreaterThan(shedInto(BuiltKind.RoadStreet, 0));
+  });
+
   it('flows downstream: a clean tile below the source is contaminated by it', () => {
     // A 1-wide river running down a slope; pollute only the top (upstream) tile.
     const map = new GameMap(3, 6);
