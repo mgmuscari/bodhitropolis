@@ -163,16 +163,17 @@ layer (non-deterministic).
   black 0.66) every un-highlighted tile, and the highlights paint at a strong 0.92 alpha, so the
   powered/dark + served/under-served plots GLOW against a darkened city. Live-verified: pressing U/V
   now dims the map and the buildings pop green/red. (Redline/eco/civic fill the map already → no dim.)
-- 🟡 **Eco overlay should include water + ground + air pollution** (Maddy 2026-06-18) — extend the E
-  cycle with the pollution layers.
-  - ✅ **Air + water** (PR pending) — `airPollution` (live `ambient.pollution`, traffic smog, over
-    land) + `waterPollution` (live `ambient.waterPollution`, runoff, over water — the dingy creeks)
-    added to the eco cycle (soil→flora→fauna→biodiversity→air→water). Live-verified. Also fixed the
-    stale "Simpson index" biodiversity legend copy → "richness".
-  - 🔴 **Ground pollution = a NEW live land-contamination field** (Maddy's call): industry + dirty
-    power + decay poison the surrounding LAND, lingering + slow to clear, reparable (the land analogue
-    of water runoff, and the real source that runs off into the creeks). **Demand-path litter/wear
-    must feed into ground pollution** (Maddy 2026-06-18). Next PR.
+- ✅ **Eco overlay should include water + ground + air pollution** (Maddy 2026-06-18) — the E cycle
+  is now soil→flora→fauna→biodiversity→air→ground→water.
+  - ✅ **Air + water** (PR #92) — `airPollution` (live `ambient.pollution`, traffic smog, over land)
+    + `waterPollution` (live `ambient.waterPollution`, runoff, over water — the dingy creeks). Also
+    fixed the stale "Simpson index" biodiversity legend copy → "richness".
+  - ✅ **Ground pollution = a NEW live land-contamination field** (PR pending) — `accumulateGround
+    Pollution`: industry + dirty power + demand-path litter/wear poison the ground they sit on and
+    the land around them (grade-scaled, seeps a tile), lingering (GROUND_DECAY 0.8) but reparable —
+    it clears once the source is gone. The land analogue of water runoff (the source the creeks run
+    off from). Live-verified: 1214 contaminated tiles, max 254, litter feeding in from 1271 worn
+    tiles; the `groundPollution` eco view (clean land → toxic ground). Non-hashed; N=120 gate intact.
 
 ### Agent-movement substrate cluster (Maddy 2026-06-18) — likely ONE missing abstraction
 

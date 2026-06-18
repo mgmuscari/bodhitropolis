@@ -21,17 +21,19 @@ const ENDPOINTS: Record<OverlayView, { lo: readonly number[]; hi: readonly numbe
   fauna: { lo: [228, 214, 176], hi: [210, 120, 40] },
   biodiversity: { lo: [120, 72, 176], hi: [226, 200, 64] },
   airPollution: { lo: [150, 170, 150], hi: [54, 44, 38] },
+  groundPollution: { lo: [160, 165, 135], hi: [92, 56, 26] },
   waterPollution: { lo: [60, 130, 185], hi: [120, 120, 52] },
 };
 
 describe('cycleOverlay', () => {
-  it('walks off → soil → flora → fauna → biodiversity → air → water → off', () => {
+  it('walks off → soil → flora → fauna → biodiversity → air → ground → water → off', () => {
     expect(cycleOverlay(null)).toBe('soil');
     expect(cycleOverlay('soil')).toBe('flora');
     expect(cycleOverlay('flora')).toBe('fauna');
     expect(cycleOverlay('fauna')).toBe('biodiversity');
     expect(cycleOverlay('biodiversity')).toBe('airPollution');
-    expect(cycleOverlay('airPollution')).toBe('waterPollution');
+    expect(cycleOverlay('airPollution')).toBe('groundPollution');
+    expect(cycleOverlay('groundPollution')).toBe('waterPollution');
     expect(cycleOverlay('waterPollution')).toBe(null); // off-wrap
   });
 
@@ -42,6 +44,7 @@ describe('cycleOverlay', () => {
       'fauna',
       'biodiversity',
       'airPollution',
+      'groundPollution',
       'waterPollution',
     ]);
   });
@@ -118,6 +121,7 @@ describe('legendLine', () => {
     expect(legendLine('fauna')).toBe('Fauna presence — quiet to teeming');
     expect(legendLine('biodiversity')).toBe('Biodiversity — richness, violet to gold');
     expect(legendLine('airPollution')).toBe('Air pollution — clear air to dark smog');
+    expect(legendLine('groundPollution')).toBe('Ground pollution — clean land to toxic ground');
     expect(legendLine('waterPollution')).toBe('Water pollution — clear to dingy creek');
   });
 });

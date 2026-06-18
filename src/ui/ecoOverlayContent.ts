@@ -6,14 +6,15 @@
 
 import type { OverlayLegend } from './overlayLegend';
 
-/** The ecology heatmap views, in cycle order: the living-land layers, then the POLLUTION layers
- *  (air smog, water runoff — ground contamination joins them next) the player drives down by healing. */
+/** The ecology heatmap views, in cycle order: the living-land layers, then the three POLLUTION
+ *  layers (air smog, ground contamination, water runoff) the player drives down by healing. */
 export type OverlayView =
   | 'soil'
   | 'flora'
   | 'fauna'
   | 'biodiversity'
   | 'airPollution'
+  | 'groundPollution'
   | 'waterPollution';
 export const OVERLAY_VIEWS: readonly OverlayView[] = [
   'soil',
@@ -21,6 +22,7 @@ export const OVERLAY_VIEWS: readonly OverlayView[] = [
   'fauna',
   'biodiversity',
   'airPollution',
+  'groundPollution',
   'waterPollution',
 ];
 
@@ -60,6 +62,7 @@ const RAMPS: Record<OverlayView, { lo: RGB; hi: RGB }> = {
   fauna: { lo: [228, 214, 176], hi: [210, 120, 40] }, // quiet → teeming amber
   biodiversity: { lo: [120, 72, 176], hi: [226, 200, 64] }, // violet → gold
   airPollution: { lo: [150, 170, 150], hi: [54, 44, 38] }, // clear air → dark smog
+  groundPollution: { lo: [160, 165, 135], hi: [92, 56, 26] }, // clean land → toxic sludge brown
   waterPollution: { lo: [60, 130, 185], hi: [120, 120, 52] }, // clear blue → dingy creek
 };
 
@@ -84,6 +87,7 @@ const LEGENDS: Record<OverlayView, string> = {
   fauna: 'Fauna presence — quiet to teeming',
   biodiversity: 'Biodiversity — richness, violet to gold',
   airPollution: 'Air pollution — clear air to dark smog',
+  groundPollution: 'Ground pollution — clean land to toxic ground',
   waterPollution: 'Water pollution — clear to dingy creek',
 };
 
@@ -98,6 +102,7 @@ const LEGEND_ENDS: Record<OverlayView, { title: string; lo: string; hi: string }
   fauna: { title: 'Fauna presence', lo: 'quiet', hi: 'teeming' },
   biodiversity: { title: 'Biodiversity', lo: 'low', hi: 'high' },
   airPollution: { title: 'Air pollution', lo: 'clear', hi: 'smog' },
+  groundPollution: { title: 'Ground pollution', lo: 'clean', hi: 'toxic' },
   waterPollution: { title: 'Water pollution', lo: 'clear', hi: 'dingy' },
 };
 
