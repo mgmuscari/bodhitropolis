@@ -227,8 +227,9 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
   every N tiles regardless of position, so one lands AT the freeway×freeway interchange (where the two
   corridors cross) — a ramp where there should just be the interchange. Skip ramp placement at/near a
   perpendicular-freeway crossing (it's already a free interchange).
-- 🔴 **Cannot build a nuclear plant anywhere** (Maddy 2026-06-18) — the Nuclear plant tool is rejected
-  on every tile. Likely a placement-rule / footprint / tech-gate issue; investigate the build path.
+- ✅ **Cannot build a nuclear plant anywhere** (PR pending) — `canPlaceParcel` clamped footprints to
+  `MAX_FOOTPRINT = 3`, but Nuclear (and Fusion) plants are 4×4, so every placement was rejected.
+  Bumped MAX_FOOTPRINT to 4 (the largest plant). Unit-tested: a 4×4 footprint places on clear land.
 - 🔵 **DEFERRED feature: prevailing wind carries smog** (Maddy 2026-06-18) — air pollution
   (`ambient.pollution`) should drift downwind on a prevailing wind, not just diffuse/linger in place,
   so smog plumes streak from their sources. Live layer.

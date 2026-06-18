@@ -309,7 +309,7 @@ export function hashWorld(world: HashableWorld): string {
 // meaningful invariant.
 
 const MIN_FOOTPRINT = 1;
-const MAX_FOOTPRINT = 3;
+const MAX_FOOTPRINT = 4; // the largest plant footprint (Nuclear/Fusion are 4x4)
 
 /**
  * Transport conversions: the explicit "road diet" transformation table. A tile

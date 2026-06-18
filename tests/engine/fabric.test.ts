@@ -311,10 +311,15 @@ describe('canPlaceParcel', () => {
     expect(canPlaceParcel(map, 1, 1, 2, 2)).toBe(false);
   });
 
-  it('rejects footprint sizes outside 1..3', () => {
+  it('accepts a 4x4 footprint on clear land (Maddy: nuclear/fusion plants are 4x4)', () => {
     const map = new GameMap(8, 8);
-    expect(canPlaceParcel(map, 0, 0, 4, 1)).toBe(false);
-    expect(canPlaceParcel(map, 0, 0, 1, 4)).toBe(false);
+    expect(canPlaceParcel(map, 1, 1, 4, 4)).toBe(true);
+  });
+
+  it('rejects footprint sizes outside 1..4', () => {
+    const map = new GameMap(8, 8);
+    expect(canPlaceParcel(map, 0, 0, 5, 1)).toBe(false);
+    expect(canPlaceParcel(map, 0, 0, 1, 5)).toBe(false);
     expect(canPlaceParcel(map, 0, 0, 0, 1)).toBe(false);
   });
 });
