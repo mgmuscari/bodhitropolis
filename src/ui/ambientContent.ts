@@ -256,6 +256,8 @@ const RUNOFF_WILD = 0.4; // a wild/empty ground neighbour
 const RUNOFF_WORN = 2; // extra when that ground is a beaten desire path
 const RUNOFF_INDUSTRY = 4; // an industrial neighbour (the toxic source), grade-scaled up to 2x
 const WATER_FLOW_FRACTION = 0.25; // share of a tile's pollution that flows downstream per cadence
+const WATER_TREAT_RADIUS = 6; // a wastewater works cleans water within this Manhattan radius
+const WATER_TREAT_AMOUNT = 30; // pollution removed at the works per cadence (falls off with distance)
 
 /** Substeps a pedestrian spends INSIDE its destination building before walking back to the
  *  car: a base plus a seeded spread so visitors don't all return together. ~3–13s. */
@@ -2256,6 +2258,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   if (state.waterTick % WATER_RUNOFF_CADENCE === 0) {
     accumulateWaterRunoff(state, map);
     flowWaterPollution(state, map); // carry the contamination downstream to the banks below
+    treatWaterPollution(state, map); // the player's wastewater works heals it back
   }
 
   // 7. Land value: on a slow cadence, recompute each plot's desirability from the healed land +
@@ -2340,6 +2343,38 @@ export function flowWaterPollution(state: AmbientState, map: GameMap): void {
     if (move <= 0) continue;
     for (const ni of lower) layField(state.waterPollution, ni, move, WATER_POLL_MAX);
     state.waterPollution.set(i, p - move * lower.length);
+  }
+}
+
+/**
+ * Reparation: a WastewaterWorks cleans contaminated water within WATER_TREAT_RADIUS,
+ * strongest at the works and falling off with distance. The player's heal for the
+ * poisoned creek — restore the water, restore the bankside community's land value and
+ * health (the inverse of the harm). Rewilding the banks also helps implicitly (wild
+ * ground sheds almost nothing). Live/non-hashed; few works, so cheap.
+ */
+export function treatWaterPollution(state: AmbientState, map: GameMap): void {
+  if (state.waterPollution.size === 0) return;
+  for (let wi = 0; wi < map.built.length; wi++) {
+    if (map.built[wi] !== BuiltKind.WastewaterWorks) continue;
+    const wx = wi % map.width;
+    const wy = (wi - wx) / map.width;
+    for (let dy = -WATER_TREAT_RADIUS; dy <= WATER_TREAT_RADIUS; dy++) {
+      for (let dx = -WATER_TREAT_RADIUS; dx <= WATER_TREAT_RADIUS; dx++) {
+        const dist = Math.abs(dx) + Math.abs(dy);
+        if (dist > WATER_TREAT_RADIUS) continue;
+        const nx = wx + dx;
+        const ny = wy + dy;
+        if (!map.inBounds(nx, ny)) continue;
+        const ni = map.idx(nx, ny);
+        if (map.water[ni] === 0) continue;
+        const cur = state.waterPollution.get(ni);
+        if (cur === undefined) continue;
+        const nv = cur - WATER_TREAT_AMOUNT * (1 - dist / (WATER_TREAT_RADIUS + 1));
+        if (nv <= 0) state.waterPollution.delete(ni);
+        else state.waterPollution.set(ni, nv);
+      }
+    }
   }
 }
 

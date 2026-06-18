@@ -46,6 +46,7 @@ import {
   liveInspectLine,
   accumulateWaterRunoff,
   flowWaterPollution,
+  treatWaterPollution,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -730,6 +731,19 @@ describe('water contamination: industry is the toxic source, redlined most of al
     // Not just industry: any redlined built ground sheds heavier toxic runoff, so
     // the mechanic holds even where the worldgen gutted the industry to nothing.
     expect(shedInto(BuiltKind.RoadStreet, 255)).toBeGreaterThan(shedInto(BuiltKind.RoadStreet, 0));
+  });
+
+  it('a wastewater works cleans nearby contaminated water (the player heals it)', () => {
+    const map = new GameMap(12, 12);
+    for (let y = 0; y < 12; y++) map.water[map.idx(2, y)] = Water.River; // a polluted river
+    const state = createAmbientState();
+    for (let y = 0; y < 12; y++) state.waterPollution.set(map.idx(2, y), 200);
+    map.built[map.idx(3, 6)] = BuiltKind.WastewaterWorks; // a works on the bank, mid-river
+    treatWaterPollution(state, map);
+    const near = state.waterPollution.get(map.idx(2, 6)) ?? 0;
+    const far = state.waterPollution.get(map.idx(2, 0)) ?? 0;
+    expect(near).toBeLessThan(200); // cleaned
+    expect(near).toBeLessThan(far); // more cleaning closer to the works
   });
 
   it('flows downstream: a clean tile below the source is contaminated by it', () => {
