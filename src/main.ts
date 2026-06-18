@@ -14,6 +14,7 @@ import { gradeLetter } from './worldgen/redline';
 import { ecologyReport } from './ecology/report';
 import { biodiversityField } from './ecology/biodiversity';
 import { Water } from './engine/map';
+import { isRoadKind } from './engine/fabric';
 import { createRng } from './engine/rng';
 import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
@@ -502,6 +503,8 @@ export function main(): void {
         pollution: ambientState.pollution.get(i),
         // On a water tile, surface its contamination (the poisoned creek made legible).
         water: world.map.water[i] !== Water.None ? ambientState.waterPollution.get(i) : undefined,
+        // On a road tile, surface its disrepair (redlined roads crumble).
+        road: isRoadKind(world.map.built[i]!) ? ambientState.roadDecay.get(i) : undefined,
       });
       if (live) line += ` · ${live}`;
       // Power status: a plant shows its output; a consumer shows powered/unpowered.
