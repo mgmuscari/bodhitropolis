@@ -889,6 +889,15 @@ describe('arrests: cruisers drain the redlined community for nothing', () => {
     for (let n = 0; n < 40; n++) stepArrests(state, map, rng);
     expect(state.peds.length).toBe(1); // no cruiser, no arrest
   });
+
+  it('stains the spot with police violence (the data behind the anti-crime-map)', () => {
+    const { map, state } = policedStreet(255);
+    const rng = ambientFork('arrest');
+    for (let n = 0; n < 40 && state.peds.length > 0; n++) stepArrests(state, map, rng);
+    let total = 0;
+    for (const v of state.policeViolence.values()) total += v;
+    expect(total).toBeGreaterThan(0); // the arrest left a record
+  });
 });
 
 describe('road decay: redlined roads crumble, cared-for roads recover', () => {
@@ -2043,6 +2052,10 @@ describe('liveInspectLine (inspect live-sample formatting)', () => {
 
   it('formats a crumbling road tile', () => {
     expect(liveInspectLine({ traffic: 12, road: 140 })).toBe('traffic 12 · road 140 crumbling');
+  });
+
+  it('formats a police-violence tile', () => {
+    expect(liveInspectLine({ violence: 90 })).toBe('police violence 90');
   });
 
   it('omits absent fields and returns empty when nothing is present', () => {

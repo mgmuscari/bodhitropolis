@@ -505,6 +505,8 @@ export function main(): void {
         water: world.map.water[i] !== Water.None ? ambientState.waterPollution.get(i) : undefined,
         // On a road tile, surface its disrepair (redlined roads crumble).
         road: isRoadKind(world.map.built[i]!) ? ambientState.roadDecay.get(i) : undefined,
+        // Where the police have done violence (arrests) — surfaced on any tile that carries it.
+        violence: ambientState.policeViolence.get(i),
       });
       if (live) line += ` · ${live}`;
       // Power status: a plant shows its output; a consumer shows powered/unpowered.
