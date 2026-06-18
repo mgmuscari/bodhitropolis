@@ -267,8 +267,9 @@ const WATER_TREAT_AMOUNT = 30; // pollution removed at the works per cadence (fa
 const ROAD_DECAY_MAX = 255;
 const ROAD_CADENCE = 30; // recompute road decay every N substeps (a slow infrastructure clock)
 const ROAD_CRUMBLE_RATE = 6; // decay added per cadence to a fully redlined, uncared road
-const ROAD_RECOVER_RATE = 8; // decay removed per cadence where the neighborhood is cared-for
-const ROAD_CARED_LV = 110; // local land value at/above which roads get maintained (recover)
+const ROAD_RECOVER_RATE = 24; // decay removed per cadence where cared-for — recovery clearly
+//                               outpaces crumbling so a healed district's roads visibly mend
+const ROAD_CARED_LV = 100; // local land value at/above which roads get maintained (recover)
 
 /** Substeps a pedestrian spends INSIDE its destination building before walking back to the
  *  car: a base plus a seeded spread so visitors don't all return together. ~3–13s. */
