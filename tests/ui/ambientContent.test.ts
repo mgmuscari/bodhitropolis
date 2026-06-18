@@ -2427,3 +2427,42 @@ describe('setPlantEmitters (dirty-plant smog into the live pollution field)', ()
     expect(state.pollution.get(tile) ?? 0).toBe(0);
   });
 });
+
+describe('freeway ramps (RoadRamp — the limited-access interchange, Maddy 2026-06-18)', () => {
+  // A ramp cross-section: convert one column of the 3-wide freeway to RoadRamp, with streets flanking
+  // it on both perpendicular sides (the crossing) — and a plain street touching a non-ramp column.
+  function rampedFreeway(): GameMap {
+    const m = freewayH(); // rows 5 (N→West), 6 (through), 7 (S→East), full width
+    for (const y of [5, 6, 7]) m.built[m.idx(10, y)] = BuiltKind.RoadRamp; // ramp cross-section at x=10
+    m.built[m.idx(10, 4)] = BuiltKind.RoadStreet; // cross street north of the ramp
+    m.built[m.idx(10, 8)] = BuiltKind.RoadStreet; // and south of it
+    m.built[m.idx(13, 4)] = BuiltKind.RoadStreet; // a street touching a NON-ramp freeway column
+    return m;
+  }
+
+  it('a ramp tile is a free interchange (cross traffic crosses the freeway here)', () => {
+    const m = rampedFreeway();
+    expect(canDrive(m, 10, 4, 10, 5)).toBe(true); // street enters the ramp from the north ✓
+    expect(canDrive(m, 10, 5, 10, 6)).toBe(true); // crosses through the ramp cross-section ✓
+    expect(canDrive(m, 10, 6, 10, 7)).toBe(true);
+    expect(canDrive(m, 10, 7, 10, 8)).toBe(true); // exits to the street on the south side ✓
+  });
+
+  it('still blocks cross traffic where the freeway is NOT a ramp (limited access holds)', () => {
+    const m = rampedFreeway();
+    expect(canDrive(m, 13, 4, 13, 5)).toBe(false); // a street can't cut into a non-ramp freeway column ✗
+  });
+
+  it('the freeway flows ALONG itself through a ramp (the corridor stays continuous)', () => {
+    const m = rampedFreeway();
+    expect(canDrive(m, 11, 5, 10, 5)).toBe(true); // westbound north lane → onto the ramp ✓
+    expect(canDrive(m, 10, 5, 9, 5)).toBe(true); // → off the ramp, continuing west along the lane ✓
+  });
+
+  it('a ramp tile classifies as null (free), and the lanes around it stay classified', () => {
+    const m = rampedFreeway();
+    expect(freewayLane(m, 10, 5)).toBeNull(); // the ramp itself is a free interchange tile
+    expect(freewayLane(m, 9, 5)).toEqual({ role: 'outer', dir: 3, outward: 0 }); // lane intact past the ramp
+    expect(freewayLane(m, 11, 7)).toEqual({ role: 'outer', dir: 1, outward: 2 });
+  });
+});

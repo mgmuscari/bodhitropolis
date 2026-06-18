@@ -770,7 +770,7 @@ function sameRun(map: GameMap, x: number, y: number, k: number, dx: number, dy: 
   for (let i = 1; i <= LANE_SCAN_CAP; i++) {
     const nx = x + dx * i;
     const ny = y + dy * i;
-    if (!map.inBounds(nx, ny) || map.built[map.idx(nx, ny)] !== k) break;
+    if (!map.inBounds(nx, ny) || !sameLaneKind(k, map.built[map.idx(nx, ny)]!)) break;
     n++;
   }
   return n;
@@ -802,7 +802,7 @@ export function freewayLane(map: GameMap, x: number, y: number): FreewayLane | n
   const same = (d: number): boolean => {
     const nx = x + DIR_DX[d]!;
     const ny = y + DIR_DY[d]!;
-    return map.inBounds(nx, ny) && map.built[map.idx(nx, ny)] === k;
+    return map.inBounds(nx, ny) && sameLaneKind(k, map.built[map.idx(nx, ny)]!);
   };
   const vert = 1 + sameRun(map, x, y, k, 0, -1) + sameRun(map, x, y, k, 0, 1);
   const horiz = 1 + sameRun(map, x, y, k, -1, 0) + sameRun(map, x, y, k, 1, 0);
@@ -955,7 +955,19 @@ function freewayStep(
 /** A car may occupy a road (1..3) or a parking lot — cars cut THROUGH parking (the
  *  accumulated concrete of the over-paved city) rather than routing around it. */
 function carTraversable(kind: number): boolean {
-  return isCarRoad(kind) || kind === BuiltKind.ParkingLot;
+  return isCarRoad(kind) || kind === BuiltKind.ParkingLot || kind === BuiltKind.RoadRamp;
+}
+
+/** A freeway-family tile for LANE GEOMETRY: a highway or a ramp. A ramp is a freeway tile that also
+ *  meets the surface, so for run-length classification it counts as freeway (it must not break the
+ *  lane runs around it), even though canDrive treats the ramp itself as a free interchange. */
+function isFreewayKind(kind: number): boolean {
+  return kind === BuiltKind.RoadHighway || kind === BuiltKind.RoadRamp;
+}
+
+/** Same lane material for run measurement: identical kinds, or both freeway-family (highway/ramp). */
+function sameLaneKind(a: number, b: number): boolean {
+  return a === b || (isFreewayKind(a) && isFreewayKind(b));
 }
 
 /** Car traversability for general (non-lane) routing: a road or parking tile that is
@@ -1124,7 +1136,7 @@ function isWalkable(map: GameMap, x: number, y: number): boolean {
   if (!map.inBounds(x, y)) return false;
   if (map.water[map.idx(x, y)] !== 0) return false; // Water.None === 0
   const k = map.built[map.idx(x, y)]!;
-  if (k === BuiltKind.RoadHighway) return false; // a pedestrian can't cross a freeway
+  if (k === BuiltKind.RoadHighway || k === BuiltKind.RoadRamp) return false; // no walking a freeway/ramp
   return zoneTypeOf(k) === ZoneType.None;
 }
 
