@@ -14,6 +14,8 @@
 // import (the guard forbids it), so the band thresholds live here, not shared with
 // worldgen's gradeBucket — a deliberate, tiny duplication that keeps layering clean.
 
+import type { OverlayLegend } from './overlayLegend';
+
 /** The single redline heatmap view (the grade). */
 export type RedlineOverlayView = 'grade';
 export const REDLINE_VIEWS: readonly RedlineOverlayView[] = ['grade'];
@@ -43,4 +45,17 @@ export function redlineOverlayTint(value: number): RGBA {
 /** The dock legend line for the redline overlay. */
 export function redlineLegendLine(_view: RedlineOverlayView): string {
   return 'Redline grade — A greenlined (best) to D redlined (HOLC)';
+}
+
+/** The structured colour KEY for the redline overlay: the four HOLC bands as labelled swatches. */
+export function redlineLegend(): OverlayLegend {
+  return {
+    title: 'Redline grade (HOLC)',
+    stops: [
+      { color: A_GREEN, label: 'A best' },
+      { color: B_BLUE, label: 'B' },
+      { color: C_YELLOW, label: 'C' },
+      { color: D_RED, label: 'D redlined' },
+    ],
+  };
 }

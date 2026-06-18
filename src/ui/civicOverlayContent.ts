@@ -10,6 +10,7 @@
 import { OVERLAY_VIEWS } from './ecoOverlayContent';
 import { REDLINE_VIEWS } from './redlineOverlayContent';
 import { POLICE_VIEWS } from './policeViolenceOverlayContent';
+import type { OverlayLegend } from './overlayLegend';
 
 /** The three civic heatmap views, in cycle order. */
 export type CivicOverlayView = 'belonging' | 'voice' | 'trust';
@@ -56,6 +57,24 @@ const LEGENDS: Record<CivicOverlayView, string> = {
 /** The dock legend line for an active civic overlay view. */
 export function civicLegendLine(view: CivicOverlayView): string {
   return LEGENDS[view];
+}
+
+const CIVIC_LEGEND_ENDS: Record<CivicOverlayView, { title: string; lo: string; hi: string }> = {
+  belonging: { title: 'Belonging', lo: 'adrift', hi: 'held' },
+  voice: { title: 'Voice', lo: 'unheard', hi: 'heard' },
+  trust: { title: 'Trust', lo: 'wary', hi: 'trusting' },
+};
+
+/** The structured colour KEY for a civic overlay view: the ramp endpoints as labelled swatches. */
+export function civicLegend(view: CivicOverlayView): OverlayLegend {
+  const { lo, hi } = RAMPS[view];
+  return {
+    title: CIVIC_LEGEND_ENDS[view].title,
+    stops: [
+      { color: lo, label: CIVIC_LEGEND_ENDS[view].lo },
+      { color: hi, label: CIVIC_LEGEND_ENDS[view].hi },
+    ],
+  };
 }
 
 // --- E/C exclusivity composite -------------------------------------------
