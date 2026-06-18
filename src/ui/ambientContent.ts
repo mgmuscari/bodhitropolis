@@ -135,6 +135,8 @@ const LV_POLL_PEN = 70; // − the worst nearby smog (distance-weighted), the do
 const LV_TRAFFIC_PEN = 50; // − the worst nearby congestion (noise / danger of a jammed road)
 const LV_WEAR_PEN = 30; // − the worst nearby trampled, littered ground (decay)
 const LV_WATER_PEN = 60; // − the worst nearby contaminated water (the poisoned creek on the banks)
+const LV_ROAD_PEN = 25; // − the worst nearby crumbling road (disinvested infrastructure); bounded so
+//                          the LV↔road feedback settles rather than death-spiralling
 const LV_CADENCE = 20; // recompute every N substeps (~1s) — a slow, whole-map readout
 const LV_PULL = 10; // tiles of extra distance a max-value destination can justify over a drab one
 
@@ -1837,6 +1839,7 @@ export function landValueAt(
   traffic?: ReadonlyMap<number, number>,
   wear?: ReadonlyMap<number, number>,
   water?: ReadonlyMap<number, number>,
+  road?: ReadonlyMap<number, number>,
 ): number {
   const i = map.idx(x, y);
   let v = LV_BASE + (map.floraVitality[i]! / 255) * LV_FLORA + (map.faunaPresence[i]! / 255) * LV_FAUNA;
@@ -1849,6 +1852,7 @@ export function landValueAt(
   let trafNear = 0;
   let wearNear = 0;
   let waterNear = 0;
+  let roadNear = 0;
   for (let dy = -LV_RADIUS; dy <= LV_RADIUS; dy++) {
     for (let dx = -LV_RADIUS; dx <= LV_RADIUS; dx++) {
       const dist = Math.abs(dx) + Math.abs(dy);
@@ -1865,6 +1869,8 @@ export function landValueAt(
       if (wear) wearNear = Math.max(wearNear, sampleField(wear, ni) * falloff);
       // The contaminated creek on the banks: the worst nearby water pollution drags the plot.
       if (water) waterNear = Math.max(waterNear, sampleField(water, ni) * falloff);
+      // Crumbling road frontage drags the plot (disinvested infrastructure).
+      if (road) roadNear = Math.max(roadNear, sampleField(road, ni) * falloff);
     }
   }
   v += amenity * LV_AMENITY;
@@ -1872,6 +1878,7 @@ export function landValueAt(
   v -= (trafNear / TRAFFIC_MAX) * LV_TRAFFIC_PEN;
   v -= (wearNear / WEAR_MAX) * LV_WEAR_PEN;
   v -= (waterNear / WATER_POLL_MAX) * LV_WATER_PEN;
+  v -= (roadNear / ROAD_DECAY_MAX) * LV_ROAD_PEN;
   return v < 0 ? 0 : v > LV_MAX ? LV_MAX : v;
 }
 
@@ -1886,7 +1893,10 @@ export function recomputeLandValue(state: AmbientState, map: GameMap): void {
     for (let x = 0; x < W; x++) {
       const i = map.idx(x, y);
       if (zoneTypeOf(map.built[i]!) === ZoneType.None) continue; // only inhabited plots carry a value
-      state.landValue.set(i, landValueAt(map, x, y, state.pollution, state.traffic, state.wear, state.waterPollution));
+      state.landValue.set(
+        i,
+        landValueAt(map, x, y, state.pollution, state.traffic, state.wear, state.waterPollution, state.roadDecay),
+      );
     }
   }
 }

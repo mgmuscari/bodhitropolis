@@ -683,6 +683,16 @@ describe('land value: derived from amenities minus live nuisances', () => {
     expect(busy).toBeLessThan(quiet);
   });
 
+  it('is lower beside a crumbling road (disinvested infrastructure)', () => {
+    const map = new GameMap(8, 8);
+    map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
+    map.built[map.idx(3, 4)] = BuiltKind.RoadStreet; // the road it fronts
+    const i = map.idx(3, 4);
+    const sound = landValueAt(map, 3, 3, undefined, undefined, undefined, undefined, new Map());
+    const crumbling = landValueAt(map, 3, 3, undefined, undefined, undefined, undefined, new Map([[i, 255]]));
+    expect(crumbling).toBeLessThan(sound);
+  });
+
   it('is lower beside contaminated water (the dingy creek hurts the banks)', () => {
     const map = new GameMap(8, 8);
     map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
