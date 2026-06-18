@@ -97,6 +97,9 @@ export interface MosesParams {
   satelliteParcels: number; // houses (a few strips) filling each satellite's frontage
   satelliteMinCoreDist: number; // a satellite must be at least this far (Manhattan) from the main core
   satelliteSpacing: number; // satellites must be at least this far from each other
+  satelliteMaxBridge: number; // max crossing length to bridge a satellite onto ANOTHER land mass
+  satelliteBridgeCount: number; // how many other land masses to bridge the city onto
+  satelliteMinMassSize: number; // min land-mass size (tiles) worth bridging to
 }
 
 export const DEFAULT_MOSES_PARAMS: MosesParams = {
@@ -157,6 +160,9 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   satelliteParcels: 600, // FILL-ALL: pack the whole exurb grid (else its lower half stays empty too)
   satelliteMinCoreDist: 34,
   satelliteSpacing: 22,
+  satelliteMaxBridge: 30,
+  satelliteBridgeCount: 2,
+  satelliteMinMassSize: 250,
 };
 
 // --- Shared state --------------------------------------------------------
@@ -1520,6 +1526,113 @@ function freewayRoute(map: GameMap, sx: number, sy: number, cx: number, cy: numb
  * the built city, AND reachable by an unbroken (all-land) freeway L. Runs after era 4 so the main city
  * is whole; era 5 disinvestment then decays the exurbs alongside everything else.
  */
+/**
+ * Each OTHER land mass (a 4-connected land component NOT containing the founded core) of at least
+ * `minSize` tiles, returned as its best bridgehead: the coastal tile NEAREST the road network
+ * (smallest `distToRoad`), so a bridge to it is as short as possible. Sorted by mass size desc, so
+ * the city reaches for the biggest land masses first. Deterministic; read-only.
+ */
+export function otherMassEntries(
+  map: GameMap,
+  coreX: number,
+  coreY: number,
+  distToRoad: Int32Array,
+  minSize: number,
+): Array<{ x: number; y: number; size: number }> {
+  const W = map.width;
+  const H = map.height;
+  const N = W * H;
+  const seen = new Uint8Array(N);
+  const coreIdx = coreY * W + coreX;
+  const out: Array<{ x: number; y: number; size: number }> = [];
+  for (let s = 0; s < N; s++) {
+    if (seen[s] || map.water[s] !== Water.None) continue;
+    let size = 0;
+    let containsCore = false;
+    let entry = -1;
+    let entryDist = Infinity;
+    const queue = [s];
+    seen[s] = 1;
+    let head = 0;
+    while (head < queue.length) {
+      const i = queue[head++]!;
+      size++;
+      if (i === coreIdx) containsCore = true;
+      const dr = distToRoad[i]!;
+      if (dr >= 0 && dr < entryDist) {
+        entryDist = dr;
+        entry = i;
+      }
+      const x = i % W;
+      const y = (i - x) / W;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const ni = ny * W + nx;
+        if (!seen[ni] && map.water[ni] === Water.None) {
+          seen[ni] = 1;
+          queue.push(ni);
+        }
+      }
+    }
+    if (!containsCore && size >= minSize && entry >= 0) {
+      out.push({ x: entry % W, y: (entry - (entry % W)) / W, size });
+    }
+  }
+  out.sort((a, b) => b.size - a.size);
+  return out;
+}
+
+/**
+ * Lay a freeway BRIDGE from (sx,sy) to the existing road network ACROSS WATER, expanding the city to
+ * another land mass (Maddy: bridges over bodies of water). Gradient descent on `distToRoad` (BFS
+ * distance to the nearest road over the whole map) — each step decked by placeBridge (water → a
+ * bridge deck, land → a road) until it reaches the network. Returns false if the crossing exceeds
+ * `maxBridge` or it can't descend. Deterministic; worldgen-only, folded into the hash.
+ */
+export function layBridgeToRoad(
+  map: GameMap,
+  sx: number,
+  sy: number,
+  distToRoad: Int32Array,
+  maxBridge: number,
+): boolean {
+  const start = distToRoad[map.idx(sx, sy)]!;
+  if (start < 1 || start > maxBridge) return false; // already on a road, or too far to bridge
+  const path: Array<[number, number]> = [];
+  let x = sx;
+  let y = sy;
+  let d = start;
+  let guard = maxBridge * 3 + 8;
+  while (d > 0 && guard-- > 0) {
+    path.push([x, y]);
+    let best = -1;
+    let bx = x;
+    let by = y;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!map.inBounds(nx, ny)) continue;
+      const nd = distToRoad[map.idx(nx, ny)]!;
+      if (nd >= 0 && (best < 0 || nd < best)) {
+        best = nd;
+        bx = nx;
+        by = ny;
+      }
+    }
+    if (best < 0 || best >= d) break; // can't descend (shouldn't happen on a BFS field)
+    x = bx;
+    y = by;
+    d = best;
+  }
+  if (d !== 0) return false; // never reached the road network
+  for (const [px, py] of path) {
+    if (!isRoadKind(map.built[map.idx(px, py)]!)) placeBridge(map, px, py, BuiltKind.RoadHighway);
+  }
+  return true;
+}
+
 export function eraSatellites(world: WorldState, rng: Rng, p: MosesParams, state: MosesState): void {
   if (!state.founded) return;
   const { map, parcels } = world;
@@ -1552,7 +1665,28 @@ export function eraSatellites(world: WorldState, rng: Rng, p: MosesParams, state
     state.satellites.push({ x: s.x, y: s.y });
     n++;
   }
-  world.log.push(`satellites: ${state.satellites.length} exurbs, +${parcels.aliveCount() - before} parcels`);
+
+  // Bridge the city to OTHER LAND MASSES (Maddy: bridges over bodies of water expand the city). The
+  // exurb sites above are scored from existing fabric, so they only ever land on the founded mass;
+  // this pass explicitly finds the biggest other masses within bridging reach and decks a freeway
+  // bridge to a coastal site on each, founding an exurb there.
+  let bridged = 0;
+  const distToRoad = distanceField(map, (i) => isRoadKind(map.built[i]!));
+  for (const e of otherMassEntries(map, state.siteX, state.siteY, distToRoad, p.satelliteMinMassSize)) {
+    if (bridged >= p.satelliteBridgeCount) break;
+    if (distToRoad[map.idx(e.x, e.y)]! > p.satelliteMaxBridge) continue; // too far across the water
+    if (state.satellites.some((c) => dist(c.x, c.y, e.x, e.y) < p.satelliteSpacing)) continue;
+    if (!layBridgeToRoad(map, e.x, e.y, distToRoad, p.satelliteMaxBridge)) continue;
+    laySatellite(map, parcels, e.x, e.y, p, rng.fork(`bridge${bridged}`));
+    state.satellites.push({ x: e.x, y: e.y });
+    bridged++;
+    n++;
+  }
+
+  world.log.push(
+    `satellites: ${state.satellites.length} exurbs (${bridged} bridged), ` +
+      `+${parcels.aliveCount() - before} parcels`,
+  );
 }
 
 // --- Era 5: disinvestment ------------------------------------------------

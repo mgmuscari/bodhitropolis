@@ -255,6 +255,13 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
   only adds highway tiles). 🔮 FUTURE (Maddy): bridges generalize to OVERPASSES — elevated rail over
   roads, promenades over freeways — the natural extension of `placeBridge` (a transport deck over
   another), needs a per-tile layer/elevation model.
+- ✅ **Worldgen bridges expand the city to other land masses** (PR pending; Maddy feat) — eraSatellites
+  now, after the land exurbs, detects the biggest OTHER land masses (`otherMassEntries`) and, for each
+  within reach (`satelliteMaxBridge`=30, `satelliteBridgeCount`=2, `satelliteMinMassSize`=250), decks
+  a freeway BRIDGE to its nearest-road bridgehead (`layBridgeToRoad`: gradient descent on the
+  distance-to-road field, `placeBridge` per step) and founds an exurb there. Live-verified on the
+  default seed: 1 bridged exurb across open water on a 743-tile mass; road network stays one connected
+  component; N=120 gate intact.
 
 ## Fixed
 
