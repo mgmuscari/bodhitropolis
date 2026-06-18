@@ -55,6 +55,7 @@ import {
   policePhase,
   stepArrests,
   arrestChance,
+  buildSafeZones,
   parkOwnedCarSomewhere,
   pedDespawns,
   AMBIENT_MAX_FRAME_MS,
@@ -879,6 +880,25 @@ describe('police cruisers (over-policing made visible)', () => {
     expect(aim(1, 4)).toEqual({ x: 14, y: 5 }); // ambush (Pinky): 4 tiles AHEAD of its heading
     expect(aim(2, 4)).toBeNull(); // shy (Clyde): too far → patrols
     expect(aim(2, 8)).toEqual({ x: 10, y: 5 }); // shy: close enough → pounces
+  });
+
+  it('community safe-zones repel cruisers: refuge tiles are avoided and never swept', () => {
+    const map = crossMap();
+    map.redline.fill(255); // redlined everywhere
+    map.built[map.idx(5, 4)] = BuiltKind.HealingCommons; // community power on the NORTH branch
+    const safe = buildSafeZones(map);
+    expect(safe.has(map.idx(5, 4))).toBe(true); // the commons + its bubble is refuge
+    // At the junction with a target NORTH (into the refuge), the cruiser refuses north and takes a
+    // non-refuge branch instead (or reverses) — it will not enter the community's bubble.
+    const dir = nextPatrolStep(map, 5, 5, 3, ambientFork('safe'), [], { x: 5, y: 1 }, safe);
+    expect(dir).not.toBe(0); // 0 = North, into the refuge — refused
+    // And a cruiser standing inside a refuge makes no arrest, even redlined + with a citizen present.
+    const state = createAmbientState();
+    state.cruisers.push({ x: 5, y: 4, dir: 0, tx: 5, ty: 4, recent: [] }); // on the commons (refuge)
+    state.peds.push({ x: 5, y: 4, dir: 0, tx: 5, ty: 4, homeTile: map.idx(5, 4), phase: 'to-building' });
+    const rng = ambientFork('safe2');
+    for (let n = 0; n < 40; n++) stepArrests(state, map, rng, safe);
+    expect(state.peds.length).toBe(1); // never arrested inside the community refuge
   });
 
   it('patrols the road grid and recycles when its shift ends', () => {

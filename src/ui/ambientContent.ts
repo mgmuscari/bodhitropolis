@@ -48,6 +48,36 @@ const CRUISER_LIFE = 400; // substeps a patrol runs before recycling back to its
 const HUNT_RADIUS = 8; // a cruiser homes in on an on-foot citizen within this Manhattan distance
 const AMBUSH_LEAD = 4; // tiles AHEAD of a citizen's heading an ambush (Pinky) cruiser aims for
 const SHY_RADIUS = 4; // a shy (Clyde) cruiser only pounces when the citizen is this close, else patrols
+// Community safe-zones (the abolitionist "power pellet"): cruisers will not enter — and make no
+// arrests in — the bubble around community power, so the player carves out refuge by BUILDING it.
+const SAFE_RADIUS = 3;
+const REFUGE_KINDS = new Set<number>([
+  BuiltKind.HealingCommons,
+  BuiltKind.CommunityGarden,
+  BuiltKind.Bazaar,
+  BuiltKind.MakerSpace,
+  BuiltKind.Civic,
+  BuiltKind.Park,
+]);
+
+/** The set of tiles within SAFE_RADIUS of any community-power building — refuge the cruisers avoid
+ *  and never sweep. Built fresh from the map (sparse refuges); the player grows it by building. */
+export function buildSafeZones(map: GameMap): Set<number> {
+  const safe = new Set<number>();
+  for (let i = 0; i < map.built.length; i++) {
+    if (!REFUGE_KINDS.has(map.built[i]!)) continue;
+    const cx = i % map.width;
+    const cy = (i - cx) / map.width;
+    for (let dy = -SAFE_RADIUS; dy <= SAFE_RADIUS; dy++) {
+      for (let dx = -SAFE_RADIUS; dx <= SAFE_RADIUS; dx++) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (map.inBounds(nx, ny)) safe.add(map.idx(nx, ny));
+      }
+    }
+  }
+  return safe;
+}
 // Scatter/chase cadence (the Pac-Man ghost rhythm): the fleet alternates between SCATTER (patrol the
 // redlined streets, ignore people) and CHASE (hunt pedestrians + sweep arrests). Mostly chase, with
 // a periodic scatter lull — so the redlined streets pulse between tense calm and active sweeps.
@@ -2191,6 +2221,7 @@ export function nextPatrolStep(
   rng: Rng,
   recent: readonly number[] | undefined,
   target: { x: number; y: number } | null,
+  safe?: ReadonlySet<number>,
 ): number {
   const options: number[] = [];
   let uTurn = -1;
@@ -2198,6 +2229,7 @@ export function nextPatrolStep(
     const nx = x + DIR_DX[d]!;
     const ny = y + DIR_DY[d]!;
     if (!map.inBounds(nx, ny) || !carPassable(map, nx, ny)) continue;
+    if (safe?.has(map.idx(nx, ny))) continue; // community refuge — cruisers won't enter it
     if (d === fromDir) {
       uTurn = d;
       continue;
@@ -2234,7 +2266,7 @@ export function nextPatrolStep(
  * counting down its patrol life so the fleet recirculates from the precincts. Renderer-side;
  * deterministic in `rng`.
  */
-export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng): void {
+export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng, safe?: ReadonlySet<number>): void {
   const chasing = policePhase(state.policeTick) === 'chase';
   state.cruisers = state.cruisers.filter((c) => {
     if ((c.dwell ?? 0) <= 0) return false; // shift over → recycle (respawn tops up from the precinct)
@@ -2243,7 +2275,7 @@ export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng): void 
     // Chase → aim per the cruiser's ghost personality; scatter → no target, so it seeks redlined streets.
     const target = chasing ? huntTarget(c, state.peds) : null;
     return advanceMover(c, CAR_SPEED, map, (x, y, fromDir, recent) =>
-      nextPatrolStep(map, x, y, fromDir, rng, recent, target),
+      nextPatrolStep(map, x, y, fromDir, rng, recent, target, safe),
     );
   });
 }
@@ -2255,12 +2287,13 @@ export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng): void 
  * redlined). For nothing: no cause, only the grade. The player ends it by defunding the precinct
  * (no precinct → no cruisers → no arrests). Renderer-side; deterministic in `rng`.
  */
-export function stepArrests(state: AmbientState, map: GameMap, rng: Rng): void {
+export function stepArrests(state: AmbientState, map: GameMap, rng: Rng, safe?: ReadonlySet<number>): void {
   if (state.cruisers.length === 0 || state.peds.length === 0) return;
   for (const c of state.cruisers) {
     const cx = Math.round(c.x);
     const cy = Math.round(c.y);
     if (!map.inBounds(cx, cy)) continue;
+    if (safe?.has(map.idx(cx, cy))) continue; // no arrests inside a community refuge
     // Arrest pressure scales with how redlined the ground is (0 at greenlined) — no threshold.
     if (!rng.chance(arrestChance(map.redline[map.idx(cx, cy)]!))) continue;
     // Nearest on-foot citizen within reach (riders/indoors aren't on the street).
@@ -2347,10 +2380,12 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   //     scatter), and run the arrest sweep ONLY during a chase — the streets pulse between calm
   //     and active sweeps (the ghost cadence).
   state.policeTick += 1;
-  stepCruisers(state, map, rng);
+  // Community safe-zones the cruisers avoid + never sweep (built fresh only when there ARE cruisers).
+  const safe = state.cruisers.length > 0 ? buildSafeZones(map) : undefined;
+  stepCruisers(state, map, rng, safe);
   state.arrestTick += 1;
   if (state.arrestTick % ARREST_CADENCE === 0 && policePhase(state.policeTick) === 'chase') {
-    stepArrests(state, map, rng);
+    stepArrests(state, map, rng, safe);
   }
 
   // 3b. Move the pedestrians. A walk target (walkTo) is reached by a MANHATTAN walk — an
