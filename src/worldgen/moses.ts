@@ -69,6 +69,7 @@ export interface MosesParams {
   era3Power: number; // legacy coal/gas plants sited on surviving redlined frontage
   era3Precincts: number; // police precincts sited in the redlined districts (the apparatus of control)
   era3Services: number; // fire stations PROVIDED to the greenlined districts (withheld from redlined)
+  era3CivicServices: number; // clinics/libraries/schools per kind, also concentrated in greenlined
   era3MinDemolish: number; // a corridor must cut through at least this many parcels
   corridorTopK: number; // rng jitter among the top-K scored corridors
   era3Projects: number; // tower-in-the-park Projects placed along the corridor
@@ -131,6 +132,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era3Power: 4,
   era3Precincts: 4,
   era3Services: 4,
+  era3CivicServices: 3,
   era3MinDemolish: 5,
   corridorTopK: 3,
   era3Projects: 5,
@@ -1218,9 +1220,27 @@ export function era3Highways(world: WorldState, rng: Rng, p: MosesParams, state:
     }
   }
 
+  // The wider civic-services suite — clinics (health), libraries + schools (education) — ALSO
+  // concentrated in the greenlined districts and withheld from the redlined ones (disinvestment).
+  // They extend the same live coverage field; the player builds them to repair the redlined zones.
+  let civicServices = 0;
+  for (const kind of [BuiltKind.Clinic, BuiltKind.Library, BuiltKind.School]) {
+    let placed = 0;
+    for (const i of greenCands) {
+      if (placed >= p.era3CivicServices) break;
+      const x = i % map.width;
+      const y = (i - x) / map.width;
+      if (placeAdjacent(map, parcels, x, y, 2, 2, kind, serviceRng, undefined, PLANT_ATTRS) !== -1) {
+        placed++;
+        civicServices++;
+      }
+    }
+  }
+
   world.log.push(
     `era3: urban renewal — ${demolished} parcels demolished, ${projects} projects, ` +
-      `${civic} civic, ${power} power, ${precincts} precincts, ${services} services`,
+      `${civic} civic, ${power} power, ${precincts} precincts, ${services} services, ` +
+      `${civicServices} civic services`,
   );
 }
 

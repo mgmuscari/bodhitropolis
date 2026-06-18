@@ -33,7 +33,7 @@ export function coverageLegendLine(_view: CoverageOverlayView): string {
 /** The structured colour KEY for the coverage overlay. */
 export function coverageLegend(): OverlayLegend {
   return {
-    title: 'Fire/health coverage',
+    title: 'Civic services',
     stops: [
       { color: SERVED, label: 'served' },
       { color: UNDER, label: 'under-served' },

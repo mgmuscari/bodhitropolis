@@ -174,6 +174,10 @@ const BUILDING_STYLES: Record<number, BuildingStyle> = {
   [BuiltKind.Precinct]: { base: [60, 70, 92], accent: [78, 90, 116], roof: [44, 52, 70] },
   // Fire station — a civic service: warm brick-red with a bright bay, distinct from the cold precinct.
   [BuiltKind.FireStation]: { base: [150, 60, 50], accent: [196, 84, 70], roof: [110, 44, 38] },
+  // Civic services — clinic (clinical white/teal), library (warm brick/wood), school (schoolhouse tan).
+  [BuiltKind.Clinic]: { base: [196, 210, 212], accent: [232, 242, 244], roof: [150, 176, 184] },
+  [BuiltKind.Library]: { base: [122, 92, 62], accent: [154, 118, 80], roof: [92, 68, 46] },
+  [BuiltKind.School]: { base: [182, 142, 72], accent: [214, 172, 94], roof: [140, 106, 52] },
   // Power plants 24..30 — dirty centralized tier reads smoky/industrial (coal soot,
   // gas steel, hydro concrete, nuclear cooling-tower grey); the renewables read
   // bright (wind white, solar gold, fusion electric-cyan) — the clean transition is

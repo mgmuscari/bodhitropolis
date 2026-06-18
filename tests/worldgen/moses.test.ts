@@ -527,6 +527,31 @@ describe('era3 — police precincts sited in redlined districts (the apparatus o
     expect(fireSum / fireN).toBeLessThan(precSum / precN); // services in greener ground than control
   });
 
+  it('civic services (clinic/library/school) are concentrated in greenlined ground (vs precincts)', () => {
+    // Maddy: more early-game civic services concentrated in greenlined areas. Like the fire stations,
+    // they sit on better-graded ground than the precincts (control) — the disinvestment inequity.
+    let svcSum = 0;
+    let svcN = 0;
+    let precSum = 0;
+    let precN = 0;
+    const civicKinds = new Set<number>([BuiltKind.Clinic, BuiltKind.Library, BuiltKind.School]);
+    for (const seed of SEEDS) {
+      const world = runFullStage(seed);
+      for (const i of world.parcels.aliveIndices()) {
+        const k = world.parcels.kindAt(i);
+        if (civicKinds.has(k)) {
+          svcSum += parcelMeanGrade(world, i);
+          svcN++;
+        } else if (k === BuiltKind.Precinct) {
+          precSum += parcelMeanGrade(world, i);
+          precN++;
+        }
+      }
+    }
+    expect(svcN).toBeGreaterThan(0); // they got placed
+    expect(svcSum / svcN).toBeLessThan(precSum / precN); // greener ground than the precincts
+  });
+
   it('precincts sit on worse-graded ground than the average surviving building', () => {
     let precSum = 0;
     let precN = 0;
@@ -808,6 +833,7 @@ describe('era3Highways', () => {
       const powerPlaced = Number(/(\d+) power/.exec(line)![1]);
       const precinctsPlaced = Number(/(\d+) precincts/.exec(line)![1]);
       const servicesPlaced = Number(/(\d+) services/.exec(line)![1]);
+      const civicServicesPlaced = Number(/(\d+) civic services/.exec(line)![1]);
 
       expect(demolished).toBeGreaterThanOrEqual(5);
       // Chronicle honesty: projects are placed only after carving and none
@@ -818,7 +844,14 @@ describe('era3Highways', () => {
       // projects + civic + power + precincts in. (Net kind-deltas would conflate a
       // demolished era-1 civic with a placed one — the chronicled counts do not.)
       expect(aliveAfter).toBe(
-        aliveBefore - demolished + projPlaced + civicPlaced + powerPlaced + precinctsPlaced + servicesPlaced,
+        aliveBefore -
+          demolished +
+          projPlaced +
+          civicPlaced +
+          powerPlaced +
+          precinctsPlaced +
+          servicesPlaced +
+          civicServicesPlaced,
       );
     });
 
