@@ -55,6 +55,11 @@ const ARREST_RADIUS = 4; // a cruiser seizes an on-foot citizen within this Manh
 const ARREST_DRAIN = 1; // people removed from the household per arrest
 const ARREST_TRAUMA = 60; // wellbeing (buildingHealth) ripped from the household per arrest (heavy:
 //                           half the ±HEALTH_MAX range — an arrest devastates a home, it doesn't nudge it)
+// Police-violence record: each arrest stains its tile; it lingers and decays slowly (the memory of
+// the harm). This is the data behind the Police Violence overlay — the inverse of a crime map.
+const POLICE_VIOLENCE_MAX = 255;
+const POLICE_VIOLENCE_LAY = 50; // stain laid at an arrest
+const POLICE_VIOLENCE_DECAY = 0.05; // per substep (~1/s) — fades slowly, so a hot zone accumulates
 
 /**
  * The per-sweep arrest probability for a cruiser standing on ground of this redline grade:
@@ -489,6 +494,10 @@ export interface AmbientState {
   cruisers: Mover[];
   /** Substep counter gating the arrest sweep to ARREST_CADENCE. */
   arrestTick: number;
+  /** Live POLICE VIOLENCE (0..POLICE_VIOLENCE_MAX), keyed by tile: laid where arrests happen,
+   *  lingering as a slow-decaying record. This is the anti-crime-map — it shows where the STATE
+   *  inflicts harm, not where residents are blamed. Renderer-side, never hashed. */
+  policeViolence: Map<number, number>;
   birds: Flock[];
   /** Leftover sub-substep time carried between stepAmbient calls. */
   accMs: number;
@@ -554,6 +563,7 @@ export function createAmbientState(): AmbientState {
     peds: [],
     cruisers: [],
     arrestTick: 0,
+    policeViolence: new Map(),
     birds: [],
     accMs: 0,
     buildingHealth: new Map(),
@@ -1575,6 +1585,7 @@ export interface LiveSamples {
   pollution?: number;
   water?: number;
   road?: number;
+  violence?: number;
 }
 
 /**
@@ -1591,6 +1602,7 @@ export function liveInspectLine(s: LiveSamples): string {
   if (s.pollution !== undefined) parts.push(`smog ${Math.round(s.pollution)}`);
   if (s.water !== undefined) parts.push(`water ${Math.round(s.water)} contaminated`);
   if (s.road !== undefined) parts.push(`road ${Math.round(s.road)} crumbling`);
+  if (s.violence !== undefined) parts.push(`police violence ${Math.round(s.violence)}`);
   return parts.join(' · ');
 }
 
@@ -2180,6 +2192,8 @@ export function stepArrests(state: AmbientState, map: GameMap, rng: Rng): void {
       if (cur !== undefined) state.occupancy.set(taken.homeTile, Math.max(0, cur - ARREST_DRAIN));
       depositHealth(state, taken.homeTile, -ARREST_TRAUMA); // the trauma craters the household's wellbeing
     }
+    // Stain the spot — the police-violence record (the anti-crime-map) builds where arrests fall.
+    layField(state.policeViolence, map.idx(Math.round(taken.x), Math.round(taken.y)), POLICE_VIOLENCE_LAY, POLICE_VIOLENCE_MAX);
     state.peds.splice(victim, 1); // taken off the street, for nothing
   }
 }
@@ -2486,6 +2500,8 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   // Air pollution lingers as smog and eases back slowly (slower than traffic) — so calming a
   // corridor clears its jam quickly but the haze takes longer to lift.
   decayField(state.pollution, POLL_DECAY);
+  // Police-violence record fades slowly — the harm lingers far longer than smog.
+  decayField(state.policeViolence, POLICE_VIOLENCE_DECAY);
 
   // 6. Water runoff: on a slow cadence, each coastal water tile collects pollution from the
   //    ground around it and grows heavily polluted over time (impassable, so it never wears).
