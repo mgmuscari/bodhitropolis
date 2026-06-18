@@ -187,9 +187,11 @@ only on non-freeway surfaces).
   (b) `retireOwnedCar` left a lost owner's car lingering mid-freeway → now it drives off;
   (c) `nearestDriveStart` spawned an owned car parked on a freeway beside its home → now non-freeway
   only. Live-verified: 19 → 0, holds at steady state (~90s, 82 cars parking normally).
-- 🔴 **Big parking-lot blocks hold one car per lot** (Maddy 2026-06-18) — across a large block of
-  parking-lot tiles, only one car parks per lot; cars should park at the NEAREST open lot tile to
-  their destination (fill the block, nearest-first).
+- ✅ **Big parking-lot blocks hold one car per lot** (PR pending) — lot selection keyed off the lot
+  CENTRE within PARK_RADIUS, so a big lot (centre far from its edges) was never picked from where
+  cars arrive, and stalls filled row-major from a far corner. Fix: select by clamped-BBOX distance
+  and take the free stall NEAREST the arrival, so blocks fill tile-by-tile from the destination side.
+  Live-verified: curb-parks 29->3, a 234-stall lot 0->15 cars, lots now hold up to 31 (was ~1).
 - 🔴 **Freeway lanes alternate per-tile** (Maddy 2026-06-18) — a 3-tile-wide freeway alternates lane
   DIRECTION tile-by-tile; it should be split DIRECTIONALLY (one carriageway each way), not alternating
   across the 3 tiles.
