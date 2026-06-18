@@ -31,9 +31,10 @@ describe('overlay legends — structured colour keys', () => {
     expect(lg.stops[3]!.color).toEqual([192, 64, 64]); // D = red
   });
 
-  it('police legend names the inverse of a crime map with a less→more pair', () => {
+  it('police legend is titled Police violence with a less→more pair', () => {
     const lg = policeLegend();
-    expect(lg.title.toLowerCase()).toContain('crime map');
+    expect(lg.title.toLowerCase()).toContain('police violence');
+    expect(lg.title.toLowerCase()).not.toContain('crime map'); // Maddy: drop the parenthetical
     expect(lg.stops).toHaveLength(2);
   });
 });

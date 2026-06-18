@@ -39,13 +39,13 @@ export function policeViolenceTint(value: number): RGBA {
 
 /** The dock legend line for the police-violence overlay. */
 export function policeLegendLine(_view: PoliceOverlayView): string {
-  return 'Police violence — where the state does harm (not a crime map)';
+  return 'Police violence — where the state does harm';
 }
 
 /** The structured colour KEY for the police-violence overlay (the inverse of a crime map). */
 export function policeLegend(): OverlayLegend {
   return {
-    title: 'Police violence (not a crime map)',
+    title: 'Police violence',
     stops: [
       { color: LO, label: 'less' },
       { color: HI, label: 'more' },

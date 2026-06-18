@@ -36,9 +36,10 @@ describe('policeViolenceTint', () => {
 });
 
 describe('policeLegendLine', () => {
-  it('names it as the inverse of a crime map', () => {
+  it('names the state as the source of the harm', () => {
     const line = policeLegendLine('violence');
     expect(line.toLowerCase()).toContain('police violence');
-    expect(line.toLowerCase()).toContain('crime map');
+    expect(line.toLowerCase()).toContain('state does harm');
+    expect(line.toLowerCase()).not.toContain('crime map'); // Maddy: drop the parenthetical
   });
 });
