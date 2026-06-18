@@ -9,6 +9,8 @@
 // ambient.policeViolence rather than baking it into the cached base — this module owns only the
 // value→colour ramp + legend + the single view, unit-tested rather than left to manual QA.
 
+import type { OverlayLegend } from './overlayLegend';
+
 /** The single police-violence view. */
 export type PoliceOverlayView = 'violence';
 export const POLICE_VIEWS: readonly PoliceOverlayView[] = ['violence'];
@@ -38,4 +40,15 @@ export function policeViolenceTint(value: number): RGBA {
 /** The dock legend line for the police-violence overlay. */
 export function policeLegendLine(_view: PoliceOverlayView): string {
   return 'Police violence — where the state does harm (not a crime map)';
+}
+
+/** The structured colour KEY for the police-violence overlay (the inverse of a crime map). */
+export function policeLegend(): OverlayLegend {
+  return {
+    title: 'Police violence (not a crime map)',
+    stops: [
+      { color: LO, label: 'less' },
+      { color: HI, label: 'more' },
+    ],
+  };
 }

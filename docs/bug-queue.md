@@ -144,11 +144,9 @@ layer (non-deterministic).
   3x3 stall grid), but only one car ever parks. Likely the stall-claim / lot-capacity check in the
   ambient car-parking path (`findParkingNear` / `ParkingLotInfo.stalls` / `tryPark`) is treating the
   lot as single-occupancy instead of per-stall. Cars should fill stalls up to `stalls.length`.
-- 🔴 **Overlay maps need legends** (Maddy 2026-06-17) — the **eco** map colors (soil/flora/fauna/
-  biodiversity) are "fairly inscrutable"; **civic** maps (belonging/voice/trust) same. They each have a
-  one-line legend string (`legendLine`/`civicLegendLine`) but it's not enough — want a visible color
-  KEY (the ramp endpoints labeled) on screen while an overlay is up. (Redline already reads via the A–D
-  bands; apply the same clarity to eco/civic.)
+- ✅ **Overlay maps need legends** (Maddy 2026-06-17; PR pending) — a visible colour KEY now shows while
+  any overlay is up: a swatch per ramp endpoint / HOLC band with its label (top-left). Unified across
+  eco/civic/redline/police via `OverlayLegend` + per-module `*Legend()`. Live-verified.
 
 ## Fixed
 

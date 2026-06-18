@@ -25,18 +25,20 @@ import { residentialCensus } from './citizens/census';
 import { parkingLots, parkingStalls } from './ui/parkingContent';
 import { attachInput } from './ui/input';
 import { statLines, eraHeadline, challengeText, ecologyStatLine } from './ui/openingContent';
-import { overlayTint, legendLine, type OverlayView } from './ui/ecoOverlayContent';
+import { overlayTint, legendLine, ecoLegend, type OverlayView } from './ui/ecoOverlayContent';
 import {
   civicOverlayTint,
   civicLegendLine,
+  civicLegend,
   cycleComposite,
   compositeKeyFor,
   type CompositeState,
   type CivicOverlayView,
   type OverlayKind,
 } from './ui/civicOverlayContent';
-import { redlineOverlayTint, redlineLegendLine } from './ui/redlineOverlayContent';
-import { policeLegendLine } from './ui/policeViolenceOverlayContent';
+import { redlineOverlayTint, redlineLegendLine, redlineLegend } from './ui/redlineOverlayContent';
+import { policeLegendLine, policeLegend } from './ui/policeViolenceOverlayContent';
+import type { OverlayLegend } from './ui/overlayLegend';
 import { pulseLine } from './ui/pulseContent';
 import { mountPulseDock } from './ui/pulseDock';
 import { isRepairTool } from './ui/repairTools';
@@ -366,6 +368,38 @@ export function main(): void {
   // and every civic view are recomputed/re-pushed when their source ticks. Water
   // tiles are not tinted (eco lives on land); civic tiles with no neighborhood
   // (id 0) are not tinted.
+  // Visible colour KEY for the active overlay — a swatch per ramp endpoint / band with its label,
+  // so the eco/civic/redline/police maps are legible at a glance (not just a one-line caption).
+  const legendEl = document.createElement('div');
+  legendEl.className = 'overlay-legend';
+  legendEl.hidden = true;
+  legendEl.style.cssText =
+    'position:fixed;left:12px;top:12px;z-index:50;background:rgba(20,22,30,0.82);color:#e8e6e0;' +
+    'font:12px monospace;padding:6px 9px;border-radius:6px;pointer-events:none;line-height:1.5;';
+  document.body.appendChild(legendEl);
+  const updateLegend = (legend: OverlayLegend | null): void => {
+    if (!legend) {
+      legendEl.hidden = true;
+      legendEl.textContent = '';
+      return;
+    }
+    legendEl.hidden = false;
+    legendEl.textContent = '';
+    const title = document.createElement('div');
+    title.textContent = legend.title;
+    title.style.cssText = 'font-weight:bold;margin-bottom:3px;';
+    legendEl.appendChild(title);
+    for (const stop of legend.stops) {
+      const row = document.createElement('div');
+      const sw = document.createElement('span');
+      sw.style.cssText = `display:inline-block;width:12px;height:12px;margin-right:6px;vertical-align:middle;background:rgb(${stop.color[0]},${stop.color[1]},${stop.color[2]});`;
+      const lbl = document.createElement('span');
+      lbl.textContent = stop.label;
+      row.append(sw, lbl);
+      legendEl.appendChild(row);
+    }
+  };
+
   const overlayWater = world.map.water;
   const applyOverlay = (): void => {
     // Police violence is a LIVE field, drawn per-frame (not in the cached base) so it tracks
@@ -439,6 +473,18 @@ export function main(): void {
               ? policeLegendLine('violence')
               : civicLegendLine(activeOverlay.view as CivicOverlayView);
     toolbar.setStatus(legend);
+    // The visible colour key for the active overlay (eco/civic ramps, redline bands, police ramp).
+    updateLegend(
+      activeOverlay === null
+        ? null
+        : activeOverlay.kind === 'eco'
+          ? ecoLegend(activeOverlay.view as OverlayView)
+          : activeOverlay.kind === 'civic'
+            ? civicLegend(activeOverlay.view as CivicOverlayView)
+            : activeOverlay.kind === 'redline'
+              ? redlineLegend()
+              : policeLegend(),
+    );
     markDirty(); // the overlay tint lives in the cached base → invalidate it
     toolbar.refreshMeta(); // the active overlay changed → dock [Eco]/[Civic] state
   };

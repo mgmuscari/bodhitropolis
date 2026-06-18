@@ -4,6 +4,8 @@
 // scans this file). The renderer/main shell consumes these; keeping them here
 // lets the cycle/gate/ramps be unit-tested rather than left to manual QA.
 
+import type { OverlayLegend } from './overlayLegend';
+
 /** The four ecology heatmap views, in cycle order. */
 export type OverlayView = 'soil' | 'flora' | 'fauna' | 'biodiversity';
 export const OVERLAY_VIEWS: readonly OverlayView[] = ['soil', 'flora', 'fauna', 'biodiversity'];
@@ -70,4 +72,23 @@ const LEGENDS: Record<OverlayView, string> = {
 /** The dock legend line for an active overlay view. */
 export function legendLine(view: OverlayView): string {
   return LEGENDS[view];
+}
+
+const LEGEND_ENDS: Record<OverlayView, { title: string; lo: string; hi: string }> = {
+  soil: { title: 'Soil health', lo: 'broken', hi: 'living' },
+  flora: { title: 'Flora vitality', lo: 'bare', hi: 'canopy' },
+  fauna: { title: 'Fauna presence', lo: 'quiet', hi: 'teeming' },
+  biodiversity: { title: 'Biodiversity', lo: 'low', hi: 'high' },
+};
+
+/** The structured colour KEY for an eco overlay view: the ramp endpoints as labelled swatches. */
+export function ecoLegend(view: OverlayView): OverlayLegend {
+  const { lo, hi } = RAMPS[view];
+  return {
+    title: LEGEND_ENDS[view].title,
+    stops: [
+      { color: lo, label: LEGEND_ENDS[view].lo },
+      { color: hi, label: LEGEND_ENDS[view].hi },
+    ],
+  };
 }
