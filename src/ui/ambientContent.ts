@@ -1521,6 +1521,7 @@ export interface LiveSamples {
   health?: number;
   traffic?: number;
   pollution?: number;
+  water?: number;
 }
 
 /**
@@ -1535,6 +1536,7 @@ export function liveInspectLine(s: LiveSamples): string {
   if (s.health !== undefined) parts.push(`health ${Math.round(s.health)}`);
   if (s.traffic !== undefined) parts.push(`traffic ${Math.round(s.traffic)}`);
   if (s.pollution !== undefined) parts.push(`smog ${Math.round(s.pollution)}`);
+  if (s.water !== undefined) parts.push(`water ${Math.round(s.water)} contaminated`);
   return parts.join(' · ');
 }
 

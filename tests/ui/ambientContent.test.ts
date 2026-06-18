@@ -1877,6 +1877,10 @@ describe('liveInspectLine (inspect live-sample formatting)', () => {
     expect(liveInspectLine({ traffic: 30, pollution: 8 })).toBe('traffic 30 · smog 8');
   });
 
+  it('formats a contaminated water tile', () => {
+    expect(liveInspectLine({ water: 180 })).toBe('water 180 contaminated');
+  });
+
   it('omits absent fields and returns empty when nothing is present', () => {
     expect(liveInspectLine({ landValue: 50 })).toBe('land value 50');
     expect(liveInspectLine({})).toBe('');
