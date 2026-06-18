@@ -23,9 +23,11 @@ import {
   mosesCenturyStage,
   placeParkingField,
   promoteDenseStreets,
+  placeCorridorRamps,
   DEFAULT_MOSES_PARAMS,
   type MosesParams,
   type MosesState,
+  type Corridor,
 } from '../../src/worldgen/moses';
 import { boxDensity, distanceField } from '../../src/worldgen/fields';
 import { gradeRedline } from '../../src/worldgen/redline';
@@ -1229,5 +1231,26 @@ describe('eraSatellites — exurbs/suburbs with their own grids, freeway-linked'
 
   it('is deterministic for the same seed', () => {
     expect(hashWorld(runSatellites('moses-1').world)).toBe(hashWorld(runSatellites('moses-1').world));
+  });
+});
+
+describe('placeCorridorRamps — ramps connect to the surface grid, not at the freeway cross', () => {
+  it('drops a ramp where streets flank the band, but NOT at a freeway×freeway interchange', () => {
+    const map = new GameMap(24, 16);
+    // a horizontal 3-wide freeway (rows 5,6,7) and a vertical 3-wide freeway (cols 10,11,12).
+    for (let x = 0; x < 24; x++) for (const y of [5, 6, 7]) map.built[map.idx(x, y)] = BuiltKind.RoadHighway;
+    for (let y = 0; y < 16; y++) for (const x of [10, 11, 12]) map.built[map.idx(x, y)] = BuiltKind.RoadHighway;
+    // surface streets flanking the horizontal band at column 4 (rows 4 and 8 = off ±2).
+    map.built[map.idx(4, 4)] = BuiltKind.RoadStreet;
+    map.built[map.idx(4, 8)] = BuiltKind.RoadStreet;
+    const c: Corridor = { axis: 'row', index: 6, lo: 0, hi: 23, sum: 0, gradeMean: 0, parcels: 0 };
+    placeCorridorRamps(map, c, { ...DEFAULT_MOSES_PARAMS, era3RampSpacing: 1 });
+    // a ramp where the grid flanks the band:
+    expect(map.built[map.idx(4, 5)]).toBe(BuiltKind.RoadRamp);
+    expect(map.built[map.idx(4, 6)]).toBe(BuiltKind.RoadRamp);
+    // NO ramp at the interchange (col 10–12) — the perpendicular FREEWAY is not a "surface side":
+    expect(map.built[map.idx(10, 5)]).toBe(BuiltKind.RoadHighway);
+    expect(map.built[map.idx(11, 6)]).toBe(BuiltKind.RoadHighway);
+    expect(map.built[map.idx(12, 7)]).toBe(BuiltKind.RoadHighway);
   });
 });
