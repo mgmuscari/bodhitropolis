@@ -213,12 +213,25 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
   a street overlaid on a freeway). Live A/B (default seed, 150s): without ramps it doubled the decline
   (−48% vs main −26%); **with ramps it's −22% — connectivity fully restored**. 1226 tests green.
   🔮 FUTURE: the planted no-traffic median (road-diet upgrade); ramps generalize to overpasses.
-- 🔴 **Avenues block cross traffic at intersections (the "streetcar" bug)** (Maddy 2026-06-18) — a
-  streetcar/tram running in the middle of flanking avenues blocks cars from crossing the intersection
-  (the tram tile isn't `carPassable` and the one-way outer lanes shunt the cross car along the
-  avenue). UNLIKE freeways, avenues SHOULD allow cross traffic at intersections. Fix pairs with the
-  freeway redesign: at a true perpendicular intersection an avenue (and the transit tile it crosses)
-  must be crossable.
+- ✅ **Avenues block cross traffic at intersections (the "streetcar" bug)** (PR pending) — the blocker
+  was the tram tile: a `Streetcar` (transit) tile isn't `carTraversable`, so the A* router couldn't
+  take a cross street through it. Fix: a LEVEL-CROSSING rule in `canDrive` — a car may CROSS an
+  at-grade tram/rail line (`isLevelCrossable`: Streetcar/Rail) straight through to the drivable tile
+  beyond, but never drive ALONG it; `carOffNetwork` no longer despawns a car mid-crossing. Unit-tested
+  (cross a tram, can't drive along it, the avenue/streetcar/avenue median crosses). At-grade avenues
+  themselves already allow committed cross-routes (canDrive returns true for non-freeway tiles).
+
+### Freeway/build follow-ups (Maddy 2026-06-18)
+
+- 🔴 **Ramp in the middle of the freeway cross** (Maddy 2026-06-18) — `placeCorridorRamps` drops ramps
+  every N tiles regardless of position, so one lands AT the freeway×freeway interchange (where the two
+  corridors cross) — a ramp where there should just be the interchange. Skip ramp placement at/near a
+  perpendicular-freeway crossing (it's already a free interchange).
+- 🔴 **Cannot build a nuclear plant anywhere** (Maddy 2026-06-18) — the Nuclear plant tool is rejected
+  on every tile. Likely a placement-rule / footprint / tech-gate issue; investigate the build path.
+- 🔵 **DEFERRED feature: prevailing wind carries smog** (Maddy 2026-06-18) — air pollution
+  (`ambient.pollution`) should drift downwind on a prevailing wind, not just diffuse/linger in place,
+  so smog plumes streak from their sources. Live layer.
 - ✅ **Freeway skipped a tile for water (gap at 85,86)** (PR pending) — the era3 highway carve called
   `placeTransport`, which refuses water, so a corridor crossing an inlet left a gap in the deck. Added
   a `placeBridge` engine primitive (decks transport OVER water, keeping the water layer underneath — a

@@ -970,6 +970,13 @@ function sameLaneKind(a: number, b: number): boolean {
   return a === b || (isFreewayKind(a) && isFreewayKind(b));
 }
 
+/** An at-grade rail/tram LINE a car may CROSS at a level crossing (it can never drive ALONG it): a
+ *  streetcar or a rail line. Lets a cross street cross a tram median at an intersection without the
+ *  transit tile blocking it (Maddy: a streetcar in flanking avenues must not block cross traffic). */
+function isLevelCrossable(kind: number): boolean {
+  return kind === BuiltKind.Streetcar || kind === BuiltKind.Rail;
+}
+
 /** Car traversability for general (non-lane) routing: a road or parking tile that is
  *  NOT a divided road's median. Cars neither spawn on, weave onto, nor turn (at a
  *  junction) onto a median — so the median stays a true no-traffic gap. */
@@ -1014,7 +1021,19 @@ function alongThrough(lane: { horizontal: boolean }, d: number): boolean {
  * only meaningful for adjacent tiles; callers pass 4-neighbours.
  */
 export function canDrive(map: GameMap, fx: number, fy: number, tx: number, ty: number): boolean {
-  if (!map.inBounds(tx, ty) || !carTraversable(map.built[map.idx(tx, ty)]!)) return false;
+  if (!map.inBounds(tx, ty)) return false;
+  const toKind = map.built[map.idx(tx, ty)]!;
+  if (!carTraversable(toKind)) {
+    // Level crossing: a car may CROSS an at-grade tram/rail line STRAIGHT through to the drivable
+    // tile beyond (a cross street crossing an avenue's streetcar median), but never drive along it.
+    if (isLevelCrossable(toKind)) {
+      const d = moveDir(fx, fy, tx, ty);
+      const bx = tx + DIR_DX[d]!;
+      const by = ty + DIR_DY[d]!;
+      return map.inBounds(bx, by) && carTraversable(map.built[map.idx(bx, by)]!);
+    }
+    return false;
+  }
   const fromHwy = map.built[map.idx(fx, fy)] === BuiltKind.RoadHighway;
   const toHwy = map.built[map.idx(tx, ty)] === BuiltKind.RoadHighway;
   if (!fromHwy && !toHwy) return true; // both at-grade → plain passability (unchanged)
@@ -1072,7 +1091,8 @@ function carOffNetwork(map: GameMap, c: Car): boolean {
   const x = Math.round(c.x);
   const y = Math.round(c.y);
   if (!map.inBounds(x, y)) return true;
-  return !carTraversable(map.built[map.idx(x, y)]!);
+  const k = map.built[map.idx(x, y)]!;
+  return !carTraversable(k) && !isLevelCrossable(k); // a car mid-crossing a tram/rail line is fine
 }
 
 /** A ped is gone once the tile under it is no longer pedestrian substrate. */
