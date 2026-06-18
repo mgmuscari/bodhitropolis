@@ -139,10 +139,17 @@ layer (non-deterministic).
 - ✅ **Tech tree can't be closed when it covers the menu bar** (Maddy 2026-06-17; PR pending) — added an
   always-visible ✕ in the panel header (the panel top never scrolls, so it's reachable even over the
   dock) + Escape-to-close. Live-verified both.
-- 🔴 **Parking lots only ever hold ONE car** (Maddy 2026-06-17) — a lot should accept up to 9 (the
-  3x3 stall grid), but only one car ever parks. Likely the stall-claim / lot-capacity check in the
-  ambient car-parking path (`findParkingNear` / `ParkingLotInfo.stalls` / `tryPark`) is treating the
-  lot as single-occupancy instead of per-stall. Cars should fill stalls up to `stalls.length`.
+- 🟡 **Biodiversity overlay reads inverted** (Maddy 2026-06-17; fix pending) — marked HIGH in urban,
+  LOW in wilds. Root cause: `biodiversityField` used Simpson's index over habitat CLASSES, which
+  rewards heterogeneity — mixed urban/edge patchwork scores highest, uniform wild lowest. Redesign to
+  ecological RICHNESS (flora × fauna, smoothed): high where both plants + animals thrive, low in urban.
+- 🔴 **Parking display caps at 4** (Maddy 2026-06-17) — lots now fill many stalls (STALLS_PER_AXIS²
+  per tile) but only ~4 show; she wants up to 9. Likely STALLS_PER_AXIS=2 (→4/tile); bump to 3 (→9),
+  and/or check the renderer draws every parked car (it iterates ambient.cars, so the cap is the stall
+  count). Verify cars render on all stalls.
+- ✅ **Parking lots only ever held ONE car** (Maddy 2026-06-17; PR merged) — owned cars curb-parked and
+  never used lot stalls; now they route to the nearest lot and claim a free stall (parkOwnedCarSomewhere
+  → findLotStall), filling to capacity. (Display cap is the separate open bug above.)
 - ✅ **Overlay maps need legends** (Maddy 2026-06-17; PR pending) — a visible colour KEY now shows while
   any overlay is up: a swatch per ramp endpoint / HOLC band with its label (top-left). Unified across
   eco/civic/redline/police via `OverlayLegend` + per-module `*Legend()`. Live-verified.
