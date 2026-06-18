@@ -41,6 +41,10 @@ const SUBSTEP_MS = 50;
 const CAR_CAP = 200;
 const PED_CAP = 160;
 const FLOCK_CAP = 32;
+// Police cruisers patrol the redlined districts from their precincts (the visible
+// face of the over-policing the civic layer models). One per precinct, capped.
+const CRUISER_CAP = 8;
+const CRUISER_LIFE = 400; // substeps a patrol runs before recycling back to its precinct (~20s)
 
 // Rejection-sampling budget per substep per kind: sample K random tiles and test
 // the spawn predicate, never an O(mapArea) full-map scan (CRITIC-YP1).
@@ -459,6 +463,10 @@ export interface ParkingLotInfo {
 export interface AmbientState {
   cars: Car[];
   peds: Ped[];
+  /** Police cruisers patrolling out of the precincts — the visible over-policing of the
+   *  redlined districts. They wander the local roads (flashing lights, renderer-side) and
+   *  make arrests that drain the community (see stepArrests). Live, never hashed. */
+  cruisers: Mover[];
   birds: Flock[];
   /** Leftover sub-substep time carried between stepAmbient calls. */
   accMs: number;
@@ -522,6 +530,7 @@ export function createAmbientState(): AmbientState {
   return {
     cars: [],
     peds: [],
+    cruisers: [],
     birds: [],
     accMs: 0,
     buildingHealth: new Map(),
@@ -1988,6 +1997,56 @@ function spawnFlocks(state: AmbientState, map: GameMap, rng: Rng): void {
 
 // --- The substep + the public stepper ------------------------------------
 
+/** A car-passable road tile adjacent to (x, y), or -1. */
+function adjacentRoad(map: GameMap, x: number, y: number): number {
+  for (let d = 0; d < 4; d++) {
+    const nx = x + DIR_DX[d]!;
+    const ny = y + DIR_DY[d]!;
+    if (map.inBounds(nx, ny) && carPassable(map, nx, ny)) return map.idx(nx, ny);
+  }
+  return -1;
+}
+
+/**
+ * Spawn police cruisers out of the precincts (≈ one per 2x2 precinct, capped) until the patrol
+ * count is met. Each spawns on a road beside a precinct and patrols from there. The precincts sit
+ * in the redlined districts, so the patrols concentrate there — the over-policing made visible.
+ * Renderer-side; reads the built layer, writes only state.cruisers.
+ */
+export function spawnCruisers(state: AmbientState, map: GameMap, rng: Rng): void {
+  const precincts: number[] = [];
+  for (let i = 0; i < map.built.length; i++) if (map.built[i] === BuiltKind.Precinct) precincts.push(i);
+  if (precincts.length === 0) return;
+  const target = Math.min(CRUISER_CAP, Math.ceil(precincts.length / 4)); // ≈ one per 2x2 precinct
+  let guard = precincts.length;
+  while (state.cruisers.length < target && guard-- > 0) {
+    const pi = precincts[rng.nextInt(precincts.length)]!;
+    const px = pi % map.width;
+    const py = (pi - px) / map.width;
+    const road = adjacentRoad(map, px, py);
+    if (road < 0) continue;
+    const rx = road % map.width;
+    const ry = (road - rx) / map.width;
+    state.cruisers.push({ x: rx, y: ry, dir: rng.nextInt(4), tx: rx, ty: ry, dwell: CRUISER_LIFE, recent: [] });
+  }
+}
+
+/**
+ * Move every cruiser one substep: wander the local road grid (despawn if its road was bulldozed
+ * or it boxes itself in), counting down its patrol life so the fleet recirculates from the
+ * precincts rather than drifting away. Renderer-side; deterministic in `rng`.
+ */
+export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng): void {
+  state.cruisers = state.cruisers.filter((c) => {
+    if ((c.dwell ?? 0) <= 0) return false; // shift over → recycle (respawn tops up from the precinct)
+    c.dwell! -= 1;
+    if (!carPassable(map, Math.round(c.x), Math.round(c.y))) return false; // road gone
+    return advanceMover(c, CAR_SPEED, map, (x, y, fromDir, recent) =>
+      nextRoadStep(map, x, y, fromDir, rng, recent),
+    );
+  });
+}
+
 function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   // 1. Despawn anything whose substrate vanished (read-only self-healing). Last-mile
   //    walkers (walkTo set) are exempt — they cross lots/roads off-grid and self-despawn
@@ -2007,6 +2066,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   spawnCitizens(state, map, rng);
   spawnPeds(state, map, rng);
   spawnFlocks(state, map, rng);
+  spawnCruisers(state, map, rng); // top the patrol fleet up from the precincts
 
   // 3. Move the cars. A PARKED car waits for its pedestrian (its bound ped zeroes `dwell` on
   //    return; the countdown is just a safety release). A moving trip-car follows its path
@@ -2032,6 +2092,9 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       nextRoadStep(map, x, y, fromDir, rng, recent),
     );
   });
+
+  // 3a. Move the police cruisers (patrol the redlined streets from their precincts).
+  stepCruisers(state, map, rng);
 
   // 3b. Move the pedestrians. A walk target (walkTo) is reached by a MANHATTAN walk — an
   //     axis-aligned, tile-by-tile route over walkable tiles (never diagonally, never through

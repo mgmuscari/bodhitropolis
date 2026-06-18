@@ -805,6 +805,22 @@ export class Renderer {
       }
     }
 
+    // Police cruisers: a dark institutional body with a FLASHING red/blue light bar (alternating
+    // ~5x/sec) — the over-policing of the redlined districts made visible as it patrols.
+    const cruiserSize = Math.max(2, ts * 0.26);
+    const flashRed = Math.floor(performance.now() / 180) % 2 === 0;
+    for (const c of ambient.cruisers) {
+      const off = laneOffset(c.dir);
+      const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
+      if (!onScreen(sx, sy)) continue;
+      ctx.fillStyle = '#1c2235'; // dark cruiser body
+      ctx.fillRect(Math.floor(sx - cruiserSize / 2), Math.floor(sy - cruiserSize / 2), cruiserSize, cruiserSize);
+      // The flashing light bar on top (half the body), alternating red/blue.
+      const lb = Math.max(1, cruiserSize * 0.5);
+      ctx.fillStyle = flashRed ? '#ff3b30' : '#3b6bff';
+      ctx.fillRect(Math.floor(sx - lb / 2), Math.floor(sy - cruiserSize / 2), lb, Math.max(1, cruiserSize * 0.34));
+    }
+
     // Citizens on foot, coloured by TRAVEL MODE so the modal shift is legible: walkers are warm
     // dots, cyclists yellow, tram riders cyan, rail riders violet. (Drivers are CARS — drawn above
     // from ambient.cars — and their last-mile walk is a warm dot.) On a STREET a ped hugs the kerb

@@ -48,6 +48,8 @@ import {
   flowWaterPollution,
   treatWaterPollution,
   stepRoadDecay,
+  spawnCruisers,
+  stepCruisers,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -774,6 +776,37 @@ describe('water contamination: industry is the toxic source, redlined most of al
     // Flow conserves direction: pollution never climbs back to a higher tile that started clean.
     // (top was the only source; everything below it carries the contamination.)
     expect(state.waterPollution.get(downstream) ?? 0).toBeLessThanOrEqual(255);
+  });
+});
+
+describe('police cruisers (over-policing made visible)', () => {
+  it('spawns a cruiser out of a precinct onto an adjacent road', () => {
+    const map = new GameMap(8, 8);
+    for (const [x, y] of [[3, 3], [4, 3], [3, 4], [4, 4]] as const) map.built[map.idx(x, y)] = BuiltKind.Precinct;
+    map.built[map.idx(5, 3)] = BuiltKind.RoadStreet; // a road beside the precinct
+    map.built[map.idx(5, 4)] = BuiltKind.RoadStreet;
+    const state = createAmbientState();
+    spawnCruisers(state, map, ambientFork('cr'));
+    expect(state.cruisers.length).toBeGreaterThan(0);
+  });
+
+  it('spawns no cruisers where there is no precinct', () => {
+    const state = createAmbientState();
+    spawnCruisers(state, gridMap(), ambientFork('cr')); // roads, no precinct
+    expect(state.cruisers.length).toBe(0);
+  });
+
+  it('patrols the road grid and recycles when its shift ends', () => {
+    const map = new GameMap(12, 12);
+    for (let x = 1; x < 11; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
+    const state = createAmbientState();
+    state.cruisers.push({ x: 5, y: 5, dir: 1, tx: 5, ty: 5, dwell: 2, recent: [] });
+    const rng = ambientFork('cr');
+    stepCruisers(state, map, rng); // dwell 2 -> 1
+    expect(state.cruisers.length).toBe(1);
+    stepCruisers(state, map, rng); // dwell 1 -> 0
+    stepCruisers(state, map, rng); // dwell 0 -> recycle (despawn)
+    expect(state.cruisers.length).toBe(0);
   });
 });
 
