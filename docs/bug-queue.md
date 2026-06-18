@@ -213,6 +213,14 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
   general routing. Real fix = EDGE-aware passability (entering tile B from A is allowed only if not
   perpendicular into a freeway mid-span) + middle becomes a two-way `through` role. Outer-lane
   directions are already correct.
+  - 🟡 **ATTEMPTED + HELD** (branch `feature/freeway-limited-access`, 2026-06-18) — built it: a
+    two-way `through` middle lane + an edge-aware `canDrive(from→to)` rewired into `roadPath` +
+    `nextRoadStep`. Correct + fully unit-tested (1222 green). **But a live A/B on the default seed
+    showed it ~DOUBLES the occupancy decline** (clean main 1875→1379 vs limited-access 1896→989 over
+    150s). Root cause: the worldgen freeways are bare corridors with **no on/off ramps or
+    interchanges**, so making them limited-access strands the street grid on either side — cross-trips
+    can't route, homes take the failed-trip penalty, the city empties twice as fast. **PREREQUISITE:
+    worldgen must add freeway ramps/interchanges FIRST**, then this branch can land. Not merged.
 - 🔴 **Avenues block cross traffic at intersections (the "streetcar" bug)** (Maddy 2026-06-18) — a
   streetcar/tram running in the middle of flanking avenues blocks cars from crossing the intersection
   (the tram tile isn't `carPassable` and the one-way outer lanes shunt the cross car along the
