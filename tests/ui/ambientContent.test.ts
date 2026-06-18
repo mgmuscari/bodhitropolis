@@ -51,6 +51,7 @@ import {
   spawnCruisers,
   stepCruisers,
   nextPatrolStep,
+  huntTarget,
   policePhase,
   stepArrests,
   arrestChance,
@@ -868,6 +869,16 @@ describe('police cruisers (over-policing made visible)', () => {
     expect(policePhase(0)).toBe('scatter'); // opens calm
     expect(policePhase(300)).toBe('chase'); // then sweeps
     expect(policePhase(0)).toBe(policePhase(540)); // periodic (SCATTER_LEN + CHASE_LEN = 540)
+  });
+
+  it('chase personalities aim differently (direct / ambush / shy)', () => {
+    const peds = [{ x: 10, y: 5, dir: 1, tx: 10, ty: 5, phase: 'to-building' as const }]; // citizen heading East (1)
+    const aim = (personality: number, cx: number) =>
+      huntTarget({ x: cx, y: 5, dir: 1, tx: cx, ty: 5, personality }, peds);
+    expect(aim(0, 4)).toEqual({ x: 10, y: 5 }); // direct (Blinky): the citizen's tile
+    expect(aim(1, 4)).toEqual({ x: 14, y: 5 }); // ambush (Pinky): 4 tiles AHEAD of its heading
+    expect(aim(2, 4)).toBeNull(); // shy (Clyde): too far → patrols
+    expect(aim(2, 8)).toEqual({ x: 10, y: 5 }); // shy: close enough → pounces
   });
 
   it('patrols the road grid and recycles when its shift ends', () => {

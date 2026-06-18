@@ -46,6 +46,8 @@ const FLOCK_CAP = 32;
 const CRUISER_CAP = 8;
 const CRUISER_LIFE = 400; // substeps a patrol runs before recycling back to its precinct (~20s)
 const HUNT_RADIUS = 8; // a cruiser homes in on an on-foot citizen within this Manhattan distance
+const AMBUSH_LEAD = 4; // tiles AHEAD of a citizen's heading an ambush (Pinky) cruiser aims for
+const SHY_RADIUS = 4; // a shy (Clyde) cruiser only pounces when the citizen is this close, else patrols
 // Scatter/chase cadence (the Pac-Man ghost rhythm): the fleet alternates between SCATTER (patrol the
 // redlined streets, ignore people) and CHASE (hunt pedestrians + sweep arrests). Mostly chase, with
 // a periodic scatter lull — so the redlined streets pulse between tense calm and active sweeps.
@@ -468,6 +470,10 @@ export interface Mover {
    *  default + back-compat). Chosen per leg by distance + nearby infra; sets which tiles the mover
    *  can enter, which it hugs (the mode's network), and how fast it goes. */
   mode?: TravelMode;
+  /** (Cruiser) chase personality, ghost-style: 0 = direct (chase the citizen's tile, Blinky), 1 =
+   *  ambush (target AHEAD of the citizen's heading, Pinky), 2 = shy (only pounce when close, else
+   *  patrol, Clyde). Assigned at spawn; read by huntTarget. */
+  personality?: number;
 }
 
 export type Car = Mover;
@@ -2126,29 +2132,47 @@ export function spawnCruisers(state: AmbientState, map: GameMap, rng: Rng): void
     if (road < 0) continue;
     const rx = road % map.width;
     const ry = (road - rx) / map.width;
-    state.cruisers.push({ x: rx, y: ry, dir: rng.nextInt(4), tx: rx, ty: ry, dwell: CRUISER_LIFE, recent: [] });
+    // Spread personalities across the fleet (direct / ambush / shy) so the patrol reads varied.
+    state.cruisers.push({
+      x: rx, y: ry, dir: rng.nextInt(4), tx: rx, ty: ry, dwell: CRUISER_LIFE, recent: [],
+      personality: state.cruisers.length % 3,
+    });
   }
 }
 
-/** The nearest on-foot citizen to (x, y) within HUNT_RADIUS, as a rounded tile, or null. */
-function nearestHuntTarget(peds: readonly Ped[], x: number, y: number): { x: number; y: number } | null {
+/** The nearest on-foot citizen to (x, y) within HUNT_RADIUS, or null. */
+function nearestPed(peds: readonly Ped[], x: number, y: number): Ped | null {
   let best = HUNT_RADIUS + 1;
-  let tx = 0;
-  let ty = 0;
-  let found = false;
+  let found: Ped | null = null;
   for (const p of peds) {
     if (p.phase === 'inside' || p.phase === 'driving') continue; // not on the street
-    const px = Math.round(p.x);
-    const py = Math.round(p.y);
-    const d = Math.abs(px - x) + Math.abs(py - y);
+    const d = Math.abs(Math.round(p.x) - x) + Math.abs(Math.round(p.y) - y);
     if (d < best) {
       best = d;
-      tx = px;
-      ty = py;
-      found = true;
+      found = p;
     }
   }
-  return found ? { x: tx, y: ty } : null;
+  return found;
+}
+
+/**
+ * The tile a cruiser aims for this step, by its ghost PERSONALITY (or null → patrol/seek grade):
+ *   0 direct (Blinky)  — the citizen's tile;
+ *   1 ambush (Pinky)   — AMBUSH_LEAD tiles AHEAD of the citizen's heading, to cut them off;
+ *   2 shy (Clyde)      — the citizen's tile ONLY when within SHY_RADIUS, else null (it patrols).
+ * Deterministic; reads the nearest on-foot citizen.
+ */
+export function huntTarget(c: Mover, peds: readonly Ped[]): { x: number; y: number } | null {
+  const cx = Math.round(c.x);
+  const cy = Math.round(c.y);
+  const p = nearestPed(peds, cx, cy);
+  if (!p) return null;
+  const px = Math.round(p.x);
+  const py = Math.round(p.y);
+  const pers = c.personality ?? 0;
+  if (pers === 1) return { x: px + DIR_DX[p.dir]! * AMBUSH_LEAD, y: py + DIR_DY[p.dir]! * AMBUSH_LEAD };
+  if (pers === 2) return Math.abs(px - cx) + Math.abs(py - cy) <= SHY_RADIUS ? { x: px, y: py } : null;
+  return { x: px, y: py };
 }
 
 /**
@@ -2216,8 +2240,8 @@ export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng): void 
     if ((c.dwell ?? 0) <= 0) return false; // shift over → recycle (respawn tops up from the precinct)
     c.dwell! -= 1;
     if (!carPassable(map, Math.round(c.x), Math.round(c.y))) return false; // road gone
-    // Chase → hunt a nearby citizen; scatter → no target, so it just seeks the redlined streets.
-    const target = chasing ? nearestHuntTarget(state.peds, Math.round(c.x), Math.round(c.y)) : null;
+    // Chase → aim per the cruiser's ghost personality; scatter → no target, so it seeks redlined streets.
+    const target = chasing ? huntTarget(c, state.peds) : null;
     return advanceMover(c, CAR_SPEED, map, (x, y, fromDir, recent) =>
       nextPatrolStep(map, x, y, fromDir, rng, recent, target),
     );
