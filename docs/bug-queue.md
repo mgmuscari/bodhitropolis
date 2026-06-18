@@ -137,9 +137,9 @@ layer (non-deterministic).
   substrate-despawn (ambientContent substep step 1) only because boarding leaves a stale `walkTo` set.
   Make it explicit (`p.phase === 'driving'` in the exemption) so it can't break if `walkTo` is cleared.
   Surfaced while testing pollution; low priority, no live symptom.
-- 🔴 **Tech tree can't be closed when it covers the menu bar** (Maddy 2026-06-17) — the tech panel
-  overlaps the dock (incl. the Tech toggle), so there's no way to dismiss it. Needs a close affordance
-  that's always reachable (an X on the panel itself, and/or Esc-to-close, and/or keep the dock above it).
+- ✅ **Tech tree can't be closed when it covers the menu bar** (Maddy 2026-06-17; PR pending) — added an
+  always-visible ✕ in the panel header (the panel top never scrolls, so it's reachable even over the
+  dock) + Escape-to-close. Live-verified both.
 - 🔴 **Parking lots only ever hold ONE car** (Maddy 2026-06-17) — a lot should accept up to 9 (the
   3x3 stall grid), but only one car ever parks. Likely the stall-claim / lot-capacity check in the
   ambient car-parking path (`findParkingNear` / `ParkingLotInfo.stalls` / `tryPark`) is treating the

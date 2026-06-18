@@ -67,6 +67,18 @@ export function mountTechPanel(container: HTMLElement, deps: TechPanelDeps): Tec
 
   const header = document.createElement('div');
   header.className = 'tech-panel-header';
+  // Effort text + an always-visible CLOSE button. The button lives in the header (the panel's
+  // top, which never scrolls), so the tree can be dismissed even when the panel covers the dock's
+  // Tech toggle. Text goes in its own span so refreshing the effort never wipes the button.
+  const effortText = document.createElement('span');
+  effortText.className = 'tech-panel-effort';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'tech-panel-close';
+  closeBtn.textContent = '✕';
+  closeBtn.setAttribute('aria-label', 'Close tech tree');
+  closeBtn.style.cssText = 'float:right; cursor:pointer; font-weight:bold; margin-left:12px;';
+  closeBtn.addEventListener('click', () => setOpen(false));
+  header.append(effortText, closeBtn);
   panel.appendChild(header);
 
   const wrap = document.createElement('div');
@@ -171,7 +183,7 @@ export function mountTechPanel(container: HTMLElement, deps: TechPanelDeps): Tec
 
   function render(): void {
     const content = deps.getContent();
-    header.textContent = content.effort;
+    effortText.textContent = content.effort;
     applyTree(content.layout);
   }
 
@@ -187,6 +199,9 @@ export function mountTechPanel(container: HTMLElement, deps: TechPanelDeps): Tec
     if ((k === 't' || k === 'T') && !deps.isOverlayActive()) {
       event.preventDefault();
       setOpen(!open);
+    } else if (k === 'Escape' && open) {
+      event.preventDefault();
+      setOpen(false); // Escape always dismisses the panel, even when it covers the dock
     }
   }
 
@@ -205,7 +220,7 @@ export function mountTechPanel(container: HTMLElement, deps: TechPanelDeps): Tec
     },
     toggle: () => setOpen(!open),
     refreshHeader: () => {
-      if (open) header.textContent = deps.getEffort ? deps.getEffort() : deps.getContent().effort;
+      if (open) effortText.textContent = deps.getEffort ? deps.getEffort() : deps.getContent().effort;
     },
   };
 }
