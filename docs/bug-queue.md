@@ -60,18 +60,23 @@ Plan: `~/.claude/plans/love-this-so-far-silly-moonbeam.md`.
   industry sorted grade-first; (c) era5 decay scaled by grade (maxDecay·grade/255), not highway
   distance — near-highway gradient re-emerges as a CONSEQUENCE since (d) era3 highways routed
   through redlined corridors (grade-weighted score). Determinism gate green.
-  - 🔴 **TUNING (playtest call):** grade-driven decay at `maxDecay 340` is more aggressive than
-    the old highway-driven `200` — the city is more gutted and **industry is nearly zero by
-    full-stage** (concentrated in redlined → highways + decay destroy it). Structure is correct;
-    magnitude is provisional. Dial `maxDecay` / industry survival / `era3GradeWeight` live.
-- 🔴 **R2 — legibility (the indictment):** HOLC overlay (`redlineOverlayContent.ts`) + inspect
-  grade line + opening-briefing `RedlineReport` naming the policy. (The grade is invisible until this.)
+  - ✅ **TUNING accepted (Maddy playtest):** grade-driven decay at `maxDecay 340` + near-zero
+    industry reads as RIGHT ("real" — whole redlined neighborhoods to parking). Keep the magnitude.
+- ✅ **R2 — legibility (the indictment)** (PR #71) — HOLC overlay (`redlineOverlayContent.ts`, R key
+  / dock button) + inspect grade line + opening-briefing `RedlineReport`. Plus PR #72: name redlining
+  PRECISELY (housing denial + segregation, cause→consequence), not "disinvestment".
 - 🔴 **R3 — live service coverage (fire/health):** `growth/services.ts` BFS coverage (mirrors
-  power), redlined zones under-served, feeds land value/occupancy; player extends = repair.
-- 🔴 **R4 — police-oppression civic dynamic:** worldgen `Precinct` in redlined zones; `civicTick`
-  penalty (over-policing → voice/trust down), countered by community alternatives (no building police).
-- 🔴 **R5 — infra quality (live):** water quality (redlined-industry runoff) + crumbling roads,
-  worst in redlined zones, reparable; feed the decay loop.
+  power), redlined zones under-served, feeds land value/occupancy; player extends = repair. ONLY UNBUILT ITEM.
+- ✅ **R4 — police-oppression civic dynamic** (PR #75) — worldgen `Precinct` concentrated in redlined
+  zones (persists through era5); `civicTick` over-policing penalty (voice/trust down, grade-scaled),
+  countered by community alternatives. Player defunds (bulldoze → Healing Commons); never builds police.
+- ✅ **R5 — infra quality (live):** water (PR #73 — redlined-industry/ground runoff, downstream flow,
+  bankside land-value drag, WastewaterWorks heal) + crumbling roads (PR #74 — redlined roads crumble,
+  cared-for recover, land-value drag). Both feed the decay loop.
+- ✅ **Police live layer** (PR #76) — patrol cruisers from precincts (flashing lights), grade-scaled
+  arrests that drain occupancy AND crater household wellbeing, deliberate patrol (hunt citizens / seek
+  redlined streets). 🟡 IN PROGRESS (this branch): Police Violence overlay + ghost AI (scatter/chase
+  phases, distinct chase personalities, community safe-zones that repel cruisers).
 
 ## TOOLBAR + TECH TREE OVERHAUL (overnight 2026-06-17)
 
@@ -132,6 +137,14 @@ layer (non-deterministic).
   substrate-despawn (ambientContent substep step 1) only because boarding leaves a stale `walkTo` set.
   Make it explicit (`p.phase === 'driving'` in the exemption) so it can't break if `walkTo` is cleared.
   Surfaced while testing pollution; low priority, no live symptom.
+- 🔴 **Tech tree can't be closed when it covers the menu bar** (Maddy 2026-06-17) — the tech panel
+  overlaps the dock (incl. the Tech toggle), so there's no way to dismiss it. Needs a close affordance
+  that's always reachable (an X on the panel itself, and/or Esc-to-close, and/or keep the dock above it).
+- 🔴 **Overlay maps need legends** (Maddy 2026-06-17) — the **eco** map colors (soil/flora/fauna/
+  biodiversity) are "fairly inscrutable"; **civic** maps (belonging/voice/trust) same. They each have a
+  one-line legend string (`legendLine`/`civicLegendLine`) but it's not enough — want a visible color
+  KEY (the ramp endpoints labeled) on screen while an overlay is up. (Redline already reads via the A–D
+  bands; apply the same clarity to eco/civic.)
 
 ## Fixed
 
