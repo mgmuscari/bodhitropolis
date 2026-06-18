@@ -49,6 +49,7 @@ const CIVIC_GLYPH: ReadonlyMap<number, string> = new Map<number, string>([
 export function parcelGlyph(kind: BuiltKind, density: number): string | null {
   const power = POWER_GLYPH.get(kind);
   if (power) return power;
+  if (kind === BuiltKind.Precinct) return 'PD'; // the apparatus of control (ZoneType.None)
   switch (zoneTypeOf(kind)) {
     case ZoneType.Residential:
       return `R${densityTier(density)}`;

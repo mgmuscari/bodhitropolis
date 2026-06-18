@@ -160,6 +160,9 @@ const BUILDING_STYLES: Record<number, BuildingStyle> = {
   [BuiltKind.Industrial]: { base: [140, 92, 62], accent: [160, 110, 78], roof: [104, 66, 44] },
   [BuiltKind.ParkingLot]: { base: [96, 93, 90], accent: [110, 107, 104], roof: [82, 80, 78] },
   [BuiltKind.Civic]: { base: [190, 176, 142], accent: [206, 192, 158], roof: [152, 138, 108] },
+  // Police precinct — stark institutional blue-grey (the apparatus of control), set
+  // apart from the warm Civic palette so it never reads as a community amenity.
+  [BuiltKind.Precinct]: { base: [60, 70, 92], accent: [78, 90, 116], roof: [44, 52, 70] },
   // Power plants 24..30 — dirty centralized tier reads smoky/industrial (coal soot,
   // gas steel, hydro concrete, nuclear cooling-tower grey); the renewables read
   // bright (wind white, solar gold, fusion electric-cyan) — the clean transition is
