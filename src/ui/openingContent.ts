@@ -114,7 +114,14 @@ export function challengeText(
     paras.push(`${report.parcelsAlive} blocks stand ready, an open grid waiting for a gentler hand.`);
   }
 
-  // Para 3 — the imperative.
+  // Para 3 — name the policy (≤90, like every line). The damage was DRAWN: these
+  // blocks were graded "hazardous" and redlined, so the harm could be aimed there.
+  // Named critically, then turned toward repair (the dharmapunk register).
+  if (report.redlinedShare > 0) {
+    paras.push(`${pct(report.redlinedShare)}% of this ground was redlined — graded "hazardous," then sacrificed. Heal it.`);
+  }
+
+  // Para 4 — the imperative.
   paras.push(`Pick up the keys, planner. Begin.`);
 
   return paras;

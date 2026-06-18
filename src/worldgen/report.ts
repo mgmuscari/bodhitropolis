@@ -27,7 +27,7 @@
 // Worldgen layer: no DOM, no transcendental Math (architecture guard scans it);
 // every divide is guarded so an empty world yields exact 0s, never NaN.
 
-import type { GameMap } from '../engine/map';
+import { Water, type GameMap } from '../engine/map';
 import { BuiltKind, type ParcelStore } from '../engine/fabric';
 import { distanceField } from './fields';
 
@@ -60,6 +60,10 @@ export interface BlightReport {
   peripheryAbandonedShare: number | null;
   /** alive parcels per kind (sums to parcelsAlive). */
   byKind: Partial<Record<BuiltKind, number>>;
+  /** share of LAND (non-water tiles) graded D (redlined, grade >= 192) — the
+   *  policy's footprint by area, NOT by survivors (redlining emptied those, so a
+   *  survivor count would perversely undercount the wound). 0 on an all-water map. */
+  redlinedShare: number;
 }
 
 export interface ReportableWorld {
@@ -191,6 +195,16 @@ export function buildReport(world: ReportableWorld): BlightReport {
     if (k === BuiltKind.Projects) projectsStanding++;
   }
 
+  // --- redlinedShare: share of LAND graded D (by area, not survivors) ---
+  let redlinedLand = 0;
+  let landTiles = 0;
+  for (let i = 0; i < map.redline.length; i++) {
+    if (map.water[i] !== Water.None) continue;
+    landTiles++;
+    if (map.redline[i]! >= 192) redlinedLand++;
+  }
+  const redlinedShare = landTiles > 0 ? redlinedLand / landTiles : 0;
+
   // --- Core/periphery cohorts over the FULL store (alive + tombstoned) ---
   const highwayField = distanceField(map, (i) => map.built[i] === BuiltKind.RoadHighway);
   const core: number[] = [];
@@ -220,5 +234,6 @@ export function buildReport(world: ReportableWorld): BlightReport {
     coreAbandonedShare: coreF.abandonedShare,
     peripheryAbandonedShare: periF.abandonedShare,
     byKind,
+    redlinedShare,
   };
 }

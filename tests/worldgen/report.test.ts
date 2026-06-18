@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { GameMap } from '../../src/engine/map';
+import { GameMap, Water } from '../../src/engine/map';
 import {
   ParcelStore,
   BuiltKind,
@@ -118,6 +118,30 @@ describe('buildReport: hand fixture (exact numbers)', () => {
   });
 });
 
+describe('buildReport: redlinedShare (share of LAND graded D, by area)', () => {
+  it('counts D-graded land tiles by area, not by survivors', () => {
+    const map = new GameMap(10, 10); // 100 land tiles, no water
+    const parcels = new ParcelStore();
+    for (let i = 0; i < 25; i++) map.redline[i] = 255; // a quarter graded D
+    const r = buildReport({ map, parcels, log: [] });
+    expect(r.redlinedShare).toBeCloseTo(0.25);
+  });
+
+  it('excludes water tiles from the land denominator', () => {
+    const map = new GameMap(10, 10);
+    const parcels = new ParcelStore();
+    for (let i = 0; i < 50; i++) map.water[i] = Water.Ocean; // half the map is water
+    for (let i = 50; i < 75; i++) map.redline[i] = 255; // half the LAND graded D
+    const r = buildReport({ map, parcels, log: [] });
+    expect(r.redlinedShare).toBeCloseTo(0.5);
+  });
+
+  it('is 0 when no ground is redlined', () => {
+    const r = buildReport(handFixture()); // fixture sets no redline grade
+    expect(r.redlinedShare).toBe(0);
+  });
+});
+
 describe('buildReport: all-water / empty world (NaN guard + nulls)', () => {
   it('guards the divide to exactly 0 and nulls every chronicle/cohort field', () => {
     const map = new GameMap(16, 16);
@@ -173,6 +197,12 @@ describe('buildReport: real pipeline (terrain + moses)', () => {
       expect(r.shareDerelict).toBeLessThanOrEqual(r.shareStruggling);
       const kindSum = Object.values(r.byKind).reduce((a, b) => a + b, 0);
       expect(kindSum).toBe(r.parcelsAlive);
+    });
+
+    it(`seed "${seed}": redlinedShare is bounded and the city has D ground`, () => {
+      const r = buildReport(runFull(seed));
+      expect(r.redlinedShare).toBeGreaterThan(0);
+      expect(r.redlinedShare).toBeLessThanOrEqual(1);
     });
 
     it(`seed "${seed}": survivorship-free abandonment-share gradient holds`, () => {

@@ -8,6 +8,7 @@
 // here lets them be unit-tested rather than left to manual QA.
 
 import { OVERLAY_VIEWS } from './ecoOverlayContent';
+import { REDLINE_VIEWS } from './redlineOverlayContent';
 
 /** The three civic heatmap views, in cycle order. */
 export type CivicOverlayView = 'belonging' | 'voice' | 'trust';
@@ -64,7 +65,7 @@ export function civicLegendLine(view: CivicOverlayView): string {
 // replaces the active overlay at the other kind's first view (exclusivity).
 
 /** Which overlay dimension is active. */
-export type OverlayKind = 'eco' | 'civic';
+export type OverlayKind = 'eco' | 'civic' | 'redline';
 
 /** The single active overlay (kind + view), or null (both off). */
 export interface CompositeOverlay {
@@ -75,7 +76,7 @@ export interface CompositeOverlay {
 export type CompositeState = CompositeOverlay | null;
 
 function viewsFor(kind: OverlayKind): readonly string[] {
-  return kind === 'eco' ? OVERLAY_VIEWS : CIVIC_VIEWS;
+  return kind === 'eco' ? OVERLAY_VIEWS : kind === 'civic' ? CIVIC_VIEWS : REDLINE_VIEWS;
 }
 
 /**
@@ -98,11 +99,12 @@ export function cycleComposite(current: CompositeState, pressed: OverlayKind): C
 /**
  * The shared input gate: which overlay dimension a key press targets, suppressed
  * while the opening overlay is up (it owns its own keydown). `e`/`E` → eco,
- * `c`/`C` → civic, anything else → null.
+ * `c`/`C` → civic, `r`/`R` → redline, anything else → null.
  */
 export function compositeKeyFor(key: string, openingActive: boolean): OverlayKind | null {
   if (openingActive) return null;
   if (key === 'e' || key === 'E') return 'eco';
   if (key === 'c' || key === 'C') return 'civic';
+  if (key === 'r' || key === 'R') return 'redline';
   return null;
 }

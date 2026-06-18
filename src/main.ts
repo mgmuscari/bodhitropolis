@@ -10,6 +10,7 @@ import { mosesCenturyStage } from './worldgen/moses';
 import { ecoSeedStage } from './worldgen/ecoseed';
 import { parseChronicle } from './worldgen/chronicle';
 import { buildReport } from './worldgen/report';
+import { gradeLetter } from './worldgen/redline';
 import { ecologyReport } from './ecology/report';
 import { biodiversityField } from './ecology/biodiversity';
 import { Water } from './engine/map';
@@ -33,6 +34,7 @@ import {
   type CivicOverlayView,
   type OverlayKind,
 } from './ui/civicOverlayContent';
+import { redlineOverlayTint, redlineLegendLine } from './ui/redlineOverlayContent';
 import { pulseLine } from './ui/pulseContent';
 import { mountPulseDock } from './ui/pulseDock';
 import { isRepairTool } from './ui/repairTools';
@@ -297,7 +299,7 @@ export function main(): void {
     onMeta: (id) => {
       if (id === 'tech') techPanel.toggle();
       else if (id === 'life') setAmbient(!ambientOn); // same toggle the L key calls
-      else cycleOverlay(id); // 'eco' | 'civic' — the SAME closure the E/C keys call
+      else cycleOverlay(id); // 'eco' | 'civic' | 'redline' — the SAME closure the E/C/R keys call
     },
   });
 
@@ -368,6 +370,16 @@ export function main(): void {
       renderer.setOverlay(null);
       return;
     }
+    if (activeOverlay.kind === 'redline') {
+      // The HOLC grade is a hashed map layer — tint land tiles by it directly.
+      // Water carries a grade too (the near-water "cover" nudge), but tinting the
+      // river/ocean red reads wrong, so land only — like the eco overlays.
+      const redline = world.map.redline;
+      renderer.setOverlay({
+        tint: (i) => (overlayWater[i] !== Water.None ? null : redlineOverlayTint(redline[i]!)),
+      });
+      return;
+    }
     if (activeOverlay.kind === 'civic') {
       const view = activeOverlay.view as CivicOverlayView;
       const count = deps.civic.count();
@@ -416,7 +428,9 @@ export function main(): void {
         ? null
         : activeOverlay.kind === 'eco'
           ? legendLine(activeOverlay.view as OverlayView)
-          : civicLegendLine(activeOverlay.view as CivicOverlayView);
+          : activeOverlay.kind === 'redline'
+            ? redlineLegendLine('grade')
+            : civicLegendLine(activeOverlay.view as CivicOverlayView);
     toolbar.setStatus(legend);
     markDirty(); // the overlay tint lives in the cached base → invalidate it
     toolbar.refreshMeta(); // the active overlay changed → dock [Eco]/[Civic] state
@@ -495,6 +509,9 @@ export function main(): void {
       else if (pid && isPowerConsumer(world.parcels.kindAt(pid - 1))) {
         line += powerGrid.poweredAnchors.has(anchor) ? ' · powered' : ' · UNPOWERED';
       }
+      // The HOLC redline grade of this ground — the apparatus's classification that
+      // sited the burdens here. Land only (water carries a grade but it reads wrong).
+      if (world.map.water[i] === Water.None) line += ` · redline ${gradeLetter(world.map.redline[i]!)}`;
       toolbar.setStatus(line);
       return;
     }

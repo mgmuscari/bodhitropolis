@@ -26,6 +26,7 @@ const FOUNDED_REPORT: BlightReport = {
   coreAbandonedShare: 0.3,
   peripheryAbandonedShare: 0.05,
   byKind: {},
+  redlinedShare: 0.35,
 };
 
 const SPARSE_REPORT: BlightReport = {
@@ -65,6 +66,7 @@ const ALL_WATER_REPORT: BlightReport = {
   coreAbandonedShare: null,
   peripheryAbandonedShare: null,
   byKind: {},
+  redlinedShare: 0,
 };
 const ALL_WATER_CHRONICLE: Chronicle = {
   entries: [{ era: 1, years: '1900-1920', events: ['no viable site'] }],
@@ -134,9 +136,18 @@ describe('challengeText', () => {
   it('ends with the imperative to begin and never emits "undefined"', () => {
     const paras = challengeText('Marrowfield', FOUNDED_REPORT, CHRONICLE);
     expect(paras.length).toBeGreaterThanOrEqual(2);
-    expect(paras.length).toBeLessThanOrEqual(3);
+    expect(paras.length).toBeLessThanOrEqual(4); // + the redline indictment para
     expect(paras[paras.length - 1]).toMatch(/begin/i);
     expect(paras.join('\n')).not.toContain('undefined');
+  });
+
+  it('names the redlining policy when the city has redlined ground (omits it at 0)', () => {
+    const named = challengeText('Marrowfield', FOUNDED_REPORT, CHRONICLE).join('\n');
+    expect(named).toContain('redlined');
+    expect(named).toContain(`${Math.round(FOUNDED_REPORT.redlinedShare * 100)}%`);
+    // No redlined ground (all-water) → the indictment paragraph is omitted.
+    const none = challengeText('Tidehollow', ALL_WATER_REPORT, ALL_WATER_CHRONICLE).join('\n');
+    expect(none).not.toContain('redlined');
   });
 
   it('keeps every paragraph within 90 chars', () => {
