@@ -18,3 +18,9 @@ export interface OverlayLegend {
   /** Ordered stops, low→high (continuous) or A→D (discrete bands). */
   stops: readonly LegendStop[];
 }
+
+/** The scrim a SPARSE overlay (power, coverage — it tints only certain buildings) lays over every
+ *  OTHER tile, so its handful of strong highlights read as a layer view instead of washing into the
+ *  green terrain. A near-black, mostly-opaque dim: the city goes dark and only the powered/served
+ *  plots glow. (A field overlay — eco/civic/redline — fills the map already and sets no dimBase.) */
+export const OVERLAY_DIM: readonly [number, number, number, number] = [6, 8, 14, 0.66];

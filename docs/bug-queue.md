@@ -157,11 +157,12 @@ layer (non-deterministic).
 
 ### Overlay / eco-layer batch (Maddy 2026-06-18)
 
-- 🔴 **Power (U) + Coverage (V) overlays wash out** — they tint only sparse BUILDING tiles with
-  translucent green/red that vanishes against the green terrain, so pressing U/V reads as "nothing
-  happens" (legend + dock highlight DO toggle; the map doesn't). Redline (R) reads because it fills
-  all land; Police (P) blood-stains are fine (Maddy approved). Fix = ONE abstraction: a sparse-overlay
-  legibility treatment (dim/scrim the base so served/dark/powered buildings pop). Diagnosed live.
+- ✅ **Power (U) + Coverage (V) overlays wash out** (PR pending) — they tint only sparse BUILDING
+  tiles, so translucent green/red vanished against the green terrain (legend/dock toggled, the map
+  didn't). Fix = ONE abstraction: `OverlaySource.dimBase` — the renderer scrims (OVERLAY_DIM, near-
+  black 0.66) every un-highlighted tile, and the highlights paint at a strong 0.92 alpha, so the
+  powered/dark + served/under-served plots GLOW against a darkened city. Live-verified: pressing U/V
+  now dims the map and the buildings pop green/red. (Redline/eco/civic fill the map already → no dim.)
 - 🔴 **Eco overlay should include water + ground + air pollution** (Maddy 2026-06-18) — extend the E
   cycle with the pollution layers. Air (`ambient.pollution`, traffic smog) + water
   (`ambient.waterPollution`, runoff) already exist as live fields → wire as eco views. **Ground

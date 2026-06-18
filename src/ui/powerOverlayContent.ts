@@ -9,8 +9,9 @@ import type { OverlayLegend } from './overlayLegend';
 export type PowerOverlayView = 'power';
 export const POWER_VIEWS: readonly PowerOverlayView[] = ['power'];
 
-/** Fixed translucency for the power overlay (matches the others). */
-export const POWER_OVERLAY_ALPHA = 0.5;
+/** Strong translucency: power tints only sparse consumer plots, so they pop OVER the dimmed
+ *  (scrimmed) base rather than washing into the terrain (see OverlaySource.dimBase / OVERLAY_DIM). */
+export const POWER_OVERLAY_ALPHA = 0.92;
 
 type RGBA = [number, number, number, number];
 
