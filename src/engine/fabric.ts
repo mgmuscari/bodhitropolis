@@ -34,6 +34,10 @@ export const BuiltKind = {
   QuietStreet: 7,
   ElevatedRail: 8,
   Promenade: 9,
+  // Freeway RAMP/interchange 10: a drivable tile that is both freeway and surface street — the
+  // limited-access on/off + at-grade crossing the worldgen drops through the freeway band so the
+  // street grid stays connected (cars enter/exit/cross the freeway only here).
+  RoadRamp: 10,
   // Police precinct 31 — NOT a service. Redlining over-policed the districts it
   // disinvested; the precinct is the apparatus of control, sited in the redlined
   // zones, that suppresses civic voice & trust (see civic/dynamics). The player
@@ -587,6 +591,7 @@ const TRANSPORT_CATEGORY: Readonly<Record<number, number>> = {
   [BuiltKind.QuietStreet]: 1, // reads as road
   [BuiltKind.ElevatedRail]: 2, // shares rail
   [BuiltKind.Promenade]: 4, // pedestrian
+  [BuiltKind.RoadRamp]: 1, // a freeway ramp connects + masks like a road
 };
 
 /** 0 = not transport, 1 = road, 2 = rail, 3 = bike, 4 = pedestrian. */

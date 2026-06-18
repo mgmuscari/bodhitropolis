@@ -750,10 +750,12 @@ export function isCarRoad(kind: number): boolean {
 
 /** A lane within a divided multi-lane road (a widened avenue/freeway: parallel rows
  *  of the SAME road kind). An `outer` lane is one-way (right-hand traffic) with its
- *  `dir` heading and `outward` road edge; the `median` is the interior of a 3+-wide
- *  road and carries no traffic. */
+ *  `dir` heading and `outward` road edge; the `through` lane is the interior of a 3+-wide
+ *  road and carries traffic BOTH ways along the road's axis (Maddy: middle goes both). The
+ *  `median` role is reserved for the future planted no-traffic median (a road-diet upgrade). */
 export type FreewayLane =
   | { role: 'outer'; dir: number; outward: number }
+  | { role: 'through'; horizontal: boolean }
   | { role: 'median' };
 
 /** Per-direction cap when measuring a same-kind run: widths are 2–3, so a short cap
@@ -768,7 +770,7 @@ function sameRun(map: GameMap, x: number, y: number, k: number, dx: number, dy: 
   for (let i = 1; i <= LANE_SCAN_CAP; i++) {
     const nx = x + dx * i;
     const ny = y + dy * i;
-    if (!map.inBounds(nx, ny) || map.built[map.idx(nx, ny)] !== k) break;
+    if (!map.inBounds(nx, ny) || !sameLaneKind(k, map.built[map.idx(nx, ny)]!)) break;
     n++;
   }
   return n;
@@ -800,24 +802,25 @@ export function freewayLane(map: GameMap, x: number, y: number): FreewayLane | n
   const same = (d: number): boolean => {
     const nx = x + DIR_DX[d]!;
     const ny = y + DIR_DY[d]!;
-    return map.inBounds(nx, ny) && map.built[map.idx(nx, ny)] === k;
+    return map.inBounds(nx, ny) && sameLaneKind(k, map.built[map.idx(nx, ny)]!);
   };
   const vert = 1 + sameRun(map, x, y, k, 0, -1) + sameRun(map, x, y, k, 0, 1);
   const horiz = 1 + sameRun(map, x, y, k, -1, 0) + sameRun(map, x, y, k, 1, 0);
   if (horiz > vert) {
-    // Horizontal road — width is the N–S axis.
+    // Horizontal road — width is the N–S axis. Outer lanes one-way (right-hand traffic); the
+    // interior is a two-way `through` lane (Maddy: south goes east, north goes west, middle both).
     const n = same(0); // North neighbour same-kind?
     const s = same(2); // South neighbour same-kind?
-    if (n && s) return { role: 'median' };
+    if (n && s) return { role: 'through', horizontal: true };
     if (s && !n) return { role: 'outer', dir: 3, outward: 0 }; // north lane → West
     if (n && !s) return { role: 'outer', dir: 1, outward: 2 }; // south lane → East
     return null;
   }
   if (vert > horiz) {
-    // Vertical road — width is the E–W axis.
+    // Vertical road — width is the E–W axis. Interior is a two-way `through` lane (see above).
     const e = same(1); // East neighbour same-kind?
     const w = same(3); // West neighbour same-kind?
-    if (e && w) return { role: 'median' };
+    if (e && w) return { role: 'through', horizontal: false };
     if (e && !w) return { role: 'outer', dir: 2, outward: 3 }; // west lane → South
     if (w && !e) return { role: 'outer', dir: 0, outward: 1 }; // east lane → North
     return null;
@@ -952,7 +955,19 @@ function freewayStep(
 /** A car may occupy a road (1..3) or a parking lot — cars cut THROUGH parking (the
  *  accumulated concrete of the over-paved city) rather than routing around it. */
 function carTraversable(kind: number): boolean {
-  return isCarRoad(kind) || kind === BuiltKind.ParkingLot;
+  return isCarRoad(kind) || kind === BuiltKind.ParkingLot || kind === BuiltKind.RoadRamp;
+}
+
+/** A freeway-family tile for LANE GEOMETRY: a highway or a ramp. A ramp is a freeway tile that also
+ *  meets the surface, so for run-length classification it counts as freeway (it must not break the
+ *  lane runs around it), even though canDrive treats the ramp itself as a free interchange. */
+function isFreewayKind(kind: number): boolean {
+  return kind === BuiltKind.RoadHighway || kind === BuiltKind.RoadRamp;
+}
+
+/** Same lane material for run measurement: identical kinds, or both freeway-family (highway/ramp). */
+function sameLaneKind(a: number, b: number): boolean {
+  return a === b || (isFreewayKind(a) && isFreewayKind(b));
 }
 
 /** Car traversability for general (non-lane) routing: a road or parking tile that is
@@ -973,6 +988,48 @@ export function isParkable(map: GameMap, x: number, y: number): boolean {
   const k = map.built[map.idx(x, y)]!;
   if (!carTraversable(k) || k === BuiltKind.RoadHighway) return false;
   return map.water[map.idx(x, y)] === 0;
+}
+
+/** The grid direction (0..3) of the step from (fx,fy) to an orthogonally-adjacent (tx,ty). */
+function moveDir(fx: number, fy: number, tx: number, ty: number): number {
+  if (tx > fx) return 1; // East
+  if (tx < fx) return 3; // West
+  if (ty > fy) return 2; // South
+  return 0; // North
+}
+
+/** True iff direction `d` runs along a `through` lane's road axis (so a car may travel it). */
+function alongThrough(lane: { horizontal: boolean }, d: number): boolean {
+  return lane.horizontal ? d === 1 || d === 3 : d === 0 || d === 2;
+}
+
+/**
+ * EDGE-aware car passability: may a car move from (fx,fy) to adjacent (tx,ty)? This is what makes a
+ * freeway LIMITED-ACCESS (Maddy): you can only move ALONG a freeway (an outer lane in its one-way
+ * `dir`, or the two-way `through` middle along the axis), and you can only enter/leave it where it is
+ * NOT a clean lane — at a `null` tile, which is exactly a freeway interchange (freeway crosses
+ * freeway) or an end. So cross traffic never cuts across a freeway mid-span, but does at interchanges
+ * and ends. Off the freeway (at-grade streets/avenues) it is the plain `carPassable` test — those
+ * stay permissive (cross traffic / the divided-avenue crossing is handled separately). Direction is
+ * only meaningful for adjacent tiles; callers pass 4-neighbours.
+ */
+export function canDrive(map: GameMap, fx: number, fy: number, tx: number, ty: number): boolean {
+  if (!map.inBounds(tx, ty) || !carTraversable(map.built[map.idx(tx, ty)]!)) return false;
+  const fromHwy = map.built[map.idx(fx, fy)] === BuiltKind.RoadHighway;
+  const toHwy = map.built[map.idx(tx, ty)] === BuiltKind.RoadHighway;
+  if (!fromHwy && !toHwy) return true; // both at-grade → plain passability (unchanged)
+  const d = moveDir(fx, fy, tx, ty);
+  if (fromHwy) {
+    const L = freewayLane(map, fx, fy); // EXIT: leave a freeway only along it (or an outer ramp)
+    if (L && L.role === 'outer' && d !== L.dir && d !== L.outward) return false;
+    if (L && L.role === 'through' && !alongThrough(L, d)) return false;
+  }
+  if (toHwy) {
+    const L = freewayLane(map, tx, ty); // ENTER: join a freeway only along it (never perpendicular)
+    if (L && L.role === 'outer' && d !== L.dir) return false;
+    if (L && L.role === 'through' && !alongThrough(L, d)) return false;
+  }
+  return true; // null freeway tiles (interchange / end) impose no direction → cross/turn freely
 }
 
 /**
@@ -996,7 +1053,10 @@ export function nextRoadStep(
   if (lane && lane.role === 'outer') {
     return freewayStep(map, x, y, lane, rng); // one-way: cannot loop, no avoidance needed
   }
-  return pickStep(map, x, y, fromDir, rng, (nx, ny) => carPassable(map, nx, ny), CAR_STRAIGHT_WEIGHT, recent);
+  // Everything else (the two-way `through` middle, an interchange/end, an at-grade junction) is the
+  // straight-biased pick — but over canDrive edges, so a `through` car stays on-axis and a car can
+  // only cross/turn onto a freeway where it's an interchange/end (limited access).
+  return pickStep(map, x, y, fromDir, rng, (nx, ny) => canDrive(map, x, y, nx, ny), CAR_STRAIGHT_WEIGHT, recent);
 }
 
 /** The pedestrian motion seam: the same junction rule over ped substrate. */
@@ -1076,7 +1136,7 @@ function isWalkable(map: GameMap, x: number, y: number): boolean {
   if (!map.inBounds(x, y)) return false;
   if (map.water[map.idx(x, y)] !== 0) return false; // Water.None === 0
   const k = map.built[map.idx(x, y)]!;
-  if (k === BuiltKind.RoadHighway) return false; // a pedestrian can't cross a freeway
+  if (k === BuiltKind.RoadHighway || k === BuiltKind.RoadRamp) return false; // no walking a freeway/ramp
   return zoneTypeOf(k) === ZoneType.None;
 }
 
@@ -1274,7 +1334,7 @@ export function roadPath(
     for (let d = 0; d < 4; d++) {
       const nx = cur.x + DIR_DX[d]!;
       const ny = cur.y + DIR_DY[d]!;
-      if (!carPassable(map, nx, ny)) continue;
+      if (!canDrive(map, cur.x, cur.y, nx, ny)) continue; // directed edges: one-way + limited-access
       const ni = map.idx(nx, ny);
       const ng = baseG + driveTileCost(map, nx, ny, traffic);
       if (ng < (gScore.get(ni) ?? Infinity)) {

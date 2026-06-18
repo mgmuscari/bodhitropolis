@@ -72,6 +72,7 @@ export interface MosesParams {
   era3MinDemolish: number; // a corridor must cut through at least this many parcels
   corridorTopK: number; // rng jitter among the top-K scored corridors
   era3Projects: number; // tower-in-the-park Projects placed along the corridor
+  era3RampSpacing: number; // tiles between freeway ramps/interchanges (limited access + connectivity)
   // Era 4 suburban flight
   suburbRadius: number; // road-network distance beyond which sprawl begins
   era4Spurs: number; // street spurs grown into open land
@@ -133,6 +134,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era3MinDemolish: 5,
   corridorTopK: 3,
   era3Projects: 5,
+  era3RampSpacing: 8,
   suburbRadius: 20,
   era4Spurs: 24,
   era4SpurMin: 4,
@@ -985,6 +987,34 @@ function carveCorridor(map: GameMap, store: ParcelStore, c: Corridor): [number, 
 }
 
 /**
+ * Drop limited-access RAMPS through a carved freeway corridor. Every `era3RampSpacing` tiles along
+ * the corridor, where the surface grid flanks the band, convert that 3-wide cross-section to
+ * RoadRamp — a drivable freeway-AND-street tile (an on/off ramp + at-grade crossing). The rest of
+ * the freeway stays limited-access, but the street grid stays connected across it at the ramps
+ * (Maddy: ramps = a street overlaid onto a freeway tile next to another street). Worldgen-only,
+ * folded into the hash via the built layer.
+ */
+function placeCorridorRamps(map: GameMap, c: Corridor, p: MosesParams): void {
+  const offsets = [0, -1, 1];
+  const tileOf = (s: number, off: number): [number, number] =>
+    c.axis === 'row' ? [s, c.index + off] : [c.index + off, s];
+  const sideRoad = (s: number, off: number): boolean => {
+    const [x, y] = tileOf(s, off);
+    return map.inBounds(x, y) && isRoadKind(map.built[map.idx(x, y)]!);
+  };
+  for (let s = c.lo + p.era3RampSpacing; s <= c.hi - 1; s += p.era3RampSpacing) {
+    // Only ramp where the grid actually flanks the band — a ramp must connect to streets on a side.
+    if (!sideRoad(s, -2) && !sideRoad(s, 2)) continue;
+    for (const off of offsets) {
+      const [x, y] = tileOf(s, off);
+      if (map.inBounds(x, y) && map.built[map.idx(x, y)] === BuiltKind.RoadHighway) {
+        map.built[map.idx(x, y)] = BuiltKind.RoadRamp;
+      }
+    }
+  }
+}
+
+/**
  * Era 3 — urban renewal & highways. Scores every row/column corridor by the
  * boxDensity of alive parcels along its run, restricted to corridors that
  * actually cut through >= era3MinDemolish parcels (urban renewal demolishes
@@ -1089,6 +1119,11 @@ export function era3Highways(world: WorldState, rng: Rng, p: MosesParams, state:
     railRemoved += r2;
     world.log.push(`era3: highway ${bestPerp.axis} ${bestPerp.index} from ${bestPerp.lo} to ${bestPerp.hi}`);
   }
+
+  // Limited-access ramps: drop on/off + crossing ramps through each corridor so the street grid
+  // stays connected across the freeway (the rest stays limited-access).
+  placeCorridorRamps(map, first, p);
+  if (bestPerp && bestPerp.sum * 2 >= first.sum) placeCorridorRamps(map, bestPerp, p);
 
   // The streetcar massacre: rip out all remaining rail.
   railRemoved += demolishAllRail(map);

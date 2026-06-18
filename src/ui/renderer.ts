@@ -111,6 +111,7 @@ const ROAD_STYLES: Record<number, RoadStyle> = {
   [BuiltKind.RoadAvenue]: { base: [72, 68, 66], accent: [84, 80, 78], line: [196, 170, 72], dashed: false, double: false },
   [BuiltKind.RoadHighway]: { base: [50, 48, 50], accent: [60, 58, 60], line: [206, 184, 80], dashed: false, double: true },
   [BuiltKind.QuietStreet]: { base: [86, 96, 82], accent: [98, 108, 94], line: [156, 176, 132], dashed: true, double: false },
+  [BuiltKind.RoadRamp]: { base: [78, 74, 70], accent: [120, 112, 96], line: [210, 190, 96], dashed: true, double: false }, // an on/off ramp: a street-toned deck across the freeway
 };
 
 interface RailStyle {

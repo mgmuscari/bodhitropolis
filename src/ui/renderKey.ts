@@ -25,6 +25,7 @@ const ROAD_RENDER_KINDS: readonly number[] = [
   BuiltKind.RoadAvenue,
   BuiltKind.RoadHighway,
   BuiltKind.QuietStreet,
+  BuiltKind.RoadRamp, // a freeway ramp renders as a road (its own style); never widens
 ];
 
 // Road kinds that can render as a continuous WIDE slab (a 2×2-block corridor):

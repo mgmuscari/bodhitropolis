@@ -93,7 +93,9 @@ function runSatellites(seed: string, width = 128, height = 128): { world: WorldS
 // hold zero road tiles, so they correctly don't count as fragmentation.
 function roadNetwork(map: GameMap): { total: number; largestComponent: number } {
   const { width, height } = map;
-  const isRoad = (i: number) => isRoadKind(map.built[i]!);
+  // A freeway ramp (RoadRamp) is part of the drivable road network — it's what keeps the grid
+  // connected across an otherwise limited-access freeway.
+  const isRoad = (i: number) => isRoadKind(map.built[i]!) || map.built[i] === BuiltKind.RoadRamp;
   const drivable = (i: number) => isRoad(i) || map.built[i] === BuiltKind.ParkingLot;
   let total = 0;
   for (let i = 0; i < width * height; i++) if (isRoad(i)) total++;
@@ -666,6 +668,36 @@ function countBuilt(map: GameMap, kind: number): number {
   return n;
 }
 
+/** Connected-component sizes over any tile predicate (4-connected). */
+function componentSizesPred(map: GameMap, pred: (i: number) => boolean): number[] {
+  const { width, height } = map;
+  const seen = new Uint8Array(width * height);
+  const sizes: number[] = [];
+  for (let s = 0; s < width * height; s++) {
+    if (!pred(s) || seen[s]) continue;
+    let size = 0;
+    const queue = [s];
+    seen[s] = 1;
+    let head = 0;
+    while (head < queue.length) {
+      const i = queue[head++]!;
+      size++;
+      const x = i % width;
+      const y = (i - x) / width;
+      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]] as const) {
+        if (!map.inBounds(nx, ny)) continue;
+        const ni = map.idx(nx, ny);
+        if (!seen[ni] && pred(ni)) {
+          seen[ni] = 1;
+          queue.push(ni);
+        }
+      }
+    }
+    sizes.push(size);
+  }
+  return sizes;
+}
+
 // True iff any 2x2 block is ALL RoadHighway — the signature of a multi-row carve.
 // A single-row corridor cannot form one (even at a + crossing or alongside grid
 // streets, the diagonal cell is never a 2nd highway row).
@@ -735,8 +767,15 @@ describe('era3Highways', () => {
       const { map } = world;
       expect(countBuilt(map, BuiltKind.RoadHighway)).toBeGreaterThanOrEqual(20);
 
-      const sizes = componentSizes(map, BuiltKind.RoadHighway).sort((a, b) => b - a);
-      expect(sizes[0]).toBe(countBuilt(map, BuiltKind.RoadHighway)); // single connected run/cross
+      // The freeway is one connected structure — counting the ramp cross-sections (RoadRamp) that
+      // now punctuate it, since those are part of the same continuous corridor.
+      const isFreeway = (i: number) =>
+        map.built[i] === BuiltKind.RoadHighway || map.built[i] === BuiltKind.RoadRamp;
+      let freewayTotal = 0;
+      for (let i = 0; i < map.built.length; i++) if (isFreeway(i)) freewayTotal++;
+      const fwSizes = componentSizesPred(map, isFreeway).sort((a, b) => b - a);
+      expect(fwSizes[0]).toBe(freewayTotal); // single connected run/cross (highway + ramps)
+      expect(countBuilt(map, BuiltKind.RoadRamp)).toBeGreaterThan(0); // limited-access ramps were dropped
 
       // >= 5 highway tiles fall inside the pre-era-3 top-quartile density mask.
       let inMask = 0;
