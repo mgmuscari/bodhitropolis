@@ -848,6 +848,14 @@ describe('arrests: cruisers drain the redlined community for nothing', () => {
     expect(state.peds.length).toBe(1); // never arrested where there's no redlining
   });
 
+  it('craters the household wellbeing (the trauma of an arrest)', () => {
+    const { map, state, home } = policedStreet(255);
+    const rng = ambientFork('arrest');
+    for (let n = 0; n < 40 && state.peds.length > 0; n++) stepArrests(state, map, rng);
+    expect(state.peds.length).toBe(0); // someone was taken
+    expect(state.buildingHealth.get(home) ?? 0).toBeLessThan(-40); // wellbeing devastated, not nudged
+  });
+
   it('makes no arrests once the precinct is defunded (no cruisers)', () => {
     const { map, state } = policedStreet(255);
     state.cruisers = []; // defunded — the cruisers are gone

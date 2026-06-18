@@ -52,6 +52,8 @@ const ARREST_CADENCE = 40; // substeps between arrest sweeps (~2s)
 const ARREST_CHANCE_MAX = 0.5; // per cruiser per sweep on FULLY redlined ground (grade 255)
 const ARREST_RADIUS = 4; // a cruiser seizes an on-foot citizen within this Manhattan distance
 const ARREST_DRAIN = 1; // people removed from the household per arrest
+const ARREST_TRAUMA = 60; // wellbeing (buildingHealth) ripped from the household per arrest (heavy:
+//                           half the ±HEALTH_MAX range — an arrest devastates a home, it doesn't nudge it)
 
 /**
  * The per-sweep arrest probability for a cruiser standing on ground of this redline grade:
@@ -2099,6 +2101,7 @@ export function stepArrests(state: AmbientState, map: GameMap, rng: Rng): void {
     if (taken.homeTile !== undefined) {
       const cur = state.occupancy.get(taken.homeTile);
       if (cur !== undefined) state.occupancy.set(taken.homeTile, Math.max(0, cur - ARREST_DRAIN));
+      depositHealth(state, taken.homeTile, -ARREST_TRAUMA); // the trauma craters the household's wellbeing
     }
     state.peds.splice(victim, 1); // taken off the street, for nothing
   }
