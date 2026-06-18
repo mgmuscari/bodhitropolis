@@ -18,6 +18,10 @@ import { parcelGlyph } from './glyphContent';
 import { isPowerConsumer } from '../growth/power';
 import { laneOffset, curbParkOffset, pedCurbOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
+import { OVERLAY_DIM } from './overlayLegend';
+
+/** Precomputed CSS for the sparse-overlay scrim (see OverlaySource.dimBase). */
+const OVERLAY_DIM_CSS = `rgba(${OVERLAY_DIM[0]}, ${OVERLAY_DIM[1]}, ${OVERLAY_DIM[2]}, ${OVERLAY_DIM[3]})`;
 import { policeViolenceTint } from './policeViolenceOverlayContent';
 import { TravelMode } from '../citizens/modes';
 
@@ -40,6 +44,9 @@ export interface PreviewTile {
  */
 export interface OverlaySource {
   tint(i: number): readonly [number, number, number, number] | null;
+  /** When true, every tile the tint leaves un-highlighted (null) is dimmed with OVERLAY_DIM, so a
+   *  SPARSE overlay's few strong highlights pop against a darkened map instead of washing out. */
+  dimBase?: boolean;
 }
 
 type RGB = readonly [number, number, number];
@@ -605,10 +612,15 @@ export class Renderer {
 
         // Ecology heatmap: a translucent tint over every visible tile (built or
         // not). Part of the base — overlay changes call invalidateBase (Task 3).
+        // A SPARSE overlay (dimBase) scrims every un-highlighted tile so its few
+        // strong highlights read as a layer view instead of washing into terrain.
         if (this.overlay) {
           const t = this.overlay.tint(i);
           if (t) {
             ctx.fillStyle = `rgba(${t[0]}, ${t[1]}, ${t[2]}, ${t[3]})`;
+            ctx.fillRect(dx, dy, ts, ts);
+          } else if (this.overlay.dimBase) {
+            ctx.fillStyle = OVERLAY_DIM_CSS;
             ctx.fillRect(dx, dy, ts, ts);
           }
         }

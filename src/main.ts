@@ -416,17 +416,21 @@ export function main(): void {
       return;
     }
     if (activeOverlay.kind === 'coverage') {
-      // Tint each developed plot tile by whether a fire/health station is in reach (served/under).
+      // Tint each developed plot tile by whether a fire/health station is in reach (served/under);
+      // dim the rest so the served/under-served plots read as a layer view, not faint specks.
       const cov = ambientState.coverage;
       renderer.setOverlay({
+        dimBase: true,
         tint: (i) => (world.map.parcel[i] !== 0 ? coverageTint(cov.has(i)) : null),
       });
       return;
     }
     if (activeOverlay.kind === 'power') {
-      // Tint each power-consumer plot green (on the grid) or red (dark), via its parcel anchor.
+      // Tint each power-consumer plot green (on the grid) or red (dark), via its parcel anchor;
+      // dim the rest so lit/dark buildings read as a layer view, not faint specks on the terrain.
       const lit = powerGrid.poweredAnchors;
       renderer.setOverlay({
+        dimBase: true,
         tint: (i) => {
           const pid = world.map.parcel[i];
           if (!pid || !isPowerConsumer(world.parcels.kindAt(pid - 1))) return null;

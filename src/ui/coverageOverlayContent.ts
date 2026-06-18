@@ -10,8 +10,9 @@ import type { OverlayLegend } from './overlayLegend';
 export type CoverageOverlayView = 'coverage';
 export const COVERAGE_VIEWS: readonly CoverageOverlayView[] = ['coverage'];
 
-/** Fixed translucency for the coverage overlay (matches the others). */
-export const COVERAGE_OVERLAY_ALPHA = 0.5;
+/** Strong translucency: coverage tints only developed plots, so served/under-served pop OVER the
+ *  dimmed (scrimmed) base rather than washing into terrain (see OverlaySource.dimBase / OVERLAY_DIM). */
+export const COVERAGE_OVERLAY_ALPHA = 0.92;
 
 type RGBA = [number, number, number, number];
 
