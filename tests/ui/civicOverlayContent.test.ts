@@ -107,6 +107,13 @@ describe('cycleComposite: E/C exclusivity truth table', () => {
     expect(cycleComposite(civic('voice'), 'police')).toEqual(police('violence'));
     expect(cycleComposite(police('violence'), 'eco')).toEqual(eco('soil'));
   });
+
+  it('coverage is a single-view kind that off-wraps and obeys exclusivity', () => {
+    const coverage = (view: string): CompositeState => ({ kind: 'coverage', view });
+    expect(cycleComposite(null, 'coverage')).toEqual(coverage('coverage'));
+    expect(cycleComposite(coverage('coverage'), 'coverage')).toBeNull();
+    expect(cycleComposite(eco('soil'), 'coverage')).toEqual(coverage('coverage'));
+  });
 });
 
 describe('compositeKeyFor: shared E/C/R gate', () => {
@@ -119,6 +126,8 @@ describe('compositeKeyFor: shared E/C/R gate', () => {
     expect(compositeKeyFor('R', false)).toBe('redline');
     expect(compositeKeyFor('p', false)).toBe('police');
     expect(compositeKeyFor('P', false)).toBe('police');
+    expect(compositeKeyFor('v', false)).toBe('coverage');
+    expect(compositeKeyFor('V', false)).toBe('coverage');
     expect(compositeKeyFor('t', false)).toBeNull();
     expect(compositeKeyFor('Enter', false)).toBeNull();
     expect(compositeKeyFor('e', true)).toBeNull(); // opening active suppresses all
