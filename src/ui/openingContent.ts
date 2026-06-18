@@ -114,14 +114,17 @@ export function challengeText(
     paras.push(`${report.parcelsAlive} blocks stand ready, an open grid waiting for a gentler hand.`);
   }
 
-  // Para 3 — name the policy (≤90, like every line). The damage was DRAWN: these
-  // blocks were graded "hazardous" and redlined, so the harm could be aimed there.
-  // Named critically, then turned toward repair (the dharmapunk register).
+  // Paras 3-4 — name the policy PRECISELY (≤90 each). Redlining was, first, the
+  // DENIAL OF HOUSING: HOLC/FHA refused Black families mortgages and barred them
+  // from the "good" neighborhoods, penning them in the red zones — which were THEN
+  // made dumping grounds for the highways, the industry, the pollution. Cause then
+  // consequence; named critically, turned toward repair (the dharmapunk register).
   if (report.redlinedShare > 0) {
-    paras.push(`${pct(report.redlinedShare)}% of this ground was redlined — graded "hazardous," then sacrificed. Heal it.`);
+    paras.push(`Redlining barred Black families from the good neighborhoods and penned them in the red.`);
+    paras.push(`Then ${pct(report.redlinedShare)}% of it was made a dumping ground — the highways, the smoke, the rot.`);
   }
 
-  // Para 4 — the imperative.
+  // Para 5 — the imperative.
   paras.push(`Pick up the keys, planner. Begin.`);
 
   return paras;
