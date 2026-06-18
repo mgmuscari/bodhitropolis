@@ -359,6 +359,19 @@ const WATER_FLOW_FRACTION = 0.25; // share of a tile's pollution that flows down
 const WATER_TREAT_RADIUS = 6; // a wastewater works cleans water within this Manhattan radius
 const WATER_TREAT_AMOUNT = 30; // pollution removed at the works per cadence (falls off with distance)
 
+/** Ground pollution: the LAND analogue of water runoff. Industry + dirty power + the litter/wear of
+ *  demand paths poison the ground they sit on and the land around them, accumulating toward
+ *  GROUND_POLL_MAX and clearing slowly once the source is gone (a lingering toxic legacy the player
+ *  heals). The real source that then runs off into the creeks. Whole-map scan on a slow cadence;
+ *  live/cosmetic, never hashed. */
+const GROUND_POLL_MAX = 255;
+const GROUND_RUNOFF_CADENCE = 20; // substeps between ground-contamination passes (matches water)
+const GROUND_INDUSTRY = 5; // an industrial tile poisons its own ground, grade-scaled up to 2x
+const GROUND_PLANT = 6; // a dirty power plant poisons the ground under it
+const GROUND_SEEP = 1.5; // an industrial/plant NEIGHBOUR seeps into adjacent ground (the plume)
+const GROUND_LITTER = 3; // demand-path litter/wear leaches in, scaled by the tile's wear
+const GROUND_DECAY = 0.8; // lingers — contaminated land is slow to recover (but reparable)
+
 /** Road decay: redlined roads crumble (the city won't maintain the disinvested districts), while
  *  roads in a CARED-FOR neighborhood (land value at/above ROAD_CARED_LV) recover. Crumbling
  *  scales with the road tile's redline grade, so greenlined roads stay sound. Live/non-hashed. */
@@ -610,6 +623,12 @@ export interface AmbientState {
   waterPollution: Map<number, number>;
   /** Substep counter gating the (whole-map) water-runoff pass to WATER_RUNOFF_CADENCE. */
   waterTick: number;
+  /** Live GROUND POLLUTION (0..GROUND_POLL_MAX), keyed by LAND tile: industry + dirty power + the
+   *  litter/wear of demand paths poison the surrounding land, lingering and slow to clear (the land
+   *  analogue of water runoff — the toxic legacy the player heals). Renderer-side, never hashed. */
+  groundPollution: Map<number, number>;
+  /** Substep counter gating the (whole-map) ground-contamination pass to GROUND_RUNOFF_CADENCE. */
+  groundTick: number;
   /** Live AGENT-DRIVEN traffic density (0..TRAFFIC_MAX), keyed by road tile: laid by cars as they
    *  drive, decayed when they don't. THE traffic — emergent from the agents, not an aggregate field.
    *  Car pathfinding routes around it and peds shun it; renderer-side, never hashed. */
@@ -664,6 +683,8 @@ export function createAmbientState(): AmbientState {
     wear: new Map(),
     waterPollution: new Map(),
     waterTick: 0,
+    groundPollution: new Map(),
+    groundTick: 0,
     traffic: new Map(),
     pollution: new Map(),
     landValue: new Map(),
@@ -2783,6 +2804,14 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     treatWaterPollution(state, map); // the player's wastewater works heals it back
   }
 
+  // 6b. Ground contamination: on the same slow cadence, industry + dirty power + demand-path litter
+  //     poison the land they sit on and the land around them — lingering, but clearing once the
+  //     source is gone (the toxic legacy the player heals; the source the creeks run off from).
+  state.groundTick += 1;
+  if (state.groundTick % GROUND_RUNOFF_CADENCE === 0) {
+    accumulateGroundPollution(state, map);
+  }
+
   // 7. Land value: on a slow cadence, recompute each plot's desirability from the healed land +
   //    amenities minus the live nuisances. A readout over the other layers — derived, not laid.
   state.lvTick += 1;
@@ -2840,6 +2869,50 @@ export function accumulateWaterRunoff(state: AmbientState, map: GameMap): void {
       layField(state.waterPollution, i, runoff, WATER_POLL_MAX);
     }
   }
+}
+
+/** Lay the LAND-contamination field: each ground tile accrues pollution from its OWN source-ness
+ *  (industry + a dirty power plant sitting on it, grade-scaled), the litter/wear of demand paths
+ *  that cross it, and a seep from adjacent industrial/plant tiles (the plume spreads a tile). Then
+ *  the whole field decays slowly, so removing a source (bulldoze the plant, calm the path, rewild)
+ *  lets the land recover — the toxic legacy is lingering but reparable. Whole-map scan; gated to
+ *  GROUND_RUNOFF_CADENCE by the caller. Live/non-hashed. */
+export function accumulateGroundPollution(state: AmbientState, map: GameMap): void {
+  const W = map.width;
+  const H = map.height;
+  const plants =
+    state.plantEmitters && state.plantEmitters.length > 0
+      ? new Set(state.plantEmitters.map((e) => e.tile))
+      : null;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = map.idx(x, y);
+      if (map.water[i] !== 0) continue; // ground only — water keeps its own runoff field
+      let load = 0;
+      const k = map.built[i]!;
+      // The tile's OWN source-ness: industry + dirty power poison the ground they stand on.
+      if (zoneTypeOf(k) === ZoneType.Industrial) load += GROUND_INDUSTRY * (1 + map.redline[i]! / 255);
+      if (plants && plants.has(i)) load += GROUND_PLANT;
+      // Demand-path litter: the trampled, littered ground of a beaten path leaches into the soil.
+      const wear = state.wear.get(i) ?? 0;
+      if (wear > 0) load += (wear / WEAR_MAX) * GROUND_LITTER;
+      // Seep from adjacent sources — the contamination spreads a tile into the surrounding land.
+      for (let d = 0; d < 4; d++) {
+        const nx = x + DIR_DX[d]!;
+        const ny = y + DIR_DY[d]!;
+        if (!map.inBounds(nx, ny)) continue;
+        const ni = map.idx(nx, ny);
+        if (map.water[ni] !== 0) continue;
+        if (zoneTypeOf(map.built[ni]!) === ZoneType.Industrial) {
+          load += GROUND_SEEP * (1 + map.redline[ni]! / 255);
+        } else if (plants && plants.has(ni)) {
+          load += GROUND_SEEP;
+        }
+      }
+      if (load > 0) layField(state.groundPollution, i, load, GROUND_POLL_MAX);
+    }
+  }
+  decayField(state.groundPollution, GROUND_DECAY); // lingers, but clears once the sources are gone
 }
 
 /**

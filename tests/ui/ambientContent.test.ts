@@ -45,6 +45,7 @@ import {
   stepOccupancy,
   liveInspectLine,
   accumulateWaterRunoff,
+  accumulateGroundPollution,
   flowWaterPollution,
   treatWaterPollution,
   stepRoadDecay,
@@ -391,6 +392,47 @@ describe('agent substrate invariants (Maddy: cars park on freeways, peds cross w
     stepAmbient(state, m, rng, 50);
     const ped = state.peds[0];
     if (ped) expect(m.water[m.idx(Math.round(ped.x), Math.round(ped.y))]).toBe(0); // no longer on water
+  });
+});
+
+describe('accumulateGroundPollution (Maddy: live land contamination; litter feeds in)', () => {
+  it('industry, dirty plants, and demand-path litter poison the ground; clean land + water stay clean', () => {
+    const m = new GameMap(12, 12);
+    m.built[m.idx(3, 3)] = BuiltKind.Industrial; // a toxic industrial tile
+    m.water[m.idx(9, 9)] = Water.Ocean; // water keeps its own runoff field, not ground pollution
+    const state = createAmbientState();
+    setPlantEmitters(state, [{ tile: m.idx(6, 6), amount: 10 }]); // a dirty power plant
+    state.wear.set(m.idx(2, 8), 200); // a heavily trampled, littered demand path
+    accumulateGroundPollution(state, m);
+    expect(state.groundPollution.get(m.idx(3, 3)) ?? 0).toBeGreaterThan(0); // industry poisons the ground
+    expect(state.groundPollution.get(m.idx(6, 6)) ?? 0).toBeGreaterThan(0); // the dirty plant does too
+    expect(state.groundPollution.get(m.idx(2, 8)) ?? 0).toBeGreaterThan(0); // litter from the path feeds in
+    expect(state.groundPollution.get(m.idx(11, 0)) ?? 0).toBe(0); // clean empty land stays clean
+    expect(state.groundPollution.get(m.idx(9, 9)) ?? 0).toBe(0); // a water tile never collects ground pollution
+  });
+
+  it('redlined industry contaminates the ground MORE than greenlined (grade-scaled)', () => {
+    const lo = new GameMap(8, 8);
+    const hi = new GameMap(8, 8);
+    lo.built[lo.idx(4, 4)] = BuiltKind.Industrial;
+    hi.built[hi.idx(4, 4)] = BuiltKind.Industrial;
+    hi.redline[hi.idx(4, 4)] = 255; // fully redlined (lo stays grade 0)
+    const a = createAmbientState();
+    const b = createAmbientState();
+    accumulateGroundPollution(a, lo);
+    accumulateGroundPollution(b, hi);
+    expect(b.groundPollution.get(hi.idx(4, 4))!).toBeGreaterThan(a.groundPollution.get(lo.idx(4, 4))!);
+  });
+
+  it('the contamination clears once the source is removed (lingering but reparable)', () => {
+    const m = new GameMap(8, 8);
+    m.built[m.idx(4, 4)] = BuiltKind.Industrial;
+    const state = createAmbientState();
+    for (let i = 0; i < 80; i++) accumulateGroundPollution(state, m); // builds up over the cadence
+    expect(state.groundPollution.get(m.idx(4, 4)) ?? 0).toBeGreaterThan(100);
+    m.built[m.idx(4, 4)] = BuiltKind.None; // the player bulldozes / rewilds the source
+    for (let i = 0; i < 2000; i++) accumulateGroundPollution(state, m);
+    expect(state.groundPollution.get(m.idx(4, 4)) ?? 0).toBe(0); // the land recovers
   });
 });
 

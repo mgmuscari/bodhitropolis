@@ -485,6 +485,16 @@ export function main(): void {
       });
       return;
     }
+    if (view === 'groundPollution') {
+      // The live land-contamination field, over LAND — industry + dirty power + demand-path litter
+      // poison the ground; clean land elsewhere. Reparable: it clears as the player heals/rewilds.
+      const gp = ambientState.groundPollution;
+      renderer.setOverlay({
+        tint: (i) =>
+          overlayWater[i] !== Water.None ? null : overlayTint('groundPollution', Math.min(255, gp.get(i) ?? 0)),
+      });
+      return;
+    }
     if (view === 'waterPollution') {
       // The live runoff field, over WATER — the dingy creeks downstream of redlined industry. Clean
       // blue where the water is healthy, murky where contamination collects.
