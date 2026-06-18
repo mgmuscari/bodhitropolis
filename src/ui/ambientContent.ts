@@ -929,6 +929,17 @@ function carPassable(map: GameMap, x: number, y: number): boolean {
   return lane === null || lane.role !== 'median';
 }
 
+/** A tile a car may come to REST on: a non-freeway street/avenue/parking surface on dry land.
+ *  Freeways carry no parking and a road over water is a bridge, not a kerb — both are excluded, so
+ *  a car never freezes on a freeway or over water (Maddy: cars parking on freeways). The single
+ *  authoritative parking predicate, shared by the kerb search and the owned-car park fallback. */
+export function isParkable(map: GameMap, x: number, y: number): boolean {
+  if (!map.inBounds(x, y)) return false;
+  const k = map.built[map.idx(x, y)]!;
+  if (!carTraversable(k) || k === BuiltKind.RoadHighway) return false;
+  return map.water[map.idx(x, y)] === 0;
+}
+
 /**
  * The car motion seam: from road tile (x, y), the chosen connected isRoadKind
  * neighbour direction (0..3). On a divided multi-lane road's outer lane the choice is
@@ -1032,6 +1043,27 @@ function isWalkable(map: GameMap, x: number, y: number): boolean {
   const k = map.built[map.idx(x, y)]!;
   if (k === BuiltKind.RoadHighway) return false; // a pedestrian can't cross a freeway
   return zoneTypeOf(k) === ZoneType.None;
+}
+
+/** The nearest pedestrian-walkable tile to (x, y) within `maxR` (ring search, the tile itself
+ *  first), or null if none is in reach. Rescues a ped that was placed OFF the walkable set — on
+ *  water, a freeway, or a plot — back onto solid ground rather than leaving it stranded mid-water
+ *  (Maddy: pedestrians crossing water / freeways). The self-heal seam for ped placement. */
+export function nearestWalkable(
+  map: GameMap,
+  x: number,
+  y: number,
+  maxR = 8,
+): { x: number; y: number } | null {
+  for (let r = 0; r <= maxR; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring at Chebyshev distance r
+        if (isWalkable(map, x + dx, y + dy)) return { x: x + dx, y: y + dy };
+      }
+    }
+  }
+  return null;
 }
 
 /** A pedestrian's PREFERENCE cost for a walkable tile (lower = nicer): promenades best, then
@@ -1420,11 +1452,15 @@ export function parkOwnedCarSomewhere(state: AmbientState, map: GameMap, car: Ca
     car.recent = undefined;
     return;
   }
-  const spot = findCurbSpot(state, map, Math.round(car.x), Math.round(car.y)) ?? {
-    x: Math.round(car.x),
-    y: Math.round(car.y),
-  };
-  parkOwnedCar(car, map, spot);
+  const spot = findCurbSpot(state, map, Math.round(car.x), Math.round(car.y));
+  if (spot) {
+    parkOwnedCar(car, map, spot);
+    return;
+  }
+  // No free, non-freeway, dry kerb anywhere in reach → the car LEAVES rather than freezing on the
+  // freeway tile its route ended on (Maddy: cars parking on freeways). Its owner finishes on foot.
+  const i = state.cars.indexOf(car);
+  if (i >= 0) state.cars.splice(i, 1);
 }
 
 /** Park an owned car at `spot` (a drivable tile), recording the kerb side, and keep it OWNED so it
@@ -1452,13 +1488,20 @@ function parkOwnedCar(car: Car, map: GameMap, spot: { x: number; y: number }): v
 /** When a citizen's round ends (it gets home, gives up, or is lost), retire its owned car: demote
  *  it to a plain lingering parked car (no longer owned) so it sits a moment then leaves on its dwell
  *  — "the car is put away" — rather than vanishing the instant its owner does. */
-function retireOwnedCar(state: AmbientState, p: Ped): void {
+function retireOwnedCar(state: AmbientState, p: Ped, map: GameMap): void {
   if (p.carId === undefined) return;
   const car = findCar(state, p.carId);
   if (car && car.owned) {
-    car.owned = false;
-    car.parked = true; // a car mid-drive when its owner is lost just stops + lingers, then leaves
-    car.dwell = RETIRED_CAR_LINGER; // a brief "parked at home" beat, then it clears (no backlog)
+    if (isParkable(map, Math.round(car.x), Math.round(car.y))) {
+      car.owned = false;
+      car.parked = true; // on a valid kerb → it lingers a beat ("put away"), then clears on its dwell
+      car.dwell = RETIRED_CAR_LINGER;
+    } else {
+      // Mid-drive on a freeway / over water when its owner is lost → it drives off rather than
+      // freezing parked on the freeway (Maddy: cars parking on freeways), no lingering wreck.
+      const i = state.cars.indexOf(car);
+      if (i >= 0) state.cars.splice(i, 1);
+    }
   }
   p.carId = undefined;
 }
@@ -1487,8 +1530,10 @@ function setDriveLeg(
   return true;
 }
 
-/** The nearest car-drivable tile (a road/parking the citizen's car starts from) within a small ring
- *  of its home, or null if the home is land-locked. */
+/** The nearest tile a citizen's car can REST at + drive from near its home (a non-freeway, dry
+ *  street/avenue/parking kerb), or null if the home has no such tile in reach. Uses isParkable so an
+ *  owned car never spawns parked on the freeway a home happens to sit beside (Maddy: cars on freeways)
+ *  — if only a freeway is near, the citizen walks instead. */
 function nearestDriveStart(map: GameMap, hx: number, hy: number): { x: number; y: number } | null {
   let bx = -1;
   let by = -1;
@@ -1496,7 +1541,7 @@ function nearestDriveStart(map: GameMap, hx: number, hy: number): { x: number; y
   for (let y = hy - 4; y <= hy + 4; y++) {
     for (let x = hx - 4; x <= hx + 4; x++) {
       if (!map.inBounds(x, y)) continue;
-      if (!carTraversable(map.built[map.idx(x, y)]!)) continue;
+      if (!isParkable(map, x, y)) continue;
       const d = Math.abs(x - hx) + Math.abs(y - hy);
       if (d < bestD) {
         bestD = d;
@@ -1866,9 +1911,7 @@ function findCurbSpot(
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring at Chebyshev distance r
         const x = ax + dx;
         const y = ay + dy;
-        if (!map.inBounds(x, y)) continue;
-        const k = map.built[map.idx(x, y)]!;
-        if (!carTraversable(k) || k === BuiltKind.RoadHighway) continue; // no parking on a freeway
+        if (!isParkable(map, x, y)) continue; // no parking on a freeway or over water (a bridge)
         if (occupied.has(map.idx(x, y))) continue;
         return { x, y };
       }
@@ -2112,22 +2155,34 @@ function depositVisit(
  *  timeout). Returns true if it respawned (keep the sprite), false if it should despawn. */
 function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
   if (p.homeTile === undefined) {
-    retireOwnedCar(state, p); // even a homeless/bound ped's owned car (if any) must be retired
+    retireOwnedCar(state, p, map); // even a homeless/bound ped's owned car (if any) must be retired
     return false;
   }
-  retireOwnedCar(state, p); // its car is put away (lingers, then leaves) — not orphaned
+  retireOwnedCar(state, p, map); // its car is put away (lingers, then leaves) — not orphaned
   depositHealth(state, p.homeTile, -FAILED_TRIP_PENALTY);
   const hx = p.homeTile % map.width;
   const hy = (p.homeTile - hx) / map.width;
+  // Stand just outside the home plot — on an orthogonally adjacent walkable tile (the plot itself
+  // isn't walkable). A coastal/boxed home may have no walkable orthogonal neighbour, so fall back to
+  // the nearest walkable tile (a wider search) rather than landing the ped on the plot or on water.
   let sx = hx;
   let sy = hy;
+  let found = false;
   for (let d = 0; d < 4; d++) {
     const nx = hx + DIR_DX[d]!;
     const ny = hy + DIR_DY[d]!;
     if (isWalkable(map, nx, ny)) {
-      sx = nx; // stand just outside the home plot (the plot tile itself isn't walkable)
+      sx = nx;
       sy = ny;
+      found = true;
       break;
+    }
+  }
+  if (!found) {
+    const w = nearestWalkable(map, hx, hy);
+    if (w) {
+      sx = w.x;
+      sy = w.y;
     }
   }
   p.x = sx;
@@ -2432,6 +2487,23 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   //     a plot). A BOUND ped (carId) runs its car→building→inside→car machine, releasing its
   //     car on return. Others wander on ped substrate.
   state.peds = state.peds.filter((p) => {
+    // Self-heal the substrate invariant: a visible ped must stand on the walkable set. If it was
+    // placed off it (open water, a freeway, a plot — a degenerate spawn/park), snap it back onto
+    // the nearest solid tile, or respawn home if it's truly stranded. Riders ('driving') and peds
+    // 'inside' a building are hidden and exempt. (Maddy: pedestrians crossing water / freeways.)
+    if (
+      p.phase !== 'driving' &&
+      p.phase !== 'inside' &&
+      !isWalkable(map, Math.round(p.x), Math.round(p.y))
+    ) {
+      const w = nearestWalkable(map, Math.round(p.x), Math.round(p.y));
+      if (w === null) return respawnAtHome(state, p, map);
+      p.x = w.x;
+      p.y = w.y;
+      p.tx = w.x;
+      p.ty = w.y;
+      p.recent = undefined;
+    }
     if (p.phase === 'inside') {
       p.dwellInside! -= 1;
       if (p.dwellInside! > 0) return true;
@@ -2620,7 +2692,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
           );
           depositVisit(state, p.homeTile, p.building, map, penalty);
         }
-        retireOwnedCar(state, p); // the citizen is home → its car is put away (lingers, then leaves)
+        retireOwnedCar(state, p, map); // the citizen is home → its car is put away (lingers, then leaves)
         return false;
       }
       return false; // unbound routed ped → despawn on arrival
