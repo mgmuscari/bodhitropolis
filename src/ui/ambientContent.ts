@@ -46,6 +46,17 @@ const FLOCK_CAP = 32;
 const CRUISER_CAP = 8;
 const CRUISER_LIFE = 400; // substeps a patrol runs before recycling back to its precinct (~20s)
 const HUNT_RADIUS = 8; // a cruiser homes in on an on-foot citizen within this Manhattan distance
+// Scatter/chase cadence (the Pac-Man ghost rhythm): the fleet alternates between SCATTER (patrol the
+// redlined streets, ignore people) and CHASE (hunt pedestrians + sweep arrests). Mostly chase, with
+// a periodic scatter lull — so the redlined streets pulse between tense calm and active sweeps.
+const SCATTER_LEN = 140; // substeps of scatter (~7s)
+const CHASE_LEN = 400; // substeps of chase (~20s)
+
+/** The fleet-wide police phase for a substep counter: 'scatter' (patrol, no hunting/arrests) or
+ *  'chase' (hunt + arrest). Deterministic; the ghost cadence. */
+export function policePhase(tick: number): 'scatter' | 'chase' {
+  return tick % (SCATTER_LEN + CHASE_LEN) < SCATTER_LEN ? 'scatter' : 'chase';
+}
 // Arrests: a cruiser in a redlined zone takes a nearby citizen off the street FOR NOTHING and
 // drains a person from their household — the violence of over-policing, made tangible. Only in
 // redlined zones (the disparity); the player ends it by defunding (no precinct → no cruisers).
@@ -494,6 +505,8 @@ export interface AmbientState {
   cruisers: Mover[];
   /** Substep counter gating the arrest sweep to ARREST_CADENCE. */
   arrestTick: number;
+  /** Substep counter driving the police scatter/chase phase (the ghost cadence). */
+  policeTick: number;
   /** Live POLICE VIOLENCE (0..POLICE_VIOLENCE_MAX), keyed by tile: laid where arrests happen,
    *  lingering as a slow-decaying record. This is the anti-crime-map — it shows where the STATE
    *  inflicts harm, not where residents are blamed. Renderer-side, never hashed. */
@@ -563,6 +576,7 @@ export function createAmbientState(): AmbientState {
     peds: [],
     cruisers: [],
     arrestTick: 0,
+    policeTick: 0,
     policeViolence: new Map(),
     birds: [],
     accMs: 0,
@@ -2152,7 +2166,7 @@ export function nextPatrolStep(
   fromDir: number,
   rng: Rng,
   recent: readonly number[] | undefined,
-  peds: readonly Ped[],
+  target: { x: number; y: number } | null,
 ): number {
   const options: number[] = [];
   let uTurn = -1;
@@ -2173,7 +2187,6 @@ export function nextPatrolStep(
     if (fresh.length === 0) return -1; // boxed in by its own path → despawn
     pool = fresh;
   }
-  const target = nearestHuntTarget(peds, x, y);
   let bestDir = pool[0]!;
   let bestScore = -Infinity;
   for (const d of pool) {
@@ -2198,12 +2211,15 @@ export function nextPatrolStep(
  * deterministic in `rng`.
  */
 export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng): void {
+  const chasing = policePhase(state.policeTick) === 'chase';
   state.cruisers = state.cruisers.filter((c) => {
     if ((c.dwell ?? 0) <= 0) return false; // shift over → recycle (respawn tops up from the precinct)
     c.dwell! -= 1;
     if (!carPassable(map, Math.round(c.x), Math.round(c.y))) return false; // road gone
+    // Chase → hunt a nearby citizen; scatter → no target, so it just seeks the redlined streets.
+    const target = chasing ? nearestHuntTarget(state.peds, Math.round(c.x), Math.round(c.y)) : null;
     return advanceMover(c, CAR_SPEED, map, (x, y, fromDir, recent) =>
-      nextPatrolStep(map, x, y, fromDir, rng, recent, state.peds),
+      nextPatrolStep(map, x, y, fromDir, rng, recent, target),
     );
   });
 }
@@ -2303,11 +2319,15 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     );
   });
 
-  // 3a. Move the police cruisers (patrol the redlined streets from their precincts), then on a
-  //     slow cadence run the arrest sweep — citizens taken off the street, the household drained.
+  // 3a. Police: advance the scatter/chase clock, move the cruisers (hunt in chase, patrol in
+  //     scatter), and run the arrest sweep ONLY during a chase — the streets pulse between calm
+  //     and active sweeps (the ghost cadence).
+  state.policeTick += 1;
   stepCruisers(state, map, rng);
   state.arrestTick += 1;
-  if (state.arrestTick % ARREST_CADENCE === 0) stepArrests(state, map, rng);
+  if (state.arrestTick % ARREST_CADENCE === 0 && policePhase(state.policeTick) === 'chase') {
+    stepArrests(state, map, rng);
+  }
 
   // 3b. Move the pedestrians. A walk target (walkTo) is reached by a MANHATTAN walk — an
   //     axis-aligned, tile-by-tile route over walkable tiles (never diagonally, never through

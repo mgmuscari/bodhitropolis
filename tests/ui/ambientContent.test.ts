@@ -51,6 +51,7 @@ import {
   spawnCruisers,
   stepCruisers,
   nextPatrolStep,
+  policePhase,
   stepArrests,
   arrestChance,
   parkOwnedCarSomewhere,
@@ -847,21 +848,26 @@ describe('police cruisers (over-policing made visible)', () => {
     return map;
   };
 
-  it('patrol seeks redlined ground at a junction (no one to chase)', () => {
+  it('patrol seeks redlined ground at a junction (no target)', () => {
     const map = crossMap();
     map.redline.fill(20);
     map.redline[map.idx(5, 4)] = 240; // the NORTH branch is the redlined one
     // Coming from the west (fromDir=West=3); options N/E/S — picks the redlined branch.
-    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('seek'), [], [])).toBe(0); // 0 = North
+    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('seek'), [], null)).toBe(0); // 0 = North
   });
 
-  it('patrol hunts a nearby citizen, overriding the grade preference', () => {
+  it('patrol heads for the target, overriding the grade preference', () => {
     const map = crossMap();
     map.redline.fill(20);
     map.redline[map.idx(5, 4)] = 240; // north is the most redlined...
-    const peds = [{ x: 9, y: 5, dir: 1, tx: 9, ty: 5, phase: 'to-building' as const }];
-    // ...but a citizen sits to the EAST — the cruiser closes on the person, not the grade.
-    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('hunt'), [], peds)).toBe(1); // 1 = East
+    // ...but the target sits to the EAST — the cruiser closes on it, not the grade.
+    expect(nextPatrolStep(map, 5, 5, 3, ambientFork('hunt'), [], { x: 9, y: 5 })).toBe(1); // 1 = East
+  });
+
+  it('scatter/chase phase cycles (the ghost cadence)', () => {
+    expect(policePhase(0)).toBe('scatter'); // opens calm
+    expect(policePhase(300)).toBe('chase'); // then sweeps
+    expect(policePhase(0)).toBe(policePhase(540)); // periodic (SCATTER_LEN + CHASE_LEN = 540)
   });
 
   it('patrols the road grid and recycles when its shift ends', () => {
