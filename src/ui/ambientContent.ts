@@ -548,13 +548,27 @@ export interface Flock {
   birds: Bird[];
 }
 
-/** A parking lot the ambient layer can store cars in: its centre (for the nearest-lot
- *  search when a trip-car arrives) and its stall centres (float world coords, capacity =
- *  stalls.length). Occupancy is dynamic — derived from the parked cars, not stored here. */
+/** A parking lot the ambient layer can store cars in: its centre, its bounding box (for the
+ *  nearest-TILE search — a car parks in a big lot from the edge it arrives at, not only when near
+ *  the far-off centre), and its stall centres (float world coords, capacity = stalls.length).
+ *  Occupancy is dynamic — derived from the parked cars, not stored here. */
 export interface ParkingLotInfo {
   cx: number;
   cy: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
   stalls: ReadonlyArray<{ x: number; y: number }>;
+}
+
+/** Squared distance from (x, y) to the nearest point of a lot's bounding box (0 inside it). Lets a
+ *  car at a big lot's EDGE select it even when its centre is far out of PARK_RADIUS (Maddy: big
+ *  lot blocks held one car each because selection keyed off the distant centre). */
+function lotBboxDist2(lot: ParkingLotInfo, x: number, y: number): number {
+  const cx = x < lot.x0 ? lot.x0 : x > lot.x1 ? lot.x1 : x;
+  const cy = y < lot.y0 ? lot.y0 : y > lot.y1 ? lot.y1 : y;
+  return (cx - x) * (cx - x) + (cy - y) * (cy - y);
 }
 
 /** The full ambient sprite state — renderer-side only, never part of the world. */
@@ -1406,25 +1420,28 @@ function ensureOwnedCar(state: AmbientState, p: Ped, map: GameMap): Car | null {
 
 /** A free, available parking spot (a drivable tile not already holding a parked car) near (x, y) —
  *  where a citizen-car drives to and parks before its owner walks the last mile. Null if none. */
-/** The centre tile of the nearest parking lot within PARK_RADIUS of (x, y), or null. The route
- *  target for a parking citizen — so owned cars head INTO the lots (and fill their stalls) rather
- *  than only curb-parking near the destination. */
+/** The nearest TILE of the nearest parking lot within PARK_RADIUS of (x, y), or null. The route
+ *  target for a parking citizen — so owned cars head to the lot EDGE nearest their destination (and
+ *  then fill the nearest stalls) rather than driving to a distant centre or skipping big lots whose
+ *  centre is out of range. */
 function nearestLotCenter(state: AmbientState, x: number, y: number): { x: number; y: number } | null {
   const lots = state.parkingLots;
   if (!lots || lots.length === 0) return null;
   let best = -1;
   let bestD = PARK_RADIUS * PARK_RADIUS;
   for (let i = 0; i < lots.length; i++) {
-    const dx = lots[i]!.cx - x;
-    const dy = lots[i]!.cy - y;
-    const d = dx * dx + dy * dy;
+    const d = lotBboxDist2(lots[i]!, x, y);
     if (d <= bestD) {
       bestD = d;
       best = i;
     }
   }
   if (best < 0) return null;
-  return { x: Math.round(lots[best]!.cx), y: Math.round(lots[best]!.cy) };
+  const lot = lots[best]!;
+  return {
+    x: Math.round(x < lot.x0 ? lot.x0 : x > lot.x1 ? lot.x1 : x),
+    y: Math.round(y < lot.y0 ? lot.y0 : y > lot.y1 ? lot.y1 : y),
+  };
 }
 
 function findParkingNear(state: AmbientState, map: GameMap, x: number, y: number): { x: number; y: number } | null {
@@ -1863,9 +1880,10 @@ function spawnCitizens(state: AmbientState, map: GameMap, rng: Rng): void {
   }
 }
 
-/** The nearest lot stall free to park in: the closest lot whose centre is within PARK_RADIUS
- *  of the car, then its first stall not already taken by another parked car. Null if no lot
- *  is near or the nearest one is full (→ the caller falls back to a street curb). */
+/** The free stall NEAREST (x, y) to park in: among lots whose bounding box is within PARK_RADIUS,
+ *  the nearest free stall to (x, y) — so a big block fills tile-by-tile from the side a car arrives
+ *  at (not row-major from a far corner), and a big lot is reachable from its EDGE, not only its
+ *  centre (Maddy: big lot blocks held one car each). Null if no lot has a free stall in reach. */
 function findLotStall(
   state: AmbientState,
   x: number,
@@ -1873,25 +1891,33 @@ function findLotStall(
 ): { lotIdx: number; stallIdx: number; x: number; y: number } | null {
   const lots = state.parkingLots;
   if (!lots || lots.length === 0) return null;
-  let best = -1;
-  let bestD = PARK_RADIUS * PARK_RADIUS;
-  for (let i = 0; i < lots.length; i++) {
-    const dx = lots[i]!.cx - x;
-    const dy = lots[i]!.cy - y;
-    const d = dx * dx + dy * dy;
-    if (d <= bestD) {
-      bestD = d;
-      best = i;
+  // Stalls already taken, grouped by lot — one pass over the cars rather than a scan per stall.
+  const taken = new Map<number, Set<number>>();
+  for (const o of state.cars) {
+    if (o.parked && o.lotIdx !== undefined) {
+      let s = taken.get(o.lotIdx);
+      if (!s) taken.set(o.lotIdx, (s = new Set<number>()));
+      s.add(o.stallIdx!);
     }
   }
-  if (best < 0) return null;
-  const lot = lots[best]!;
-  const taken = new Set<number>(); // one pass over the cars, not a scan per stall
-  for (const o of state.cars) if (o.parked && o.lotIdx === best) taken.add(o.stallIdx!);
-  for (let s = 0; s < lot.stalls.length; s++) {
-    if (!taken.has(s)) return { lotIdx: best, stallIdx: s, x: lot.stalls[s]!.x, y: lot.stalls[s]!.y };
+  let best: { lotIdx: number; stallIdx: number; x: number; y: number } | null = null;
+  let bestD = PARK_RADIUS * PARK_RADIUS;
+  for (let i = 0; i < lots.length; i++) {
+    const lot = lots[i]!;
+    if (lotBboxDist2(lot, x, y) > bestD) continue; // no stall here can beat the best found
+    const t = taken.get(i);
+    for (let s = 0; s < lot.stalls.length; s++) {
+      if (t && t.has(s)) continue;
+      const dx = lot.stalls[s]!.x - x;
+      const dy = lot.stalls[s]!.y - y;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = { lotIdx: i, stallIdx: s, x: lot.stalls[s]!.x, y: lot.stalls[s]!.y };
+      }
+    }
   }
-  return null; // nearest lot full
+  return best;
 }
 
 /** The nearest free curb (drivable tile NOT already holding a parked car) by ring search

@@ -145,6 +145,10 @@ export function main(): void {
       parkingLots(world.map).map((lot) => ({
         cx: (lot.x0 + lot.x1) / 2,
         cy: (lot.y0 + lot.y1) / 2,
+        x0: lot.x0,
+        y0: lot.y0,
+        x1: lot.x1,
+        y1: lot.y1,
         stalls: parkingStalls(lot),
       })),
     );

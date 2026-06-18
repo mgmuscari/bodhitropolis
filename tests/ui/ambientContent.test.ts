@@ -299,6 +299,10 @@ describe('parking lots fill to capacity (Maddy: lots should accept up to 9, not 
       parkingLots(map).map((lot) => ({
         cx: (lot.x0 + lot.x1) / 2,
         cy: (lot.y0 + lot.y1) / 2,
+        x0: lot.x0,
+        y0: lot.y0,
+        x1: lot.x1,
+        y1: lot.y1,
         stalls: parkingStalls(lot),
       })),
     );
@@ -387,6 +391,63 @@ describe('agent substrate invariants (Maddy: cars park on freeways, peds cross w
     stepAmbient(state, m, rng, 50);
     const ped = state.peds[0];
     if (ped) expect(m.water[m.idx(Math.round(ped.x), Math.round(ped.y))]).toBe(0); // no longer on water
+  });
+});
+
+describe('big parking lots fill nearest-tile-first (Maddy: blocks hold one car per lot)', () => {
+  // Build the ambient lot records (centre + bbox + stalls) the way main.ts does.
+  const lotInfos = (map: GameMap) =>
+    parkingLots(map).map((lot) => ({
+      cx: (lot.x0 + lot.x1) / 2,
+      cy: (lot.y0 + lot.y1) / 2,
+      x0: lot.x0,
+      y0: lot.y0,
+      x1: lot.x1,
+      y1: lot.y1,
+      stalls: parkingStalls(lot),
+    }));
+
+  it('a car parks in the lot stall NEAREST its arrival, not the row-major first stall', () => {
+    const m = new GameMap(16, 8);
+    for (let x = 1; x <= 8; x++) m.built[m.idx(x, 2)] = BuiltKind.ParkingLot; // an 8-tile strip
+    const state = createAmbientState();
+    setParkingLots(state, lotInfos(m));
+    const car = { x: 8, y: 3, dir: 0, tx: 8, ty: 3, owned: true, parked: false, lotIdx: undefined as number | undefined };
+    state.cars.push(car);
+    parkOwnedCarSomewhere(state, m, car);
+    expect(car.lotIdx).not.toBeUndefined(); // parked IN the lot
+    expect(Math.round(car.x)).toBeGreaterThanOrEqual(6); // near the east end it arrived at, not x~1
+  });
+
+  it('many cars fill a big lot to many distinct stalls (not one per lot)', () => {
+    const m = new GameMap(16, 8);
+    for (let x = 1; x <= 8; x++) m.built[m.idx(x, 2)] = BuiltKind.ParkingLot;
+    const state = createAmbientState();
+    setParkingLots(state, lotInfos(m));
+    const parked: Array<{ lotIdx?: number; stallIdx?: number }> = [];
+    for (let n = 0; n < 20; n++) {
+      const car = { x: 8, y: 3, dir: 0, tx: 8, ty: 3, owned: true, parked: false } as {
+        x: number; y: number; dir: number; tx: number; ty: number; owned: boolean; parked: boolean;
+        lotIdx?: number; stallIdx?: number;
+      };
+      state.cars.push(car);
+      parkOwnedCarSomewhere(state, m, car);
+      parked.push({ lotIdx: car.lotIdx, stallIdx: car.stallIdx });
+    }
+    expect(parked.every((c) => c.lotIdx !== undefined)).toBe(true); // all in the lot, none curbed
+    expect(new Set(parked.map((c) => c.stallIdx)).size).toBe(20); // 20 distinct stalls (fills the block)
+  });
+
+  it('a car reaches a big lot from its EDGE even when the lot CENTRE is out of park range', () => {
+    const m = new GameMap(32, 8);
+    for (let x = 1; x <= 24; x++) m.built[m.idx(x, 2)] = BuiltKind.ParkingLot; // centre at x=12.5
+    const state = createAmbientState();
+    setParkingLots(state, lotInfos(m));
+    const car = { x: 1, y: 3, dir: 0, tx: 1, ty: 3, owned: true, parked: false, lotIdx: undefined as number | undefined };
+    state.cars.push(car); // at the WEST edge; the centre (x~12.5) is far out of PARK_RADIUS
+    parkOwnedCarSomewhere(state, m, car);
+    expect(car.lotIdx).not.toBeUndefined(); // still parks in the big lot (via its edge), not curb/removed
+    expect(Math.round(car.x)).toBeLessThanOrEqual(8); // near the west edge it arrived at
   });
 });
 
@@ -1299,6 +1360,10 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     parkingLots(map).map((l) => ({
       cx: (l.x0 + l.x1) / 2,
       cy: (l.y0 + l.y1) / 2,
+      x0: l.x0,
+      y0: l.y0,
+      x1: l.x1,
+      y1: l.y1,
       stalls: parkingStalls(l),
     }));
 
