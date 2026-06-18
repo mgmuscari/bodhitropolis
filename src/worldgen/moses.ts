@@ -921,7 +921,7 @@ export function era2MotorAge(world: WorldState, rng: Rng, p: MosesParams, state:
 
 // --- Era 3: urban renewal & highways (the Moses signature) ---------------
 
-interface Corridor {
+export interface Corridor {
   axis: Axis;
   index: number; // the fixed row (axis 'row') or column (axis 'col')
   lo: number; // land-run start along the axis
@@ -994,17 +994,22 @@ function carveCorridor(map: GameMap, store: ParcelStore, c: Corridor): [number, 
  * (Maddy: ramps = a street overlaid onto a freeway tile next to another street). Worldgen-only,
  * folded into the hash via the built layer.
  */
-function placeCorridorRamps(map: GameMap, c: Corridor, p: MosesParams): void {
+export function placeCorridorRamps(map: GameMap, c: Corridor, p: MosesParams): void {
   const offsets = [0, -1, 1];
   const tileOf = (s: number, off: number): [number, number] =>
     c.axis === 'row' ? [s, c.index + off] : [c.index + off, s];
-  const sideRoad = (s: number, off: number): boolean => {
+  // A ramp connects to a SURFACE road (street/avenue), never to another freeway — so at a
+  // freeway×freeway interchange (where the perpendicular freeway flanks the band) no ramp is
+  // dropped: that's already a free crossing, and a ramp there is the "ramp in the freeway cross".
+  const surfaceRoad = (s: number, off: number): boolean => {
     const [x, y] = tileOf(s, off);
-    return map.inBounds(x, y) && isRoadKind(map.built[map.idx(x, y)]!);
+    if (!map.inBounds(x, y)) return false;
+    const k = map.built[map.idx(x, y)]!;
+    return k === BuiltKind.RoadStreet || k === BuiltKind.RoadAvenue;
   };
   for (let s = c.lo + p.era3RampSpacing; s <= c.hi - 1; s += p.era3RampSpacing) {
-    // Only ramp where the grid actually flanks the band — a ramp must connect to streets on a side.
-    if (!sideRoad(s, -2) && !sideRoad(s, 2)) continue;
+    // Only ramp where the surface grid flanks the band — a ramp must connect to a street/avenue.
+    if (!surfaceRoad(s, -2) && !surfaceRoad(s, 2)) continue;
     for (const off of offsets) {
       const [x, y] = tileOf(s, off);
       if (map.inBounds(x, y) && map.built[map.idx(x, y)] === BuiltKind.RoadHighway) {

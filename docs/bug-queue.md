@@ -223,10 +223,11 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
 
 ### Freeway/build follow-ups (Maddy 2026-06-18)
 
-- 🔴 **Ramp in the middle of the freeway cross** (Maddy 2026-06-18) — `placeCorridorRamps` drops ramps
-  every N tiles regardless of position, so one lands AT the freeway×freeway interchange (where the two
-  corridors cross) — a ramp where there should just be the interchange. Skip ramp placement at/near a
-  perpendicular-freeway crossing (it's already a free interchange).
+- ✅ **Ramp in the middle of the freeway cross** (PR pending) — `placeCorridorRamps`' `sideRoad` check
+  accepted ANY `isRoadKind` (incl. the perpendicular freeway) as a "flanking road," so a ramp landed
+  at the freeway×freeway interchange. Fix: a ramp must connect to a SURFACE road (street/avenue) —
+  `surfaceRoad` excludes highway/ramp — so no ramp drops at the interchange (already a free crossing).
+  Unit-tested (ramp at a grid-flanked column; interchange stays highway) + live-verified.
 - ✅ **Cannot build a nuclear plant anywhere** (PR pending) — `canPlaceParcel` clamped footprints to
   `MAX_FOOTPRINT = 3`, but Nuclear (and Fusion) plants are 4×4, so every placement was rejected.
   Bumped MAX_FOOTPRINT to 4 (the largest plant). Unit-tested: a 4×4 footprint places on clear land.
