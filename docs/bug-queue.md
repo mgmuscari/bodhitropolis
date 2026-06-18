@@ -247,6 +247,14 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
 - 🔵 **DEFERRED feature: prevailing wind carries smog** (Maddy 2026-06-18) — air pollution
   (`ambient.pollution`) should drift downwind on a prevailing wind, not just diffuse/linger in place,
   so smog plumes streak from their sources. Live layer.
+- 🔵 **DEFERRED feature: block-by-block organic growth** (Maddy 2026-06-18) — worldgen should grow the
+  city BLOCK BY BLOCK outward from seeds — the central districts AND the ENDS of transport lines
+  (bridge landings, freeway ends/ramps) — so settlement accretes organically along/from infrastructure
+  rather than the current per-era grid fill. Growth fronts: (1) central districts densify/expand
+  outward; (2) transport termini (bridges, freeways) seed new blocks at their ends. A worldgen
+  (hashed) growth-model redesign — a different accretion pattern than today's era-based grids; would
+  compose with the satellite/bridge masses (an exurb grows out from its bridgehead) and the redline
+  grade (growth biased by district). Not started.
 - ✅ **Freeway skipped a tile for water (gap at 85,86)** (PR pending) — the era3 highway carve called
   `placeTransport`, which refuses water, so a corridor crossing an inlet left a gap in the deck. Added
   a `placeBridge` engine primitive (decks transport OVER water, keeping the water layer underneath — a
