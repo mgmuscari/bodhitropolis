@@ -47,6 +47,7 @@ import {
   accumulateWaterRunoff,
   flowWaterPollution,
   treatWaterPollution,
+  stepRoadDecay,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -763,6 +764,41 @@ describe('water contamination: industry is the toxic source, redlined most of al
     // Flow conserves direction: pollution never climbs back to a higher tile that started clean.
     // (top was the only source; everything below it carries the contamination.)
     expect(state.waterPollution.get(downstream) ?? 0).toBeLessThanOrEqual(255);
+  });
+});
+
+describe('road decay: redlined roads crumble, cared-for roads recover', () => {
+  it('a redlined road in a disinvested block crumbles over time', () => {
+    const map = new GameMap(8, 8);
+    const i = map.idx(4, 4);
+    map.built[i] = BuiltKind.RoadStreet;
+    map.redline[i] = 255; // redlined
+    const state = createAmbientState();
+    for (let n = 0; n < 5; n++) stepRoadDecay(state, map);
+    expect(state.roadDecay.get(i) ?? 0).toBeGreaterThan(0);
+  });
+
+  it('a greenlined road stays sound (grade scales crumbling to ~0)', () => {
+    const map = new GameMap(8, 8);
+    const i = map.idx(4, 4);
+    map.built[i] = BuiltKind.RoadStreet;
+    map.redline[i] = 0; // greenlined
+    const state = createAmbientState();
+    for (let n = 0; n < 5; n++) stepRoadDecay(state, map);
+    expect(state.roadDecay.get(i) ?? 0).toBe(0);
+  });
+
+  it('a cared-for road (prized plot next door) recovers — the heal fixes the roads', () => {
+    const map = new GameMap(8, 8);
+    const i = map.idx(4, 4);
+    map.built[i] = BuiltKind.RoadStreet;
+    map.redline[i] = 255;
+    map.built[map.idx(4, 5)] = BuiltKind.HouseSingle;
+    const state = createAmbientState();
+    state.roadDecay.set(i, 200); // already crumbled
+    state.landValue.set(map.idx(4, 5), 200); // the neighborhood is now cared-for
+    stepRoadDecay(state, map);
+    expect(state.roadDecay.get(i) ?? 0).toBeLessThan(200);
   });
 });
 
@@ -1879,6 +1915,10 @@ describe('liveInspectLine (inspect live-sample formatting)', () => {
 
   it('formats a contaminated water tile', () => {
     expect(liveInspectLine({ water: 180 })).toBe('water 180 contaminated');
+  });
+
+  it('formats a crumbling road tile', () => {
+    expect(liveInspectLine({ traffic: 12, road: 140 })).toBe('traffic 12 · road 140 crumbling');
   });
 
   it('omits absent fields and returns empty when nothing is present', () => {

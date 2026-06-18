@@ -259,6 +259,15 @@ const WATER_FLOW_FRACTION = 0.25; // share of a tile's pollution that flows down
 const WATER_TREAT_RADIUS = 6; // a wastewater works cleans water within this Manhattan radius
 const WATER_TREAT_AMOUNT = 30; // pollution removed at the works per cadence (falls off with distance)
 
+/** Road decay: redlined roads crumble (the city won't maintain the disinvested districts), while
+ *  roads in a CARED-FOR neighborhood (land value at/above ROAD_CARED_LV) recover. Crumbling
+ *  scales with the road tile's redline grade, so greenlined roads stay sound. Live/non-hashed. */
+const ROAD_DECAY_MAX = 255;
+const ROAD_CADENCE = 30; // recompute road decay every N substeps (a slow infrastructure clock)
+const ROAD_CRUMBLE_RATE = 6; // decay added per cadence to a fully redlined, uncared road
+const ROAD_RECOVER_RATE = 8; // decay removed per cadence where the neighborhood is cared-for
+const ROAD_CARED_LV = 110; // local land value at/above which roads get maintained (recover)
+
 /** Substeps a pedestrian spends INSIDE its destination building before walking back to the
  *  car: a base plus a seeded spread so visitors don't all return together. ~3–13s. */
 const INSIDE_DWELL_MIN = 60;
@@ -490,6 +499,12 @@ export interface AmbientState {
   occupancy: Map<number, number>;
   /** Substep counter gating the occupancy re-evaluation to OCC_CADENCE. */
   occTick: number;
+  /** Live ROAD DECAY (0..ROAD_DECAY_MAX), keyed by road tile: how crumbled the pavement is.
+   *  Redlined roads crumble (the city won't maintain the disinvested districts); roads recover
+   *  where the neighborhood is cared-for (high land value). Drags land value, never hashed. */
+  roadDecay: Map<number, number>;
+  /** Substep counter gating the road-decay pass to ROAD_CADENCE. */
+  roadTick: number;
   /** The residential homes citizens are spawned from (the census), published by the host via
    *  setHouseholds. Each spawn picks a home weighted by its citizen count (denser → more people
    *  out), so the daily-itinerary population reflects the built city. Renderer-side, never hashed. */
@@ -516,6 +531,8 @@ export function createAmbientState(): AmbientState {
     lvTick: 0,
     occupancy: new Map(),
     occTick: 0,
+    roadDecay: new Map(),
+    roadTick: 0,
   };
 }
 
@@ -1522,6 +1539,7 @@ export interface LiveSamples {
   traffic?: number;
   pollution?: number;
   water?: number;
+  road?: number;
 }
 
 /**
@@ -1537,6 +1555,7 @@ export function liveInspectLine(s: LiveSamples): string {
   if (s.traffic !== undefined) parts.push(`traffic ${Math.round(s.traffic)}`);
   if (s.pollution !== undefined) parts.push(`smog ${Math.round(s.pollution)}`);
   if (s.water !== undefined) parts.push(`water ${Math.round(s.water)} contaminated`);
+  if (s.road !== undefined) parts.push(`road ${Math.round(s.road)} crumbling`);
   return parts.join(' · ');
 }
 
@@ -2273,6 +2292,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   //    spawn target + home weighting follow this — closing the agent-emergent population loop.
   state.occTick += 1;
   if (state.occTick % OCC_CADENCE === 0) stepOccupancy(state, map);
+
+  // 9. Road decay: on a slow infrastructure clock, redlined roads crumble while cared-for
+  //    neighborhoods' roads recover. Runs after land value so it reads the fresh field.
+  state.roadTick += 1;
+  if (state.roadTick % ROAD_CADENCE === 0) stepRoadDecay(state, map);
 }
 
 /** One water-runoff pass: every water tile with ground neighbours collects their runoff
@@ -2345,6 +2369,42 @@ export function flowWaterPollution(state: AmbientState, map: GameMap): void {
     if (move <= 0) continue;
     for (const ni of lower) layField(state.waterPollution, ni, move, WATER_POLL_MAX);
     state.waterPollution.set(i, p - move * lower.length);
+  }
+}
+
+/**
+ * Step road decay: each road tile crumbles (scaled by its redline grade — redlined roads
+ * crumble, greenlined stay sound) UNLESS its neighborhood is cared-for (the best adjacent plot's
+ * land value is at/above ROAD_CARED_LV), in which case the pavement recovers. So the player's
+ * existing healing — raising a redlined district's land value — also fixes its roads; no separate
+ * repair tool. Live/non-hashed; reads land value + grade, writes only roadDecay.
+ */
+export function stepRoadDecay(state: AmbientState, map: GameMap): void {
+  const W = map.width;
+  const H = map.height;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = map.idx(x, y);
+      if (!isRoadKind(map.built[i]!)) continue;
+      // Local care = the best land value among the plots this road serves (4-neighbours).
+      let caredLV = 0;
+      for (let d = 0; d < 4; d++) {
+        const nx = x + DIR_DX[d]!;
+        const ny = y + DIR_DY[d]!;
+        if (!map.inBounds(nx, ny)) continue;
+        caredLV = Math.max(caredLV, state.landValue.get(map.idx(nx, ny)) ?? 0);
+      }
+      if (caredLV >= ROAD_CARED_LV) {
+        const cur = state.roadDecay.get(i);
+        if (cur === undefined) continue;
+        const nv = cur - ROAD_RECOVER_RATE;
+        if (nv <= 0) state.roadDecay.delete(i);
+        else state.roadDecay.set(i, nv);
+      } else {
+        const crumble = ROAD_CRUMBLE_RATE * (map.redline[i]! / 255); // redlined crumbles, greenlined ~0
+        if (crumble > 0) layField(state.roadDecay, i, crumble, ROAD_DECAY_MAX);
+      }
+    }
   }
 }
 
