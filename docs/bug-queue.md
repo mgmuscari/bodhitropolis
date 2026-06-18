@@ -219,6 +219,14 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
   avenue). UNLIKE freeways, avenues SHOULD allow cross traffic at intersections. Fix pairs with the
   freeway redesign: at a true perpendicular intersection an avenue (and the transit tile it crosses)
   must be crossable.
+- ✅ **Freeway skipped a tile for water (gap at 85,86)** (PR pending) — the era3 highway carve called
+  `placeTransport`, which refuses water, so a corridor crossing an inlet left a gap in the deck. Added
+  a `placeBridge` engine primitive (decks transport OVER water, keeping the water layer underneath — a
+  bridge, not a causeway; never decks a building); `carveCorridor` uses it. Live-verified: (85,86)/
+  (86,86) now RoadHighway-over-water, the freeway continuous. Non-golden N=120 gate intact (bridging
+  only adds highway tiles). 🔮 FUTURE (Maddy): bridges generalize to OVERPASSES — elevated rail over
+  roads, promenades over freeways — the natural extension of `placeBridge` (a transport deck over
+  another), needs a per-tile layer/elevation model.
 
 ## Fixed
 

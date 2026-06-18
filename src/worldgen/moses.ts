@@ -24,6 +24,7 @@ import {
   canPlaceParcel,
   placeParcel,
   placeTransport,
+  placeBridge,
   demolishParcel,
   demolishTransportAt,
   type ParcelStore,
@@ -975,7 +976,9 @@ function carveCorridor(map: GameMap, store: ParcelStore, c: Corridor): [number, 
     for (let s = c.lo; s <= c.hi; s++) {
       const [x, y] = tileOf(s, off);
       if (!map.inBounds(x, y)) continue;
-      placeTransport(map, x, y, BuiltKind.RoadHighway);
+      // Bridge water inlets rather than leaving a gap (Maddy: freeway at 85,86 skipped for water) —
+      // a continuous corridor, decked over the water as a bridge.
+      placeBridge(map, x, y, BuiltKind.RoadHighway);
     }
   }
   return [demolished, rail];
