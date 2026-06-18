@@ -155,6 +155,47 @@ layer (non-deterministic).
   any overlay is up: a swatch per ramp endpoint / HOLC band with its label (top-left). Unified across
   eco/civic/redline/police via `OverlayLegend` + per-module `*Legend()`. Live-verified.
 
+### Overlay / eco-layer batch (Maddy 2026-06-18)
+
+- 🔴 **Power (U) + Coverage (V) overlays wash out** — they tint only sparse BUILDING tiles with
+  translucent green/red that vanishes against the green terrain, so pressing U/V reads as "nothing
+  happens" (legend + dock highlight DO toggle; the map doesn't). Redline (R) reads because it fills
+  all land; Police (P) blood-stains are fine (Maddy approved). Fix = ONE abstraction: a sparse-overlay
+  legibility treatment (dim/scrim the base so served/dark/powered buildings pop). Diagnosed live.
+- 🔴 **Eco overlay should include water + ground + air pollution** (Maddy 2026-06-18) — extend the E
+  cycle with the pollution layers. Air (`ambient.pollution`, traffic smog) + water
+  (`ambient.waterPollution`, runoff) already exist as live fields → wire as eco views. **Ground
+  pollution = a NEW live land-contamination field** (Maddy's call): industry + dirty power + decay
+  poison the surrounding LAND, lingering + slow to clear, reparable (the land analogue of water
+  runoff, and the real source that runs off into the creeks). **Demand-path litter/wear must feed
+  into ground pollution** (Maddy 2026-06-18).
+
+### Agent-movement substrate cluster (Maddy 2026-06-18) — likely ONE missing abstraction
+
+The live agents are violating substrate constraints. Probable single fix: an authoritative
+"valid surface per agent" predicate (peds: walkable land/roads, NEVER water or freeway; cars: park
+only on non-freeway surfaces).
+
+- ✅ **Pedestrians cross water** (PR pending) — peds were being PLACED on water (degenerate spawn/
+  retire), not stepping there (nextStepToward already rejects water). Fix: a self-heal guard in the
+  ped loop snaps any walker off a non-walkable tile via `nearestWalkable`, or respawns it home.
+- ✅ **Pedestrians cross freeways** (PR pending) — same root: peds inheriting a freeway-parked car's
+  tile. Cleared by the parking fix below + the self-heal snap. Live-verified 0.
+- ✅ **Cars park on freeways** (PR pending) — THREE sources, all now funnel through one predicate
+  `isParkable` (carTraversable && not freeway && not over-water): (a) `parkOwnedCarSomewhere`
+  fallback dumped the car on its current (freeway) tile when no kerb was free → now it leaves;
+  (b) `retireOwnedCar` left a lost owner's car lingering mid-freeway → now it drives off;
+  (c) `nearestDriveStart` spawned an owned car parked on a freeway beside its home → now non-freeway
+  only. Live-verified: 19 → 0, holds at steady state (~90s, 82 cars parking normally).
+- 🔴 **Big parking-lot blocks hold one car per lot** (Maddy 2026-06-18) — across a large block of
+  parking-lot tiles, only one car parks per lot; cars should park at the NEAREST open lot tile to
+  their destination (fill the block, nearest-first).
+- 🔴 **Freeway lanes alternate per-tile** (Maddy 2026-06-18) — a 3-tile-wide freeway alternates lane
+  DIRECTION tile-by-tile; it should be split DIRECTIONALLY (one carriageway each way), not alternating
+  across the 3 tiles.
+- 🔴 **Streetcars block cross traffic at intersections** (Maddy 2026-06-18) — streetcars in the middle
+  of flanking avenues prevent cars from crossing at intersections; cars should still be able to cross.
+
 ## Fixed
 
 - ✅ **Owned cars: no freeway 2× speed / didn't prefer freeways** (PR pending) — cars now follow a

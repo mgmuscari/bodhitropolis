@@ -59,6 +59,8 @@ import {
   computeCoverage,
   parkOwnedCarSomewhere,
   pedDespawns,
+  isParkable,
+  nearestWalkable,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -310,6 +312,81 @@ describe('parking lots fill to capacity (Maddy: lots should accept up to 9, not 
     const stalls = new Set(cars.map((c) => c.stallIdx));
     expect(stalls.size).toBe(6); // six cars → six distinct stalls (the lot holds many)
     expect(cars.every((c) => c.stallIdx !== undefined)).toBe(true); // all parked in the lot, none curbed
+  });
+});
+
+describe('agent substrate invariants (Maddy: cars park on freeways, peds cross water)', () => {
+  it('isParkable: streets/avenues/parking on land, never a freeway or over water', () => {
+    const m = new GameMap(8, 8);
+    m.built[m.idx(1, 1)] = BuiltKind.RoadStreet;
+    m.built[m.idx(2, 1)] = BuiltKind.RoadAvenue;
+    m.built[m.idx(3, 1)] = BuiltKind.ParkingLot;
+    m.built[m.idx(4, 1)] = BuiltKind.RoadHighway; // a freeway — no parking
+    m.built[m.idx(5, 1)] = BuiltKind.RoadStreet; // a road over water (a bridge) — not a kerb
+    m.water[m.idx(5, 1)] = Water.Ocean;
+    m.water[m.idx(6, 1)] = Water.Ocean; // open water, no road
+    expect(isParkable(m, 1, 1)).toBe(true);
+    expect(isParkable(m, 2, 1)).toBe(true);
+    expect(isParkable(m, 3, 1)).toBe(true);
+    expect(isParkable(m, 4, 1)).toBe(false); // freeway
+    expect(isParkable(m, 5, 1)).toBe(false); // bridge over water
+    expect(isParkable(m, 6, 1)).toBe(false); // open water
+    expect(isParkable(m, 0, 0)).toBe(false); // empty land
+  });
+
+  it('nearestWalkable: returns a walkable tile itself, the nearest land off water, or null', () => {
+    const m = new GameMap(8, 8);
+    for (let x = 0; x < 8; x++) m.built[m.idx(x, 4)] = BuiltKind.RoadStreet; // a walkable street row
+    m.water[m.idx(3, 1)] = Water.Ocean; // a water tile near the street
+    expect(nearestWalkable(m, 2, 4)).toEqual({ x: 2, y: 4 }); // already walkable → itself
+    const off = nearestWalkable(m, 3, 1); // on water → snapped to the nearest walkable tile
+    expect(off).not.toBeNull();
+    expect(m.water[m.idx(off!.x, off!.y)]).toBe(0); // never water
+    expect(off).not.toEqual({ x: 3, y: 1 }); // moved off the water tile
+    const isolated = new GameMap(4, 4);
+    for (let i = 0; i < 16; i++) isolated.water[i] = Water.Ocean; // all water
+    expect(nearestWalkable(isolated, 2, 2)).toBeNull();
+  });
+
+  it('parkOwnedCarSomewhere never leaves a car resting on a freeway', () => {
+    const m = new GameMap(16, 8);
+    for (let x = 0; x < 16; x++) m.built[m.idx(x, 4)] = BuiltKind.RoadHighway; // a freeway strip
+    m.built[m.idx(8, 5)] = BuiltKind.RoadStreet; // one valid kerb beside it
+    const state = createAmbientState();
+    const car = { x: 8, y: 4, dir: 1, tx: 8, ty: 4, owned: true }; // drive ended ON the freeway
+    state.cars.push(car);
+    parkOwnedCarSomewhere(state, m, car);
+    // It must not come to rest on a freeway tile — it pulls onto the kerb instead.
+    const still = state.cars.includes(car);
+    if (still) expect(m.built[m.idx(Math.round(car.x), Math.round(car.y))]).not.toBe(BuiltKind.RoadHighway);
+  });
+
+  it('parkOwnedCarSomewhere removes a car with nowhere valid to park (no freeway dump)', () => {
+    const m = new GameMap(12, 8);
+    for (let x = 0; x < 12; x++) m.built[m.idx(x, 4)] = BuiltKind.RoadHighway; // freeway only — no kerb anywhere
+    const state = createAmbientState();
+    const car = { x: 6, y: 4, dir: 1, tx: 6, ty: 4, owned: true, parked: false };
+    state.cars.push(car);
+    parkOwnedCarSomewhere(state, m, car);
+    // No valid spot exists → the car must not be left parked on the freeway.
+    const onFreeway =
+      state.cars.includes(car) &&
+      car.parked &&
+      m.built[m.idx(Math.round(car.x), Math.round(car.y))] === BuiltKind.RoadHighway;
+    expect(onFreeway).toBe(false);
+  });
+
+  it('a pedestrian placed on water is snapped off it (or respawned), never left crossing', () => {
+    const m = new GameMap(12, 12);
+    for (let x = 0; x < 12; x++) m.built[m.idx(x, 6)] = BuiltKind.QuietStreet; // a walkable promenade row
+    m.water[m.idx(3, 2)] = Water.Ocean; // a water tile away from the street
+    const state = createAmbientState();
+    const home = m.idx(5, 6);
+    state.peds.push({ x: 3, y: 2, dir: 0, tx: 3, ty: 2, phase: 'to-home', walkTo: { x: 5, y: 6 }, homeTile: home });
+    const rng = ambientFork('snap');
+    stepAmbient(state, m, rng, 50);
+    const ped = state.peds[0];
+    if (ped) expect(m.water[m.idx(Math.round(ped.x), Math.round(ped.y))]).toBe(0); // no longer on water
   });
 });
 
