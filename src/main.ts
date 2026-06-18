@@ -39,6 +39,7 @@ import {
 import { redlineOverlayTint, redlineLegendLine, redlineLegend } from './ui/redlineOverlayContent';
 import { policeLegendLine, policeLegend } from './ui/policeViolenceOverlayContent';
 import { coverageTint, coverageLegendLine, coverageLegend } from './ui/coverageOverlayContent';
+import { powerTint, powerLegendLine, powerLegend } from './ui/powerOverlayContent';
 import type { OverlayLegend } from './ui/overlayLegend';
 import { pulseLine } from './ui/pulseContent';
 import { mountPulseDock } from './ui/pulseDock';
@@ -418,6 +419,19 @@ export function main(): void {
       });
       return;
     }
+    if (activeOverlay.kind === 'power') {
+      // Tint each power-consumer plot green (on the grid) or red (dark), via its parcel anchor.
+      const lit = powerGrid.poweredAnchors;
+      renderer.setOverlay({
+        tint: (i) => {
+          const pid = world.map.parcel[i];
+          if (!pid || !isPowerConsumer(world.parcels.kindAt(pid - 1))) return null;
+          const p = world.parcels.get(pid - 1);
+          return powerTint(lit.has(world.map.idx(p.x, p.y)));
+        },
+      });
+      return;
+    }
     if (activeOverlay.kind === 'redline') {
       // The HOLC grade is a hashed map layer — tint land tiles by it directly.
       // Water carries a grade too (the near-water "cover" nudge), but tinting the
@@ -482,7 +496,9 @@ export function main(): void {
               ? policeLegendLine('violence')
               : activeOverlay.kind === 'coverage'
                 ? coverageLegendLine('coverage')
-                : civicLegendLine(activeOverlay.view as CivicOverlayView);
+                : activeOverlay.kind === 'power'
+                  ? powerLegendLine('power')
+                  : civicLegendLine(activeOverlay.view as CivicOverlayView);
     toolbar.setStatus(legend);
     // The visible colour key for the active overlay (eco/civic ramps, redline bands, police ramp).
     updateLegend(
@@ -498,7 +514,9 @@ export function main(): void {
                 ? policeLegend()
                 : activeOverlay.kind === 'coverage'
                   ? coverageLegend()
-                  : policeLegend(),
+                  : activeOverlay.kind === 'power'
+                    ? powerLegend()
+                    : policeLegend(),
     );
     markDirty(); // the overlay tint lives in the cached base → invalidate it
     toolbar.refreshMeta(); // the active overlay changed → dock [Eco]/[Civic] state

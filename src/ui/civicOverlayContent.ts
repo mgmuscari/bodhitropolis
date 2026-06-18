@@ -11,6 +11,7 @@ import { OVERLAY_VIEWS } from './ecoOverlayContent';
 import { REDLINE_VIEWS } from './redlineOverlayContent';
 import { POLICE_VIEWS } from './policeViolenceOverlayContent';
 import { COVERAGE_VIEWS } from './coverageOverlayContent';
+import { POWER_VIEWS } from './powerOverlayContent';
 import type { OverlayLegend } from './overlayLegend';
 
 /** The three civic heatmap views, in cycle order. */
@@ -86,7 +87,7 @@ export function civicLegend(view: CivicOverlayView): OverlayLegend {
 // replaces the active overlay at the other kind's first view (exclusivity).
 
 /** Which overlay dimension is active. */
-export type OverlayKind = 'eco' | 'civic' | 'redline' | 'police' | 'coverage';
+export type OverlayKind = 'eco' | 'civic' | 'redline' | 'police' | 'coverage' | 'power';
 
 /** The single active overlay (kind + view), or null (both off). */
 export interface CompositeOverlay {
@@ -105,7 +106,9 @@ function viewsFor(kind: OverlayKind): readonly string[] {
         ? REDLINE_VIEWS
         : kind === 'police'
           ? POLICE_VIEWS
-          : COVERAGE_VIEWS;
+          : kind === 'coverage'
+            ? COVERAGE_VIEWS
+            : POWER_VIEWS;
 }
 
 /**
@@ -137,5 +140,6 @@ export function compositeKeyFor(key: string, openingActive: boolean): OverlayKin
   if (key === 'r' || key === 'R') return 'redline';
   if (key === 'p' || key === 'P') return 'police';
   if (key === 'v' || key === 'V') return 'coverage';
+  if (key === 'u' || key === 'U') return 'power';
   return null;
 }

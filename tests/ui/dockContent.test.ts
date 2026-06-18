@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { metaButtons } from '../../src/ui/dockContent';
 
 describe('metaButtons', () => {
-  it('has fixed labels in tech/eco/civic/redline/police/coverage/life order', () => {
+  it('has fixed labels in tech/eco/civic/redline/police/coverage/power/life order', () => {
     const bs = metaButtons(false, null, false);
-    expect(bs.map((b) => b.id)).toEqual(['tech', 'eco', 'civic', 'redline', 'police', 'coverage', 'life']);
+    expect(bs.map((b) => b.id)).toEqual([
+      'tech', 'eco', 'civic', 'redline', 'police', 'coverage', 'power', 'life',
+    ]);
     expect(bs.map((b) => b.label)).toEqual([
       'Tech (T)',
       'Eco (E)',
@@ -12,6 +14,7 @@ describe('metaButtons', () => {
       'Redline (R)',
       'Police (P)',
       'Coverage (V)',
+      'Power (U)',
       'Life (L)',
     ]);
   });

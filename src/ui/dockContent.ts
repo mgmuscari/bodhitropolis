@@ -7,7 +7,7 @@
 
 /** One dock meta button: which control it is, its label, and whether it's active. */
 export interface MetaButton {
-  id: 'tech' | 'eco' | 'civic' | 'redline' | 'police' | 'coverage' | 'life';
+  id: 'tech' | 'eco' | 'civic' | 'redline' | 'police' | 'coverage' | 'power' | 'life';
   label: string;
   active: boolean;
 }
@@ -20,6 +20,7 @@ const META_LABELS: Record<MetaButton['id'], string> = {
   redline: 'Redline (R)',
   police: 'Police (P)',
   coverage: 'Coverage (V)',
+  power: 'Power (U)',
   life: 'Life (L)',
 };
 
@@ -33,7 +34,7 @@ const META_LABELS: Record<MetaButton['id'], string> = {
  */
 export function metaButtons(
   panelOpen: boolean,
-  activeOverlay: { kind: 'eco' | 'civic' | 'redline' | 'police' | 'coverage' } | null,
+  activeOverlay: { kind: 'eco' | 'civic' | 'redline' | 'police' | 'coverage' | 'power' } | null,
   ambientOn: boolean,
 ): MetaButton[] {
   return [
@@ -43,6 +44,7 @@ export function metaButtons(
     { id: 'redline', label: META_LABELS.redline, active: activeOverlay?.kind === 'redline' },
     { id: 'police', label: META_LABELS.police, active: activeOverlay?.kind === 'police' },
     { id: 'coverage', label: META_LABELS.coverage, active: activeOverlay?.kind === 'coverage' },
+    { id: 'power', label: META_LABELS.power, active: activeOverlay?.kind === 'power' },
     { id: 'life', label: META_LABELS.life, active: ambientOn },
   ];
 }
