@@ -164,6 +164,8 @@ const BUILDING_STYLES: Record<number, BuildingStyle> = {
   // Police precinct — stark institutional blue-grey (the apparatus of control), set
   // apart from the warm Civic palette so it never reads as a community amenity.
   [BuiltKind.Precinct]: { base: [60, 70, 92], accent: [78, 90, 116], roof: [44, 52, 70] },
+  // Fire station — a civic service: warm brick-red with a bright bay, distinct from the cold precinct.
+  [BuiltKind.FireStation]: { base: [150, 60, 50], accent: [196, 84, 70], roof: [110, 44, 38] },
   // Power plants 24..30 — dirty centralized tier reads smoky/industrial (coal soot,
   // gas steel, hydro concrete, nuclear cooling-tower grey); the renewables read
   // bright (wind white, solar gold, fusion electric-cyan) — the clean transition is

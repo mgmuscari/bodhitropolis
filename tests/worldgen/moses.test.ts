@@ -499,6 +499,30 @@ describe('era3 — police precincts sited in redlined districts (the apparatus o
     });
   }
 
+  it('fire stations are PROVIDED to greenlined ground, withheld from the redlined (vs precincts)', () => {
+    // The inequity: precincts (control) concentrate in redlined ground; fire stations (service) in
+    // greenlined. So fire-station ground is graded BETTER than precinct ground, across seeds.
+    let fireSum = 0;
+    let fireN = 0;
+    let precSum = 0;
+    let precN = 0;
+    for (const seed of SEEDS) {
+      const world = runFullStage(seed);
+      for (const i of world.parcels.aliveIndices()) {
+        const k = world.parcels.kindAt(i);
+        if (k === BuiltKind.FireStation) {
+          fireSum += parcelMeanGrade(world, i);
+          fireN++;
+        } else if (k === BuiltKind.Precinct) {
+          precSum += parcelMeanGrade(world, i);
+          precN++;
+        }
+      }
+    }
+    expect(fireN).toBeGreaterThan(0);
+    expect(fireSum / fireN).toBeLessThan(precSum / precN); // services in greener ground than control
+  });
+
   it('precincts sit on worse-graded ground than the average surviving building', () => {
     let precSum = 0;
     let precN = 0;
@@ -742,6 +766,7 @@ describe('era3Highways', () => {
       const civicPlaced = Number(/(\d+) civic/.exec(line)![1]);
       const powerPlaced = Number(/(\d+) power/.exec(line)![1]);
       const precinctsPlaced = Number(/(\d+) precincts/.exec(line)![1]);
+      const servicesPlaced = Number(/(\d+) services/.exec(line)![1]);
 
       expect(demolished).toBeGreaterThanOrEqual(5);
       // Chronicle honesty: projects are placed only after carving and none
@@ -752,7 +777,7 @@ describe('era3Highways', () => {
       // projects + civic + power + precincts in. (Net kind-deltas would conflate a
       // demolished era-1 civic with a placed one — the chronicled counts do not.)
       expect(aliveAfter).toBe(
-        aliveBefore - demolished + projPlaced + civicPlaced + powerPlaced + precinctsPlaced,
+        aliveBefore - demolished + projPlaced + civicPlaced + powerPlaced + precinctsPlaced + servicesPlaced,
       );
     });
 
@@ -795,10 +820,10 @@ describe('era3Highways — routed through redlined districts', () => {
           hwSum += map.redline[i]!;
           hwN++;
         } else if (map.parcel[i] !== 0) {
-          // Exclude power plants AND precincts (24..31): both are deliberately sited
-          // on the worst frontage, so they'd inflate the "average building" baseline.
+          // Exclude plants/precincts/fire stations (24..32): all deliberately grade-sited, so
+          // they'd skew the "average building" baseline.
           const k = world.parcels.kindAt(map.parcel[i]! - 1);
-          if (k >= 24 && k <= 31) continue;
+          if (k >= 24 && k <= 32) continue;
           parcelSum += map.redline[i]!;
           parcelN++;
         }

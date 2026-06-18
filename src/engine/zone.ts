@@ -35,6 +35,7 @@ const ZONE_OF: ReadonlyMap<number, ZoneType> = new Map<number, ZoneType>([
   [BuiltKind.Industrial, ZoneType.Industrial],
   // Civic / amenity services — jobs + a trip destination, but not RCI-demand-driven.
   [BuiltKind.Civic, ZoneType.Civic],
+  [BuiltKind.FireStation, ZoneType.Civic],
   [BuiltKind.HealingCommons, ZoneType.Civic],
   [BuiltKind.VerticalFarm, ZoneType.Civic],
   [BuiltKind.WastewaterWorks, ZoneType.Civic],

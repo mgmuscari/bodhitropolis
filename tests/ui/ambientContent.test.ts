@@ -56,6 +56,7 @@ import {
   stepArrests,
   arrestChance,
   buildSafeZones,
+  computeCoverage,
   parkOwnedCarSomewhere,
   pedDespawns,
   AMBIENT_MAX_FRAME_MS,
@@ -974,6 +975,32 @@ describe('arrests: cruisers drain the redlined community for nothing', () => {
     let total = 0;
     for (const v of state.policeViolence.values()) total += v;
     expect(total).toBeGreaterThan(0); // the arrest left a record
+  });
+});
+
+describe('service coverage (fire/health): under-served redlined zones, player repairs', () => {
+  it('a station covers nearby tiles, not far ones', () => {
+    const map = new GameMap(20, 20);
+    map.built[map.idx(10, 10)] = BuiltKind.FireStation;
+    const cov = computeCoverage(map);
+    expect(cov.has(map.idx(10, 10))).toBe(true);
+    expect(cov.has(map.idx(14, 10))).toBe(true); // within radius 6
+    expect(cov.has(map.idx(19, 19))).toBe(false); // out of reach
+  });
+
+  it('a Healing Commons also provides coverage', () => {
+    const map = new GameMap(20, 20);
+    map.built[map.idx(5, 5)] = BuiltKind.HealingCommons;
+    expect(computeCoverage(map).has(map.idx(5, 8))).toBe(true);
+  });
+
+  it('an under-served plot loses land value vs a covered one', () => {
+    const map = new GameMap(8, 8);
+    map.built[map.idx(3, 3)] = BuiltKind.HouseSingle;
+    const i = map.idx(3, 3);
+    const covered = landValueAt(map, 3, 3, undefined, undefined, undefined, undefined, undefined, new Set([i]));
+    const under = landValueAt(map, 3, 3, undefined, undefined, undefined, undefined, undefined, new Set());
+    expect(under).toBeLessThan(covered);
   });
 });
 
@@ -2133,6 +2160,11 @@ describe('liveInspectLine (inspect live-sample formatting)', () => {
 
   it('formats a police-violence tile', () => {
     expect(liveInspectLine({ violence: 90 })).toBe('police violence 90');
+  });
+
+  it('formats service coverage (served / under-served)', () => {
+    expect(liveInspectLine({ served: true })).toBe('served');
+    expect(liveInspectLine({ served: false })).toBe('under-served');
   });
 
   it('omits absent fields and returns empty when nothing is present', () => {
