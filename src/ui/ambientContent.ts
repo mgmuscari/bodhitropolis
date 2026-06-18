@@ -19,7 +19,7 @@
 // `transportCategory`, which is therefore deliberately unused here, YP4).
 
 import type { GameMap } from '../engine/map';
-import { BuiltKind, isRoadKind } from '../engine/fabric';
+import { BuiltKind, isRoadKind, isServiceStation } from '../engine/fabric';
 import { ZoneType, zoneTypeOf } from '../engine/zone';
 import { visitValue } from '../citizens/plots';
 import { stopCategoryOf, DAILY_ITINERARY, type StopCategory } from '../citizens/itinerary';
@@ -59,6 +59,30 @@ const REFUGE_KINDS = new Set<number>([
   BuiltKind.Civic,
   BuiltKind.Park,
 ]);
+
+/**
+ * The set of tiles within COVERAGE_RADIUS of a fire station / healing commons — the live fire/health
+ * SERVICE COVERAGE. Worldgen provides stations to the greenlined districts and withholds them from
+ * the redlined, so the redlined zones start UNDER-served (uncovered → a land-value drag); the player
+ * extends coverage by building stations, which repairs it. Built fresh from the map (sparse stations).
+ */
+export function computeCoverage(map: GameMap): Set<number> {
+  const covered = new Set<number>();
+  for (let i = 0; i < map.built.length; i++) {
+    if (!isServiceStation(map.built[i]!)) continue;
+    const cx = i % map.width;
+    const cy = (i - cx) / map.width;
+    for (let dy = -COVERAGE_RADIUS; dy <= COVERAGE_RADIUS; dy++) {
+      for (let dx = -COVERAGE_RADIUS; dx <= COVERAGE_RADIUS; dx++) {
+        if (Math.abs(dx) + Math.abs(dy) > COVERAGE_RADIUS) continue;
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (map.inBounds(nx, ny)) covered.add(map.idx(nx, ny));
+      }
+    }
+  }
+  return covered;
+}
 
 /** The set of tiles within SAFE_RADIUS of any community-power building — refuge the cruisers avoid
  *  and never sweep. Built fresh from the map (sparse refuges); the player grows it by building. */
@@ -209,6 +233,8 @@ const LV_WEAR_PEN = 30; // − the worst nearby trampled, littered ground (decay
 const LV_WATER_PEN = 60; // − the worst nearby contaminated water (the poisoned creek on the banks)
 const LV_ROAD_PEN = 25; // − the worst nearby crumbling road (disinvested infrastructure); bounded so
 //                          the LV↔road feedback settles rather than death-spiralling
+const LV_COVERAGE_PEN = 30; // − an inhabited plot with NO fire/health station in reach (under-served)
+const COVERAGE_RADIUS = 6; // a fire station / healing commons covers tiles within this Manhattan radius
 const LV_CADENCE = 20; // recompute every N substeps (~1s) — a slow, whole-map readout
 const LV_PULL = 10; // tiles of extra distance a max-value destination can justify over a drab one
 
@@ -584,6 +610,10 @@ export interface AmbientState {
   landValue: Map<number, number>;
   /** Substep counter gating the (whole-map) land-value recompute to LV_CADENCE. */
   lvTick: number;
+  /** Live fire/health SERVICE COVERAGE: tiles within reach of a station. Redlined zones start
+   *  under-served (uncovered → a land-value drag); the player extends it. Recomputed on the LV
+   *  cadence; never hashed. */
+  coverage: Set<number>;
   /** Live AGENT-EMERGENT population, keyed by residential home tile: how many people actually live
    *  there now. Seeded from the census baseline, drifts toward capacity (prized/clean/healthy) or
    *  empty (decayed/smoggy) on a cadence. Drives the spawn target + home weighting. Never hashed. */
@@ -624,6 +654,7 @@ export function createAmbientState(): AmbientState {
     pollution: new Map(),
     landValue: new Map(),
     lvTick: 0,
+    coverage: new Set(),
     occupancy: new Map(),
     occTick: 0,
     roadDecay: new Map(),
@@ -1685,6 +1716,8 @@ export interface LiveSamples {
   water?: number;
   road?: number;
   violence?: number;
+  /** Fire/health service: true = covered, false = under-served. Omitted when not applicable. */
+  served?: boolean;
 }
 
 /**
@@ -1702,6 +1735,7 @@ export function liveInspectLine(s: LiveSamples): string {
   if (s.water !== undefined) parts.push(`water ${Math.round(s.water)} contaminated`);
   if (s.road !== undefined) parts.push(`road ${Math.round(s.road)} crumbling`);
   if (s.violence !== undefined) parts.push(`police violence ${Math.round(s.violence)}`);
+  if (s.served !== undefined) parts.push(s.served ? 'served' : 'under-served');
   return parts.join(' · ');
 }
 
@@ -1985,9 +2019,12 @@ export function landValueAt(
   wear?: ReadonlyMap<number, number>,
   water?: ReadonlyMap<number, number>,
   road?: ReadonlyMap<number, number>,
+  coverage?: ReadonlySet<number>,
 ): number {
   const i = map.idx(x, y);
   let v = LV_BASE + (map.floraVitality[i]! / 255) * LV_FLORA + (map.faunaPresence[i]! / 255) * LV_FAUNA;
+  // Under-served: an inhabited plot with no fire/health station in reach is a real drag.
+  if (coverage && !coverage.has(i)) v -= LV_COVERAGE_PEN;
   // Amenities and nuisances are felt over a RADIUS, not just on the plot tile — a building's smog and
   // congestion come from the ROADS beside it, and a park lifts a whole block. Amenities sum (with a
   // linear falloff: more greens near = nicer); nuisances take the worst nearby (one jammed/smoggy road
@@ -2040,7 +2077,9 @@ export function recomputeLandValue(state: AmbientState, map: GameMap): void {
       if (zoneTypeOf(map.built[i]!) === ZoneType.None) continue; // only inhabited plots carry a value
       state.landValue.set(
         i,
-        landValueAt(map, x, y, state.pollution, state.traffic, state.wear, state.waterPollution, state.roadDecay),
+        landValueAt(
+          map, x, y, state.pollution, state.traffic, state.wear, state.waterPollution, state.roadDecay, state.coverage,
+        ),
       );
     }
   }
@@ -2649,7 +2688,10 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   // 7. Land value: on a slow cadence, recompute each plot's desirability from the healed land +
   //    amenities minus the live nuisances. A readout over the other layers — derived, not laid.
   state.lvTick += 1;
-  if (state.lvTick % LV_CADENCE === 0) recomputeLandValue(state, map);
+  if (state.lvTick % LV_CADENCE === 0) {
+    state.coverage = computeCoverage(map); // refresh fire/health coverage before land value reads it
+    recomputeLandValue(state, map);
+  }
 
   // 8. Population: on a slow cadence, drift each home's occupancy toward its capacity (prized/clean/
   //    healthy) or empty (decayed/smoggy). Runs AFTER land value so it reads the fresh field. The

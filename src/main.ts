@@ -559,6 +559,8 @@ export function main(): void {
         road: isRoadKind(world.map.built[i]!) ? ambientState.roadDecay.get(i) : undefined,
         // Where the police have done violence (arrests) — surfaced on any tile that carries it.
         violence: ambientState.policeViolence.get(i),
+        // Fire/health service: is this inhabited plot within reach of a station?
+        served: pid ? ambientState.coverage.has(anchor) : undefined,
       });
       if (live) line += ` · ${live}`;
       // Power status: a plant shows its output; a consumer shows powered/unpowered.
