@@ -6,9 +6,23 @@
 
 import type { OverlayLegend } from './overlayLegend';
 
-/** The four ecology heatmap views, in cycle order. */
-export type OverlayView = 'soil' | 'flora' | 'fauna' | 'biodiversity';
-export const OVERLAY_VIEWS: readonly OverlayView[] = ['soil', 'flora', 'fauna', 'biodiversity'];
+/** The ecology heatmap views, in cycle order: the living-land layers, then the POLLUTION layers
+ *  (air smog, water runoff — ground contamination joins them next) the player drives down by healing. */
+export type OverlayView =
+  | 'soil'
+  | 'flora'
+  | 'fauna'
+  | 'biodiversity'
+  | 'airPollution'
+  | 'waterPollution';
+export const OVERLAY_VIEWS: readonly OverlayView[] = [
+  'soil',
+  'flora',
+  'fauna',
+  'biodiversity',
+  'airPollution',
+  'waterPollution',
+];
 
 /** Overlay state: an active view, or null (overlay off). */
 export type OverlayState = OverlayView | null;
@@ -45,6 +59,8 @@ const RAMPS: Record<OverlayView, { lo: RGB; hi: RGB }> = {
   flora: { lo: [210, 216, 180], hi: [28, 120, 44] }, // bare → deep canopy
   fauna: { lo: [228, 214, 176], hi: [210, 120, 40] }, // quiet → teeming amber
   biodiversity: { lo: [120, 72, 176], hi: [226, 200, 64] }, // violet → gold
+  airPollution: { lo: [150, 170, 150], hi: [54, 44, 38] }, // clear air → dark smog
+  waterPollution: { lo: [60, 130, 185], hi: [120, 120, 52] }, // clear blue → dingy creek
 };
 
 /** Integer lerp from a to b over the Uint8 domain (floor — value 0→a, 255→b). */
@@ -66,7 +82,9 @@ const LEGENDS: Record<OverlayView, string> = {
   soil: 'Soil health — broken brown to living green',
   flora: 'Flora vitality — bare ground to deep canopy',
   fauna: 'Fauna presence — quiet to teeming',
-  biodiversity: 'Biodiversity — Simpson index, violet to gold',
+  biodiversity: 'Biodiversity — richness, violet to gold',
+  airPollution: 'Air pollution — clear air to dark smog',
+  waterPollution: 'Water pollution — clear to dingy creek',
 };
 
 /** The dock legend line for an active overlay view. */
@@ -79,6 +97,8 @@ const LEGEND_ENDS: Record<OverlayView, { title: string; lo: string; hi: string }
   flora: { title: 'Flora vitality', lo: 'bare', hi: 'canopy' },
   fauna: { title: 'Fauna presence', lo: 'quiet', hi: 'teeming' },
   biodiversity: { title: 'Biodiversity', lo: 'low', hi: 'high' },
+  airPollution: { title: 'Air pollution', lo: 'clear', hi: 'smog' },
+  waterPollution: { title: 'Water pollution', lo: 'clear', hi: 'dingy' },
 };
 
 /** The structured colour KEY for an eco overlay view: the ramp endpoints as labelled swatches. */

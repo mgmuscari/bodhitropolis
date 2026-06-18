@@ -20,19 +20,30 @@ const ENDPOINTS: Record<OverlayView, { lo: readonly number[]; hi: readonly numbe
   flora: { lo: [210, 216, 180], hi: [28, 120, 44] },
   fauna: { lo: [228, 214, 176], hi: [210, 120, 40] },
   biodiversity: { lo: [120, 72, 176], hi: [226, 200, 64] },
+  airPollution: { lo: [150, 170, 150], hi: [54, 44, 38] },
+  waterPollution: { lo: [60, 130, 185], hi: [120, 120, 52] },
 };
 
 describe('cycleOverlay', () => {
-  it('walks off → soil → flora → fauna → biodiversity → off', () => {
+  it('walks off → soil → flora → fauna → biodiversity → air → water → off', () => {
     expect(cycleOverlay(null)).toBe('soil');
     expect(cycleOverlay('soil')).toBe('flora');
     expect(cycleOverlay('flora')).toBe('fauna');
     expect(cycleOverlay('fauna')).toBe('biodiversity');
-    expect(cycleOverlay('biodiversity')).toBe(null); // off-wrap
+    expect(cycleOverlay('biodiversity')).toBe('airPollution');
+    expect(cycleOverlay('airPollution')).toBe('waterPollution');
+    expect(cycleOverlay('waterPollution')).toBe(null); // off-wrap
   });
 
-  it('OVERLAY_VIEWS is the four ecology views in order', () => {
-    expect(OVERLAY_VIEWS).toEqual(['soil', 'flora', 'fauna', 'biodiversity']);
+  it('OVERLAY_VIEWS is the ecology + pollution views in order', () => {
+    expect(OVERLAY_VIEWS).toEqual([
+      'soil',
+      'flora',
+      'fauna',
+      'biodiversity',
+      'airPollution',
+      'waterPollution',
+    ]);
   });
 });
 
@@ -105,6 +116,8 @@ describe('legendLine', () => {
     expect(legendLine('soil')).toBe('Soil health — broken brown to living green');
     expect(legendLine('flora')).toBe('Flora vitality — bare ground to deep canopy');
     expect(legendLine('fauna')).toBe('Fauna presence — quiet to teeming');
-    expect(legendLine('biodiversity')).toBe('Biodiversity — Simpson index, violet to gold');
+    expect(legendLine('biodiversity')).toBe('Biodiversity — richness, violet to gold');
+    expect(legendLine('airPollution')).toBe('Air pollution — clear air to dark smog');
+    expect(legendLine('waterPollution')).toBe('Water pollution — clear to dingy creek');
   });
 });

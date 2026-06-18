@@ -74,7 +74,9 @@ describe('cycleComposite: E/C exclusivity truth table', () => {
     expect(cycleComposite(null, 'eco')).toEqual(eco('soil'));
     expect(cycleComposite(eco('soil'), 'eco')).toEqual(eco('flora'));
     expect(cycleComposite(eco('fauna'), 'eco')).toEqual(eco('biodiversity'));
-    expect(cycleComposite(eco('biodiversity'), 'eco')).toBeNull();
+    expect(cycleComposite(eco('biodiversity'), 'eco')).toEqual(eco('airPollution'));
+    expect(cycleComposite(eco('airPollution'), 'eco')).toEqual(eco('waterPollution'));
+    expect(cycleComposite(eco('waterPollution'), 'eco')).toBeNull(); // off-wrap past the last view
   });
 
   it('pressing civic from off / advances within / off-wraps', () => {
