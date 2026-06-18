@@ -106,6 +106,7 @@ const PURE_UI_ALLOWLIST = [
   'src/ui/redlineOverlayContent.ts',
   'src/ui/policeViolenceOverlayContent.ts',
   'src/ui/coverageOverlayContent.ts',
+  'src/ui/powerOverlayContent.ts',
   'src/ui/overlayLegend.ts',
   'src/ui/pulseContent.ts',
   'src/ui/repairTools.ts',
