@@ -238,6 +238,12 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
 - ✅ **Cannot build a nuclear plant anywhere** (PR pending) — `canPlaceParcel` clamped footprints to
   `MAX_FOOTPRINT = 3`, but Nuclear (and Fusion) plants are 4×4, so every placement was rejected.
   Bumped MAX_FOOTPRINT to 4 (the largest plant). Unit-tested: a 4×4 footprint places on clear land.
+- ✅ **More early-game civic services concentrated in greenlined areas** (PR pending; Maddy feat) —
+  added Clinic/Library/School BuiltKinds (33/34/35) — civic SERVICE stations like the fire station.
+  era3 concentrates them on greenlined frontage (withheld from redlined; `era3CivicServices`=3 each),
+  they extend the live service-coverage field (coverage overlay retitled "Civic services"), render
+  (CL/LB/SK glyphs + distinct styles), and are player-buildable (repair the redlined zones). Live-
+  verified: 3 of each placed at mean grade 66 (greenlined); unit-tested (greener than precincts).
 - 🔵 **DEFERRED feature: prevailing wind carries smog** (Maddy 2026-06-18) — air pollution
   (`ambient.pollution`) should drift downwind on a prevailing wind, not just diffuse/linger in place,
   so smog plumes streak from their sources. Live layer.

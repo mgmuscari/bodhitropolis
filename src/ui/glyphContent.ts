@@ -32,6 +32,9 @@ const POWER_GLYPH: ReadonlyMap<number, string> = new Map<number, string>([
 const CIVIC_GLYPH: ReadonlyMap<number, string> = new Map<number, string>([
   [BuiltKind.Civic, '+'],
   [BuiltKind.FireStation, 'FD'],
+  [BuiltKind.Clinic, 'CL'],
+  [BuiltKind.Library, 'LB'],
+  [BuiltKind.School, 'SK'],
   [BuiltKind.HealingCommons, 'H'],
   [BuiltKind.VerticalFarm, 'F'],
   [BuiltKind.WastewaterWorks, 'W'],

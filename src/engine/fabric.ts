@@ -48,6 +48,13 @@ export const BuiltKind = {
   // greenlined neighborhoods and withholds it from the redlined ones; the player extends coverage
   // to repair (see growth/services via the live coverage field).
   FireStation: 32,
+  // Civic SERVICES 33..35 — clinic (health), library + school (education). Like the fire station,
+  // worldgen concentrates them in the GREENLINED districts and withholds them from the redlined ones
+  // (disinvestment); they extend the live service-coverage field, and the player builds them to
+  // repair the redlined zones.
+  Clinic: 33,
+  Library: 34,
+  School: 35,
   // Moses-era buildings 16..23 (24..47 reserved)
   HouseSingle: 16,
   Apartments: 17,
@@ -101,8 +108,10 @@ export const isBuildingKind = (k: number): boolean => k >= 16 && k <= 127;
 export const isPowerPlant = (k: number): boolean => k >= 24 && k <= 30;
 /** A police precinct (the apparatus of control sited in redlined zones, 31). */
 export const isPrecinct = (k: number): boolean => k === 31;
-/** A civic SERVICE station that provides fire/health coverage (FireStation 32, HealingCommons 60). */
-export const isServiceStation = (k: number): boolean => k === 32 || k === 60;
+/** A civic SERVICE station that provides coverage: fire (32), clinic (33), library (34), school (35),
+ *  or healing commons (60). Worldgen gives them to greenlined districts; the player extends them. */
+export const isServiceStation = (k: number): boolean =>
+  k === 32 || k === 33 || k === 34 || k === 35 || k === 60;
 
 // --- Parcels -------------------------------------------------------------
 //

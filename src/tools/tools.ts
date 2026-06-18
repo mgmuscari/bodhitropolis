@@ -101,6 +101,9 @@ const BUILD_TABLE: Readonly<Record<number, BuildEntry>> = {
   [BuiltKind.Industrial]: { label: 'Industrial', cost: 6, footprint: { w: 1, h: 1 } },
   [BuiltKind.Civic]: { label: 'Civic', cost: 12, footprint: { w: 2, h: 2 } },
   [BuiltKind.FireStation]: { label: 'Fire Station', cost: 14, footprint: { w: 2, h: 2 } },
+  [BuiltKind.Clinic]: { label: 'Clinic', cost: 14, footprint: { w: 2, h: 2 } },
+  [BuiltKind.Library]: { label: 'Library', cost: 12, footprint: { w: 2, h: 2 } },
+  [BuiltKind.School]: { label: 'School', cost: 16, footprint: { w: 2, h: 2 } },
   // Power plants (SC2000 tier). Coal/Gas/Hydro/Nuclear are always-buildable classics
   // (added to CLASSIC_BUILD_KINDS); Wind/Solar/Fusion are tech-granted (Solarpunk).
   [BuiltKind.CoalPlant]: { label: 'Coal Plant', cost: 40, footprint: { w: 3, h: 3 } },
@@ -171,6 +174,9 @@ const CLASSIC_BUILD_KINDS: readonly BuiltKind[] = [
   BuiltKind.Industrial,
   BuiltKind.Civic,
   BuiltKind.FireStation,
+  BuiltKind.Clinic,
+  BuiltKind.Library,
+  BuiltKind.School,
   // SC2000 legacy power — the dirty/centralized plants, buildable from the start.
   BuiltKind.CoalPlant,
   BuiltKind.GasPlant,
