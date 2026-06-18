@@ -31,6 +31,7 @@ const POWER_GLYPH: ReadonlyMap<number, string> = new Map<number, string>([
 // healing commons from a power node at a glance — so each gets its own short tag.
 const CIVIC_GLYPH: ReadonlyMap<number, string> = new Map<number, string>([
   [BuiltKind.Civic, '+'],
+  [BuiltKind.FireStation, 'FD'],
   [BuiltKind.HealingCommons, 'H'],
   [BuiltKind.VerticalFarm, 'F'],
   [BuiltKind.WastewaterWorks, 'W'],

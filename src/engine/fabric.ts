@@ -40,6 +40,10 @@ export const BuiltKind = {
   // does NOT build it — they DEFUND it (convert it to a Healing Commons). Named
   // critically, scoped to the oppressive-planning history.
   Precinct: 31,
+  // Fire station 32 — a genuine civic SERVICE (unlike the precinct). Worldgen provides it to the
+  // greenlined neighborhoods and withholds it from the redlined ones; the player extends coverage
+  // to repair (see growth/services via the live coverage field).
+  FireStation: 32,
   // Moses-era buildings 16..23 (24..47 reserved)
   HouseSingle: 16,
   Apartments: 17,
@@ -93,6 +97,8 @@ export const isBuildingKind = (k: number): boolean => k >= 16 && k <= 127;
 export const isPowerPlant = (k: number): boolean => k >= 24 && k <= 30;
 /** A police precinct (the apparatus of control sited in redlined zones, 31). */
 export const isPrecinct = (k: number): boolean => k === 31;
+/** A civic SERVICE station that provides fire/health coverage (FireStation 32, HealingCommons 60). */
+export const isServiceStation = (k: number): boolean => k === 32 || k === 60;
 
 // --- Parcels -------------------------------------------------------------
 //

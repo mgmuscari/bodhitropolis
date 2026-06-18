@@ -67,6 +67,7 @@ export interface MosesParams {
   era3GradeWeight: number; // how strongly corridor scoring prefers redlined fabric
   era3Power: number; // legacy coal/gas plants sited on surviving redlined frontage
   era3Precincts: number; // police precincts sited in the redlined districts (the apparatus of control)
+  era3Services: number; // fire stations PROVIDED to the greenlined districts (withheld from redlined)
   era3MinDemolish: number; // a corridor must cut through at least this many parcels
   corridorTopK: number; // rng jitter among the top-K scored corridors
   era3Projects: number; // tower-in-the-park Projects placed along the corridor
@@ -127,6 +128,7 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   era3GradeWeight: 8,
   era3Power: 4,
   era3Precincts: 4,
+  era3Services: 4,
   era3MinDemolish: 5,
   corridorTopK: 3,
   era3Projects: 5,
@@ -1158,9 +1160,24 @@ export function era3Highways(world: WorldState, rng: Rng, p: MosesParams, state:
     }
   }
 
+  // Fire stations PROVIDED to the greenlined districts (the inverse of the precincts): sited on the
+  // LEAST-redlined frontage, so redlined neighborhoods are left under-served. The player extends
+  // coverage to the redlined zones to repair (live coverage field — growth/services).
+  const serviceRng = rng.fork('service');
+  const greenCands = [...roadTiles].reverse(); // roadTiles is grade-desc → reversed = greenlined first
+  let services = 0;
+  for (const i of greenCands) {
+    if (services >= p.era3Services) break;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    if (placeAdjacent(map, parcels, x, y, 2, 2, BuiltKind.FireStation, serviceRng, undefined, PLANT_ATTRS) !== -1) {
+      services++;
+    }
+  }
+
   world.log.push(
     `era3: urban renewal — ${demolished} parcels demolished, ${projects} projects, ` +
-      `${civic} civic, ${power} power, ${precincts} precincts`,
+      `${civic} civic, ${power} power, ${precincts} precincts, ${services} services`,
   );
 }
 

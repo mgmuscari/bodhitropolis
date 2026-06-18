@@ -29,6 +29,7 @@ const NAME_OF: ReadonlyMap<number, string> = new Map<number, string>([
   [BuiltKind.ParkingLot, 'Parking Lot'],
   [BuiltKind.Civic, 'Civic Building'],
   [BuiltKind.Precinct, 'Police Precinct'],
+  [BuiltKind.FireStation, 'Fire Station'],
   // power plants (SC2000 tier)
   [BuiltKind.CoalPlant, 'Coal Power Plant'],
   [BuiltKind.GasPlant, 'Gas Power Plant'],
