@@ -134,6 +134,7 @@ const LV_RADIUS = 4; // how far amenities lift / nuisances drag a plot (Manhatta
 const LV_POLL_PEN = 70; // − the worst nearby smog (distance-weighted), the dominant nuisance
 const LV_TRAFFIC_PEN = 50; // − the worst nearby congestion (noise / danger of a jammed road)
 const LV_WEAR_PEN = 30; // − the worst nearby trampled, littered ground (decay)
+const LV_WATER_PEN = 60; // − the worst nearby contaminated water (the poisoned creek on the banks)
 const LV_CADENCE = 20; // recompute every N substeps (~1s) — a slow, whole-map readout
 const LV_PULL = 10; // tiles of extra distance a max-value destination can justify over a drab one
 
@@ -253,6 +254,7 @@ const WATER_RUNOFF_CADENCE = 20;
 const RUNOFF_URBAN = 2; // a paved/built ground neighbour
 const RUNOFF_WILD = 0.4; // a wild/empty ground neighbour
 const RUNOFF_WORN = 2; // extra when that ground is a beaten desire path
+const RUNOFF_INDUSTRY = 4; // an industrial neighbour (the toxic source), grade-scaled up to 2x
 
 /** Substeps a pedestrian spends INSIDE its destination building before walking back to the
  *  car: a base plus a seeded spread so visitors don't all return together. ~3–13s. */
@@ -1810,6 +1812,7 @@ export function landValueAt(
   pollution?: ReadonlyMap<number, number>,
   traffic?: ReadonlyMap<number, number>,
   wear?: ReadonlyMap<number, number>,
+  water?: ReadonlyMap<number, number>,
 ): number {
   const i = map.idx(x, y);
   let v = LV_BASE + (map.floraVitality[i]! / 255) * LV_FLORA + (map.faunaPresence[i]! / 255) * LV_FAUNA;
@@ -1821,6 +1824,7 @@ export function landValueAt(
   let pollNear = 0;
   let trafNear = 0;
   let wearNear = 0;
+  let waterNear = 0;
   for (let dy = -LV_RADIUS; dy <= LV_RADIUS; dy++) {
     for (let dx = -LV_RADIUS; dx <= LV_RADIUS; dx++) {
       const dist = Math.abs(dx) + Math.abs(dy);
@@ -1835,12 +1839,15 @@ export function landValueAt(
       if (pollution) pollNear = Math.max(pollNear, sampleField(pollution, ni) * falloff);
       if (traffic) trafNear = Math.max(trafNear, sampleField(traffic, ni) * falloff);
       if (wear) wearNear = Math.max(wearNear, sampleField(wear, ni) * falloff);
+      // The contaminated creek on the banks: the worst nearby water pollution drags the plot.
+      if (water) waterNear = Math.max(waterNear, sampleField(water, ni) * falloff);
     }
   }
   v += amenity * LV_AMENITY;
   v -= (pollNear / POLL_MAX) * LV_POLL_PEN;
   v -= (trafNear / TRAFFIC_MAX) * LV_TRAFFIC_PEN;
   v -= (wearNear / WEAR_MAX) * LV_WEAR_PEN;
+  v -= (waterNear / WATER_POLL_MAX) * LV_WATER_PEN;
   return v < 0 ? 0 : v > LV_MAX ? LV_MAX : v;
 }
 
@@ -1855,7 +1862,7 @@ export function recomputeLandValue(state: AmbientState, map: GameMap): void {
     for (let x = 0; x < W; x++) {
       const i = map.idx(x, y);
       if (zoneTypeOf(map.built[i]!) === ZoneType.None) continue; // only inhabited plots carry a value
-      state.landValue.set(i, landValueAt(map, x, y, state.pollution, state.traffic, state.wear));
+      state.landValue.set(i, landValueAt(map, x, y, state.pollution, state.traffic, state.wear, state.waterPollution));
     }
   }
 }
@@ -2262,7 +2269,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
 /** One water-runoff pass: every water tile with ground neighbours collects their runoff
  *  (paved/built/worn ground sheds most), accumulating toward WATER_POLL_MAX. Open water with no
  *  ground neighbours stays clean. Whole-map scan — gated to WATER_RUNOFF_CADENCE by the caller. */
-function accumulateWaterRunoff(state: AmbientState, map: GameMap): void {
+export function accumulateWaterRunoff(state: AmbientState, map: GameMap): void {
   const W = map.width;
   const H = map.height;
   for (let y = 0; y < H; y++) {
@@ -2277,9 +2284,16 @@ function accumulateWaterRunoff(state: AmbientState, map: GameMap): void {
         const ni = map.idx(nx, ny);
         if (map.water[ni] !== 0) continue; // a water neighbour sheds nothing
         const k = map.built[ni]!;
-        runoff += isRoadKind(k) || k === BuiltKind.ParkingLot || zoneTypeOf(k) !== ZoneType.None
-          ? RUNOFF_URBAN
-          : RUNOFF_WILD;
+        if (zoneTypeOf(k) === ZoneType.Industrial) {
+          // Industry is the toxic source; redlined industry sheds the MOST (least
+          // regulated, concentrated there by policy) — scale by the tile's grade.
+          // This is the Hackensack: the contamination starts at the redlined plant.
+          runoff += RUNOFF_INDUSTRY * (1 + map.redline[ni]! / 255);
+        } else if (isRoadKind(k) || k === BuiltKind.ParkingLot || zoneTypeOf(k) !== ZoneType.None) {
+          runoff += RUNOFF_URBAN;
+        } else {
+          runoff += RUNOFF_WILD;
+        }
         if ((state.wear.get(ni) ?? 0) > 40) runoff += RUNOFF_WORN;
       }
       if (runoff === 0) continue;
