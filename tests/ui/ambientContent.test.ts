@@ -51,6 +51,7 @@ import {
   spawnCruisers,
   stepCruisers,
   stepArrests,
+  arrestChance,
   AMBIENT_MAX_FRAME_MS,
 } from '../../src/ui/ambientContent';
 
@@ -833,8 +834,15 @@ describe('arrests: cruisers drain the redlined community for nothing', () => {
     expect(state.occupancy.get(home)).toBe(4); // a person removed from the household
   });
 
-  it('never sweeps a greenlined neighborhood (the disparity)', () => {
-    const { map, state } = policedStreet(0); // not redlined
+  it('arrest probability scales with the redline grade (0 at greenlined, max at redlined)', () => {
+    expect(arrestChance(0)).toBe(0); // greenlined ground: no over-policing
+    expect(arrestChance(255)).toBeGreaterThan(arrestChance(128)); // monotonic in grade
+    expect(arrestChance(128)).toBeGreaterThan(arrestChance(0));
+    expect(arrestChance(255)).toBeGreaterThan(0);
+  });
+
+  it('never sweeps grade-0 ground (the disparity floor)', () => {
+    const { map, state } = policedStreet(0); // not redlined → arrestChance 0
     const rng = ambientFork('arrest');
     for (let n = 0; n < 40; n++) stepArrests(state, map, rng);
     expect(state.peds.length).toBe(1); // never arrested where there's no redlining

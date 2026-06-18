@@ -49,10 +49,19 @@ const CRUISER_LIFE = 400; // substeps a patrol runs before recycling back to its
 // drains a person from their household — the violence of over-policing, made tangible. Only in
 // redlined zones (the disparity); the player ends it by defunding (no precinct → no cruisers).
 const ARREST_CADENCE = 40; // substeps between arrest sweeps (~2s)
-const ARREST_CHANCE = 0.5; // per cruiser per sweep, in a redlined zone
+const ARREST_CHANCE_MAX = 0.5; // per cruiser per sweep on FULLY redlined ground (grade 255)
 const ARREST_RADIUS = 4; // a cruiser seizes an on-foot citizen within this Manhattan distance
-const ARREST_GRADE_MIN = 128; // only in redlined (C/D) ground — never the greenlined neighborhoods
 const ARREST_DRAIN = 1; // people removed from the household per arrest
+
+/**
+ * The per-sweep arrest probability for a cruiser standing on ground of this redline grade:
+ * scales LINEARLY with the grade (0 at greenlined, ARREST_CHANCE_MAX at fully redlined), so the
+ * over-policing pressure tracks the discrimination rather than switching on at a threshold.
+ */
+export function arrestChance(grade: number): number {
+  const g = grade < 0 ? 0 : grade > 255 ? 255 : grade;
+  return (g / 255) * ARREST_CHANCE_MAX;
+}
 
 // Rejection-sampling budget per substep per kind: sample K random tiles and test
 // the spawn predicate, never an O(mapArea) full-map scan (CRITIC-YP1).
@@ -2059,11 +2068,11 @@ export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng): void 
 }
 
 /**
- * Arrest sweep: each cruiser standing on redlined ground (grade ≥ ARREST_GRADE_MIN) may, with
- * ARREST_CHANCE, seize the nearest on-foot citizen within ARREST_RADIUS — removing them from the
- * street AND draining a person from their household's occupancy. For nothing: no cause, only the
- * grade. Greenlined neighborhoods are never swept (the disparity). The player ends it by defunding
- * the precinct (no precinct → no cruisers → no arrests). Renderer-side; deterministic in `rng`.
+ * Arrest sweep: each cruiser may seize the nearest on-foot citizen within ARREST_RADIUS — removing
+ * them from the street AND draining a person from their household's occupancy — with a probability
+ * that SCALES WITH the redline grade under the cruiser (arrestChance: 0 at greenlined, max at fully
+ * redlined). For nothing: no cause, only the grade. The player ends it by defunding the precinct
+ * (no precinct → no cruisers → no arrests). Renderer-side; deterministic in `rng`.
  */
 export function stepArrests(state: AmbientState, map: GameMap, rng: Rng): void {
   if (state.cruisers.length === 0 || state.peds.length === 0) return;
@@ -2071,8 +2080,8 @@ export function stepArrests(state: AmbientState, map: GameMap, rng: Rng): void {
     const cx = Math.round(c.x);
     const cy = Math.round(c.y);
     if (!map.inBounds(cx, cy)) continue;
-    if (map.redline[map.idx(cx, cy)]! < ARREST_GRADE_MIN) continue; // only the redlined districts
-    if (!rng.chance(ARREST_CHANCE)) continue;
+    // Arrest pressure scales with how redlined the ground is (0 at greenlined) — no threshold.
+    if (!rng.chance(arrestChance(map.redline[map.idx(cx, cy)]!))) continue;
     // Nearest on-foot citizen within reach (riders/indoors aren't on the street).
     let victim = -1;
     let best = ARREST_RADIUS + 1;
