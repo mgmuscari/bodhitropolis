@@ -657,6 +657,12 @@ export function transportCategory(kind: number): number {
   return TRANSPORT_CATEGORY[kind] ?? 0;
 }
 
+// Named connection/divider mask bits: N=1, E=2, S=4, W=8.
+const N_BIT = 1;
+const E_BIT = 2;
+const S_BIT = 4;
+const W_BIT = 8;
+
 // 4-neighbour offsets paired with the mask bit each sets: N=1, E=2, S=4, W=8.
 const MASK_DIRS: ReadonlyArray<readonly [number, number, number]> = [
   [0, -1, 1], // N
@@ -789,16 +795,19 @@ export function roadCurbMask(map: GameMap, x: number, y: number): number {
  */
 export function rampMarkingMask(map: GameMap, x: number, y: number): number {
   if (map.getBuilt(x, y) !== BuiltKind.RoadRamp) return 0;
-  let mask = 0;
-  for (const [dx, dy, bit] of MASK_DIRS) {
-    const nx = x + dx;
-    const ny = y + dy;
-    if (!map.inBounds(nx, ny)) continue;
-    const n = map.getBuilt(nx, ny);
-    if (n === BuiltKind.RoadHighway || n === BuiltKind.RoadRamp) mask |= bit;
-  }
-  return mask;
+  const hwy = (px: number, py: number): boolean =>
+    map.inBounds(px, py) && map.getBuilt(px, py) === BuiltKind.RoadHighway;
+  // The freeway axis is the one with HIGHWAY neighbours (only — a crossing's other ramp tiles are
+  // PERPENDICULAR to the freeway, so counting ramps would re-introduce the cross at a 3-wide
+  // crossing). Draw a straight line clean THROUGH along that axis.
+  const vMag = (hwy(x, y - 1) ? 1 : 0) + (hwy(x, y + 1) ? 1 : 0);
+  const hMag = (hwy(x - 1, y) ? 1 : 0) + (hwy(x + 1, y) ? 1 : 0);
+  if (vMag === 0 && hMag === 0) return 0; // a ramp not flanking any freeway → no through-line
+  return vMag >= hMag ? N_BIT | S_BIT : E_BIT | W_BIT;
 }
+
+/** Carved freeway corridor width (centre spine + 2 flanks — see carveCorridor in worldgen/moses). */
+export const FREEWAY_WIDTH = 3;
 
 /**
  * The axis a freeway MEDIAN jersey barrier runs along on tile (x, y), or null if (x, y) isn't a
@@ -827,10 +836,12 @@ export function freewayMedianAxis(map: GameMap, x: number, y: number): 'v' | 'h'
   let nd = 0;
   while (hwy(x, y + nd + 1)) nd++;
   const nsRun = nu + nd + 1;
-  // Vertical freeway: E-W is the short, centred width band; N-S is strictly longer (the length).
-  if (wl === wr && ewRun >= 3 && ewRun % 2 === 1 && nsRun > ewRun) return 'v';
-  // Horizontal freeway: N-S is the short, centred width band; E-W is strictly longer.
-  if (nu === nd && nsRun >= 3 && nsRun % 2 === 1 && ewRun > nsRun) return 'h';
+  // The width band must be EXACTLY the freeway width (3): a wider band means an interchange / freeway
+  // cross, NOT a clean corridor — no median there (fixes a misplaced barrier at the big freeway
+  // cross, Maddy 2026-06-19). Vertical freeway: E-W is the 3-wide centred band, N-S strictly longer.
+  if (wl === wr && ewRun === FREEWAY_WIDTH && nsRun > ewRun) return 'v';
+  // Horizontal freeway: N-S is the 3-wide centred band; E-W strictly longer.
+  if (nu === nd && nsRun === FREEWAY_WIDTH && ewRun > nsRun) return 'h';
   return null;
 }
 

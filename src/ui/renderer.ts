@@ -333,6 +333,12 @@ function paintRoadMarkings(set: SetPixel, kind: number, mask: number, wide: bool
     // is the intent anyway; per-corridor lane lines would need the corridor axis, a future pass.)
     return;
   }
+  // Junction (3+ connected edges): clear the intersection — draw NO centre markings through it, so a
+  // 4-way doesn't become a + cross and a street grid doesn't tile into a grid of crosses (Maddy
+  // 2026-06-19). Real lane lines stop at the box. Straight (2 opposite) and turns (2 adjacent) keep
+  // their line; dead-ends/isolated stubs keep theirs.
+  const conns = (mask & 1) + ((mask >> 1) & 1) + ((mask >> 2) & 1) + ((mask >> 3) & 1);
+  if (conns >= 3) return;
   if (mask & N) for (let y = 0; y < 8; y++) for (const cx of cols) mark(set, cx, y);
   if (mask & S) for (let y = 8; y < BASE_TILE; y++) for (const cx of cols) mark(set, cx, y);
   if (mask & E) for (let x = 8; x < BASE_TILE; x++) for (const cy of rows) mark(set, x, cy);

@@ -1000,6 +1000,20 @@ describe('freewayMedianAxis (jersey barrier down the centre tile, lengthwise)', 
     expect(freewayMedianAxis(map, 3, 3)).toBe(null);
   });
 
+  it('draws NO median through a freeway interchange (the band widens at the cross)', () => {
+    const map = new GameMap(9, 9);
+    for (let i = 0; i < 9; i++) {
+      map.setBuilt(3, i, BuiltKind.RoadHighway); // vertical freeway cols 3,4,5
+      map.setBuilt(4, i, BuiltKind.RoadHighway);
+      map.setBuilt(5, i, BuiltKind.RoadHighway);
+      map.setBuilt(i, 3, BuiltKind.RoadHighway); // horizontal freeway rows 3,4,5
+      map.setBuilt(i, 4, BuiltKind.RoadHighway);
+      map.setBuilt(i, 5, BuiltKind.RoadHighway);
+    }
+    expect(freewayMedianAxis(map, 4, 4)).toBe(null); // interchange centre — both runs wide → none
+    expect(freewayMedianAxis(map, 4, 7)).toBe('v'); // clean 3-wide corridor below the cross → median
+  });
+
   it('opens the median at a ramp (the spine tile is a RoadRamp, not highway)', () => {
     const map = new GameMap(7, 7);
     for (let y = 0; y < 7; y++) {
@@ -1029,12 +1043,32 @@ describe('rampMarkingMask (straight-through dashed line at freeway ramps)', () =
     expect(rampMarkingMask(map, 2, 2)).toBe(N | S); // straight through, no cross
   });
 
-  it('treats an adjacent ramp as continuing the freeway band', () => {
+  // Regression for the freeway-crossing GRID (Maddy 2026-06-19): at a 3-wide crossing the band is
+  // converted to a row of ramp tiles; the PERPENDICULAR neighbours are also ramps, so counting ramps
+  // re-introduced the cross. Keying on the HIGHWAY axis keeps every tile straight.
+  it('keeps every tile of a 3-wide freeway crossing straight (no grid)', () => {
+    const map = new GameMap(7, 7);
+    for (let y = 0; y < 7; y++) {
+      map.setBuilt(1, y, BuiltKind.RoadHighway);
+      map.setBuilt(2, y, BuiltKind.RoadHighway);
+      map.setBuilt(3, y, BuiltKind.RoadHighway);
+    }
+    // a surface street crosses the band at row 2 → those 3 tiles become ramps
+    map.setBuilt(1, 2, BuiltKind.RoadRamp);
+    map.setBuilt(2, 2, BuiltKind.RoadRamp);
+    map.setBuilt(3, 2, BuiltKind.RoadRamp);
+    map.setBuilt(0, 2, BuiltKind.RoadStreet);
+    map.setBuilt(4, 2, BuiltKind.RoadStreet);
+    expect(rampMarkingMask(map, 1, 2)).toBe(N | S); // each ramp tile: highway N&S → straight
+    expect(rampMarkingMask(map, 2, 2)).toBe(N | S); // ramps E/W are perpendicular, NOT counted
+    expect(rampMarkingMask(map, 3, 2)).toBe(N | S);
+  });
+
+  it('returns 0 for a ramp that flanks no freeway (no through-line)', () => {
     const map = new GameMap(5, 5);
     map.setBuilt(2, 2, BuiltKind.RoadRamp);
-    map.setBuilt(2, 1, BuiltKind.RoadRamp); // north: another ramp tile in the band
-    map.setBuilt(1, 2, BuiltKind.RoadStreet); // west: street — not the band
-    expect(rampMarkingMask(map, 2, 2)).toBe(N);
+    map.setBuilt(2, 1, BuiltKind.RoadRamp); // a ramp neighbour, but NO highway anywhere
+    expect(rampMarkingMask(map, 2, 2)).toBe(0);
   });
 });
 
