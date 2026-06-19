@@ -1102,6 +1102,20 @@ export function isParkable(map: GameMap, x: number, y: number): boolean {
   return map.water[map.idx(x, y)] === 0;
 }
 
+/** Does (x,y) have a SHOULDER — an orthogonal neighbour that is NOT a drivable road (a kerb edge, a
+ *  building/grass/water bank, or the map edge) to pull over against? A car curb-parks on a shoulder so
+ *  it sits at the kerb, not stranded in the middle of a wide road/avenue lane (Maddy: "cars parking in
+ *  the middle of the street"). A tile ringed by drivable road on all four sides (a lane interior) has
+ *  no shoulder and is not a valid street park. */
+function hasShoulder(map: GameMap, x: number, y: number): boolean {
+  for (let d = 0; d < 4; d++) {
+    const nx = x + DIR_DX[d]!;
+    const ny = y + DIR_DY[d]!;
+    if (!map.inBounds(nx, ny) || !carTraversable(map.built[map.idx(nx, ny)]!)) return true;
+  }
+  return false;
+}
+
 /** The grid direction (0..3) of the step from (fx,fy) to an orthogonally-adjacent (tx,ty). */
 function moveDir(fx: number, fy: number, tx: number, ty: number): number {
   if (tx > fx) return 1; // East
@@ -2404,6 +2418,7 @@ function findCurbSpot(
         const x = ax + dx;
         const y = ay + dy;
         if (!isParkable(map, x, y)) continue; // no parking on a freeway or over water (a bridge)
+        if (!hasShoulder(map, x, y)) continue; // only pull onto a kerb/shoulder, never a mid-road lane
         if (occupied.has(map.idx(x, y))) continue;
         return { x, y };
       }

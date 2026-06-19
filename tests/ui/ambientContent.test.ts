@@ -370,6 +370,26 @@ describe('agent substrate invariants (Maddy: cars park on freeways, peds cross w
     expect(nearestWalkable(isolated, 2, 2)).toBeNull();
   });
 
+  it('a curb-parking car pulls onto a SHOULDER, never the middle of a wide road (Maddy: (51,100))', () => {
+    const m = new GameMap(16, 16);
+    for (let y = 3; y <= 11; y++) for (let x = 3; x <= 11; x++) m.built[m.idx(x, y)] = BuiltKind.RoadStreet; // a wide road slab, no lots
+    const state = createAmbientState(); // no parking lots → must curb-park on a shoulder
+    const car = { x: 7, y: 7, dir: 1, tx: 7, ty: 7, owned: true, parked: false }; // ended deep in the slab
+    state.cars.push(car);
+    parkOwnedCarSomewhere(state, m, car);
+    expect(car.parked).toBe(true);
+    // The parked tile must touch a NON-road tile (a kerb to pull onto) — never buried in the road.
+    const px = Math.round(car.x);
+    const py = Math.round(car.y);
+    let hasShoulder = false;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = px + dx;
+      const ny = py + dy;
+      if (!m.inBounds(nx, ny) || m.built[m.idx(nx, ny)] === BuiltKind.None) hasShoulder = true;
+    }
+    expect(hasShoulder).toBe(true);
+  });
+
   it('parkOwnedCarSomewhere never leaves a car resting on a freeway', () => {
     const m = new GameMap(16, 8);
     for (let x = 0; x < 16; x++) m.built[m.idx(x, 4)] = BuiltKind.RoadHighway; // a freeway strip
