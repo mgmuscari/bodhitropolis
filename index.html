@@ -511,6 +511,63 @@
         line-height: 1.4;
         margin-top: 0.3rem;
       }
+      /* Always-visible controls hint (bottom-left) — the discoverable entry to the help panel. */
+      .controls-hint {
+        position: fixed;
+        left: 0.6rem;
+        bottom: 0.6rem;
+        z-index: 9;
+        padding: 0.3rem 0.6rem;
+        background: rgba(28, 26, 42, 0.92);
+        border: 2px solid #969e4a;
+        border-radius: 5px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        font-family: "Courier New", ui-monospace, monospace;
+        font-size: 0.74rem;
+        letter-spacing: 0.03em;
+        color: #c9d07a;
+        cursor: pointer;
+      }
+      .controls-hint:hover {
+        border-color: #c9d07a;
+        color: #e6ea9a;
+      }
+      .help-panel {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 11;
+        min-width: 16rem;
+        padding: 0.7rem 1.1rem 0.9rem;
+        background: rgba(28, 26, 42, 0.97);
+        border: 2px solid #969e4a;
+        border-radius: 6px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+        font-family: "Courier New", ui-monospace, monospace;
+        font-size: 0.8rem;
+        color: #d8d4c2;
+      }
+      .help-panel__close {
+        position: absolute;
+        right: 0.5rem;
+        top: 0.45rem;
+        cursor: pointer;
+        color: #c9d07a;
+        font-weight: bold;
+      }
+      .help-panel__title {
+        font-weight: bold;
+        color: #c9d07a;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: 0.74rem;
+        margin-bottom: 0.5rem;
+      }
+      .help-panel__body {
+        white-space: pre;
+        line-height: 1.6;
+      }
     </style>
   </head>
   <body>

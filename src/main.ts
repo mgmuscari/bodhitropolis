@@ -23,6 +23,7 @@ import { Renderer } from './ui/renderer';
 import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, setPlantEmitters, seedDecay, liveInspectLine, applyLiveCaps } from './ui/ambientContent';
 import { loadSettings, saveSettings } from './ui/settingsStore';
 import { mountSettingsPanel } from './ui/settingsPanel';
+import { mountHelpPanel } from './ui/helpPanel';
 import { clampSettings, type LiveCaps, type WorldSettings } from './ui/settings';
 import { residentialCensus } from './citizens/census';
 import { parkingLots, parkingStalls } from './ui/parkingContent';
@@ -415,6 +416,10 @@ export function main(): void {
     },
   });
 
+  // Always-visible controls hint (bottom-left) → opens a full keybinding reference. Makes every key
+  // (Settings included) discoverable; toggled by the hint, the ✕, or '?'/'h'.
+  const helpPanel = mountHelpPanel(document.body);
+
   // Composite heatmap overlay: a SINGLE active overlay (eco or civic, never both),
   // cycled by E (off → soil → flora → fauna → biodiversity → off) and C (off →
   // belonging → voice → trust → off). Pressing the other key replaces the active
@@ -664,6 +669,14 @@ export function main(): void {
     if (event.key !== ',') return;
     event.preventDefault();
     settingsPanel.toggle();
+  });
+
+  // '?' / 'h' toggles the controls reference (same opening-overlay gate).
+  window.addEventListener('keydown', (event) => {
+    if (overlayActive) return;
+    if (event.key !== '?' && event.key !== 'h' && event.key !== 'H') return;
+    event.preventDefault();
+    helpPanel.toggle();
   });
 
   const previewAt = (tx: number, ty: number): void => {
