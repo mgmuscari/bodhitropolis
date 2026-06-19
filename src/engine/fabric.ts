@@ -797,13 +797,28 @@ export function rampMarkingMask(map: GameMap, x: number, y: number): number {
   if (map.getBuilt(x, y) !== BuiltKind.RoadRamp) return 0;
   const hwy = (px: number, py: number): boolean =>
     map.inBounds(px, py) && map.getBuilt(px, py) === BuiltKind.RoadHighway;
-  // The freeway axis is the one with HIGHWAY neighbours (only — a crossing's other ramp tiles are
-  // PERPENDICULAR to the freeway, so counting ramps would re-introduce the cross at a 3-wide
-  // crossing). Draw a straight line clean THROUGH along that axis.
-  const vMag = (hwy(x, y - 1) ? 1 : 0) + (hwy(x, y + 1) ? 1 : 0);
-  const hMag = (hwy(x - 1, y) ? 1 : 0) + (hwy(x + 1, y) ? 1 : 0);
-  if (vMag === 0 && hMag === 0) return 0; // a ramp not flanking any freeway → no through-line
-  return vMag >= hMag ? N_BIT | S_BIT : E_BIT | W_BIT;
+  // A ramp must touch the freeway; if it flanks no highway at all, no through-line.
+  if (!hwy(x - 1, y) && !hwy(x + 1, y) && !hwy(x, y - 1) && !hwy(x, y + 1)) return 0;
+  // The freeway travels along the LONGER run of BAND tiles (highway OR ramp), NOT simply "where the
+  // highway neighbours are" — for a ramp in the MIDDLE of the corridor the highways are the
+  // perpendicular FLANK lanes, so keying on them drew the line orthogonal to travel (Maddy
+  // 2026-06-19). Draw the dashed line straight along the longer band axis.
+  const band = (px: number, py: number): boolean =>
+    map.inBounds(px, py) &&
+    (map.getBuilt(px, py) === BuiltKind.RoadHighway || map.getBuilt(px, py) === BuiltKind.RoadRamp);
+  let wl = 0;
+  while (band(x - wl - 1, y)) wl++;
+  let wr = 0;
+  while (band(x + wr + 1, y)) wr++;
+  let nu = 0;
+  while (band(x, y - nu - 1)) nu++;
+  let nd = 0;
+  while (band(x, y + nd + 1)) nd++;
+  const ew = wl + wr + 1;
+  const ns = nu + nd + 1;
+  if (ew > ns) return E_BIT | W_BIT;
+  if (ns > ew) return N_BIT | S_BIT;
+  return 0; // a square junction of band tiles — ambiguous, no through-line
 }
 
 /** Carved freeway corridor width (centre spine + 2 flanks — see carveCorridor in worldgen/moses). */

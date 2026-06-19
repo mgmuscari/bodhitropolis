@@ -1143,6 +1143,26 @@ describe('rampMarkingMask (straight-through dashed line at freeway ramps)', () =
     expect(rampMarkingMask(map, 3, 2)).toBe(N | S);
   });
 
+  // Regression for the orthogonal markings (Maddy 2026-06-19): a ramp in the MIDDLE of a HORIZONTAL
+  // freeway has highways N & S (the flank lanes), but the freeway TRAVELS E-W — keying on the highway
+  // neighbours drew the line orthogonal. The longer BAND run (highway+ramp) gives the right axis.
+  it('a ramp mid-HORIZONTAL-freeway draws E-W (along travel), not orthogonal N-S', () => {
+    const map = new GameMap(9, 9);
+    for (let x = 0; x < 9; x++) {
+      map.setBuilt(x, 2, BuiltKind.RoadHighway); // 3-wide horizontal freeway rows 2,3,4
+      map.setBuilt(x, 3, BuiltKind.RoadHighway);
+      map.setBuilt(x, 4, BuiltKind.RoadHighway);
+    }
+    map.setBuilt(3, 2, BuiltKind.RoadRamp); // a vertical street crosses at col 3 → ramps in the band
+    map.setBuilt(3, 3, BuiltKind.RoadRamp);
+    map.setBuilt(3, 4, BuiltKind.RoadRamp);
+    map.setBuilt(3, 1, BuiltKind.RoadStreet);
+    map.setBuilt(3, 5, BuiltKind.RoadStreet);
+    expect(rampMarkingMask(map, 3, 3)).toBe(E | W); // band runs E-W (9) >> N-S (3) → along travel
+    expect(rampMarkingMask(map, 3, 2)).toBe(E | W);
+    expect(rampMarkingMask(map, 3, 4)).toBe(E | W);
+  });
+
   it('returns 0 for a ramp that flanks no freeway (no through-line)', () => {
     const map = new GameMap(5, 5);
     map.setBuilt(2, 2, BuiltKind.RoadRamp);
