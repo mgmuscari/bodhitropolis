@@ -44,6 +44,7 @@ import {
   occupancySignal,
   occupancyStep,
   spawnTargetFor,
+  FUEL_TANK,
   stepOccupancy,
   liveInspectLine,
   accumulateWaterRunoff,
@@ -1454,9 +1455,10 @@ describe('population: occupancy step (bounded drift, never empties)', () => {
 });
 
 describe('population: spawn target tracks live occupancy', () => {
-  it('caps (flat) for a large population', () => {
-    expect(spawnTargetFor(100000)).toBe(spawnTargetFor(200000));
-    expect(spawnTargetFor(100000)).toBeGreaterThan(0);
+  it('is a THIRD of the residents — scales with the city, no flat ceiling (Maddy: sum/3)', () => {
+    expect(spawnTargetFor(3000)).toBe(1000); // a third are out
+    expect(spawnTargetFor(900)).toBe(300);
+    expect(spawnTargetFor(200000)).toBeGreaterThan(spawnTargetFor(100000)); // keeps scaling, NOT flat-capped
   });
   it('scales down as the population falls, and zero when nobody lives here', () => {
     expect(spawnTargetFor(60)).toBeLessThan(spawnTargetFor(100000));
@@ -1464,6 +1466,12 @@ describe('population: spawn target tracks live occupancy', () => {
   });
   it('is monotonic non-decreasing', () => {
     expect(spawnTargetFor(300)).toBeGreaterThanOrEqual(spawnTargetFor(120));
+  });
+});
+
+describe('traveler fuel budget (Maddy: extend it 250% so travelers reach farther)', () => {
+  it('the full tank is extended ~3.5x (a traveler covers a much longer round before burning out)', () => {
+    expect(FUEL_TANK).toBeGreaterThanOrEqual(2100); // was 600 → +250% = 3.5x
   });
 });
 
