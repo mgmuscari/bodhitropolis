@@ -149,6 +149,31 @@ Diffusion supplies the *surface* ingredients (asphalt ✓, a concrete/sidewalk t
 strip); the border-mask painter composites them at the edges — same split as roads (texture from
 diffusion, structure procedural). This replaces "field of asphalt" with legible streetscape.
 
+## 5.6 Procedural-tile → controlnet pipeline (Maddy, 2026-06-19) — the tileset GENERATOR
+
+The strongest art-generation path: **render each procedural atlas tile to PNG, then use it as the
+structural controlnet for diffusion.** The procedural tile already encodes the EXACT structure that
+atlas key requires — a `road-1-5` has the right connection geometry, a `b-16-c-0` has the centre-roof
+footprint, terrain bands have their shading. Conditioning diffusion on it yields a *styled* tile that
+is guaranteed key-aligned → a drop-in replacement, batchable over the whole `renderKeyspace()`. It
+marries the two layers correctly: procedural owns STRUCTURE (+ game semantics), diffusion owns STYLE.
+All offline/build-time → committed PNGs, determinism intact (matches "no dynamic diffusion in the
+browser").
+
+Two pieces to build:
+1. **Export harness** — a dev mode that walks `proceduralAtlas()` / `renderKeyspace()`, upscales each
+   16×16 tile (nearest, ×N) and saves a PNG per key. (Tiles are browser canvases → a `?exportTiles`
+   route that `toBlob`s each, or a small Playwright dump against the dev server.)
+2. **Structural conditioning in ComfyUI** — true **controlnet** (canny / lineart / depth) needs a
+   model installed; the remote has **none** (`controlnet: EMPTY`). SDXL has mature controlnets and
+   `sd_xl_base` + `pixel-art-xl` LoRA is already installed → the controlnet path is SDXL-based.
+   Z-Image has no controlnet. Cheaper first cut needing NO install: **img2img** on the upscaled
+   procedural tile (denoise ~0.5) — looser structural lock but proves the loop. Escalate to an SDXL
+   canny/lineart controlnet if img2img drifts off the key's structure.
+
+Prototype-first: build the export harness, run a few tiles through img2img, eyeball the structural
+lock; install an SDXL controlnet only if needed.
+
 ## 6. Open work / decisions (for Maddy)
 
 1. **Variety-pick seam (not yet built)** — multi-version residential needs the renderer to pick
