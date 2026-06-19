@@ -43,6 +43,8 @@ import { powerTint, powerLegendLine, powerLegend } from './ui/powerOverlayConten
 import type { OverlayLegend } from './ui/overlayLegend';
 import { pulseLine } from './ui/pulseContent';
 import { mountPulseDock } from './ui/pulseDock';
+import { sampleRestoration, restorationLines, type RestorationSample } from './ui/restorationContent';
+import { mountRestorationPanel } from './ui/restorationPanel';
 import { isRepairTool } from './ui/repairTools';
 import { mountOpening, type OpeningContent } from './ui/opening';
 import { TECH_TREE } from './tech/tree';
@@ -369,6 +371,12 @@ export function main(): void {
     wellbeing({ parcels: world.parcels, ecoMeans: deps.ecoMeans, civicMeans: deps.civicMeans });
   pulseDock.set(pulseLine(wellbeingNow(), null)); // initial: flat, no prior cadence
 
+  // Restoration readout panel (G): "is my renewal helping?" — surveys the live metrics (land value,
+  // population, building health, ecology, air/ground/water pollution) with improvement-oriented trend
+  // arrows. Hidden by default; sampled on the civic cadence vs the previous sample only while shown.
+  const restorationPanel = mountRestorationPanel(document.body);
+  let prevRestoration: RestorationSample | null = null;
+
   // Composite heatmap overlay: a SINGLE active overlay (eco or civic, never both),
   // cycled by E (off → soil → flora → fauna → biodiversity → off) and C (off →
   // belonging → voice → trust → off). Pressing the other key replaces the active
@@ -599,6 +607,19 @@ export function main(): void {
     setAmbient(!ambientOn);
   });
 
+  // G toggles the restoration readout panel (gated like L). On open, show a fresh sample at once
+  // (flat — no spurious arrows from a stale prior); the civic cadence then trends it.
+  window.addEventListener('keydown', (event) => {
+    if (overlayActive) return;
+    if (event.key !== 'g' && event.key !== 'G') return;
+    event.preventDefault();
+    if (restorationPanel.toggle()) {
+      const sample = sampleRestoration(ambientState, world.map);
+      restorationPanel.set(restorationLines(sample, null));
+      prevRestoration = sample;
+    }
+  });
+
   const previewAt = (tx: number, ty: number): void => {
     if (selectedToolId === null) return;
     const def = toolDef(selectedToolId);
@@ -751,6 +772,13 @@ export function main(): void {
       const wb = wellbeingNow();
       pulseDock.set(pulseLine(wb, prevWellbeing));
       prevWellbeing = wb;
+      // Restoration readout: sample the live metrics on this cadence and trend vs the prior sample
+      // (only while the panel is shown — no work when hidden).
+      if (restorationPanel.visible()) {
+        const sample = sampleRestoration(ambientState, world.map);
+        restorationPanel.set(restorationLines(sample, prevRestoration));
+        prevRestoration = sample;
+      }
       // Revival/decay seam: sample the LIVE occupancy into the hashed stock — thriving
       // homes heal + densify (R1→R2→R3), struggling ones crumble toward a derelict
       // ruin (reversibly). Runs HERE on the slow civic cadence (sim side), never in
