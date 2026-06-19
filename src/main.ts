@@ -43,6 +43,7 @@ import { powerTint, powerLegendLine, powerLegend } from './ui/powerOverlayConten
 import type { OverlayLegend } from './ui/overlayLegend';
 import { pulseLine } from './ui/pulseContent';
 import { mountPulseDock } from './ui/pulseDock';
+import { sampleUnhoused, unhousedSuffix } from './ui/unhousedContent';
 import { isRepairTool } from './ui/repairTools';
 import { mountOpening, type OpeningContent } from './ui/opening';
 import { TECH_TREE } from './tech/tree';
@@ -365,9 +366,18 @@ export function main(): void {
   // only to avoid per-tick flicker. The trend compares to the previous cadence.
   const pulseDock = mountPulseDock(document.body);
   let prevWellbeing: number | null = null;
+  // Unhoused residents (first cut): displaced-population count appended to the pulse line, trended on
+  // the civic cadence. Loop-coupled — decline raises it, healing/new housing lowers it.
+  let prevUnhoused: number | null = null;
+  const pulseText = (wb: number): string => {
+    const u = sampleUnhoused(ambientState, world.map.width);
+    const line = `${pulseLine(wb, prevWellbeing)}  ·  ${unhousedSuffix(u.unhoused, prevUnhoused)}`;
+    prevUnhoused = u.unhoused;
+    return line;
+  };
   const wellbeingNow = (): number =>
     wellbeing({ parcels: world.parcels, ecoMeans: deps.ecoMeans, civicMeans: deps.civicMeans });
-  pulseDock.set(pulseLine(wellbeingNow(), null)); // initial: flat, no prior cadence
+  pulseDock.set(pulseText(wellbeingNow())); // initial: flat, no prior cadence
 
   // Composite heatmap overlay: a SINGLE active overlay (eco or civic, never both),
   // cycled by E (off → soil → flora → fauna → biodiversity → off) and C (off →
@@ -749,7 +759,7 @@ export function main(): void {
         markDirty(); // civic overlay re-push changes the base tint → invalidate base
       }
       const wb = wellbeingNow();
-      pulseDock.set(pulseLine(wb, prevWellbeing));
+      pulseDock.set(pulseText(wb));
       prevWellbeing = wb;
       // Revival/decay seam: sample the LIVE occupancy into the hashed stock — thriving
       // homes heal + densify (R1→R2→R3), struggling ones crumble toward a derelict
