@@ -40,6 +40,10 @@ export interface BlightReport {
   abandoned: number | null;
   /** era-5 "C craters"; NOT the alive ParkingLot count (era 2 places parking). */
   craters: number | null;
+  /** organic-growth "+M parcels" — the post-disinvestment fringe accretion (a NEW layer added after
+   *  era 5), so the store<->chronicle identity is preEra5Standing - abandoned + craters + organicAdded.
+   *  Null if no organic-growth line. */
+  organicAdded: number | null;
   conditionMean: number;
   conditionMedian: number;
   /** alive parcels with condition < 64, as a share of alive parcels. */
@@ -80,6 +84,9 @@ const ERA5_RE = /era5: disinvestment.*?(\d+) abandoned, (\d+) craters \(of (\d+)
 // era-3 line: `era3: rails removed N (peak M)` (moses.ts:699/760). Groups:
 // 1=removed, 2=peak.
 const ERA3_RAILS_RE = /era3: rails removed (\d+) \(peak (\d+)\)/;
+// organic-growth line: `organic growth: N clusters from transport termini, +M parcels`. Group
+// 1=parcels added (the post-disinvestment fringe accretion).
+const ORGANIC_RE = /organic growth: \d+ clusters from transport termini, \+(\d+) parcels/;
 
 // Cohort thresholds (mirrors parcelHighwayDist in moses.test.ts:526-548).
 const CORE_MAX = 8;
@@ -156,6 +163,8 @@ export function buildReport(world: ReportableWorld): BlightReport {
   const abandoned = era5 ? Number(era5[1]) : null;
   const craters = era5 ? Number(era5[2]) : null;
   const preEra5Standing = era5 ? Number(era5[3]) : null;
+  const organicMatch = firstMatch(log, ORGANIC_RE);
+  const organicAdded = organicMatch ? Number(organicMatch[1]) : null;
 
   const era3 = firstMatch(log, ERA3_RAILS_RE);
   const railLost = era3 ? { removed: Number(era3[1]), peak: Number(era3[2]) } : null;
@@ -205,11 +214,16 @@ export function buildReport(world: ReportableWorld): BlightReport {
   }
   const redlinedShare = landTiles > 0 ? redlinedLand / landTiles : 0;
 
-  // --- Core/periphery cohorts over the FULL store (alive + tombstoned) ---
+  // --- Core/periphery cohorts over the HISTORICAL store (alive + tombstoned) ---
+  // The gradient measures the era-5 disinvestment WOUND, so it excludes the organic-growth layer:
+  // those parcels are appended AFTER era 5 (the last `organicAdded` indices) and are pristine + sited
+  // next to freeway termini, so counting them would dump healthy parcels into the highway-distance
+  // "core" cohort and invert the gradient. Excluding them keeps the report about the inherited harm.
+  const historicalTotal = parcelsTotal - (organicAdded ?? 0);
   const highwayField = distanceField(map, (i) => map.built[i] === BuiltKind.RoadHighway);
   const core: number[] = [];
   const periphery: number[] = [];
-  for (let i = 0; i < parcelsTotal; i++) {
+  for (let i = 0; i < historicalTotal; i++) {
     const d = parcelHighwayDistance(map, parcels, i, highwayField);
     if (d <= CORE_MAX) core.push(i);
     else if (d >= PERIPHERY_MIN) periphery.push(i);
@@ -223,6 +237,7 @@ export function buildReport(world: ReportableWorld): BlightReport {
     preEra5Standing,
     abandoned,
     craters,
+    organicAdded,
     conditionMean,
     conditionMedian,
     shareDerelict,

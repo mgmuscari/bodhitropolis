@@ -15,6 +15,7 @@ const FOUNDED_REPORT: BlightReport = {
   preEra5Standing: 469,
   abandoned: 57,
   craters: 9,
+  organicAdded: 24,
   conditionMean: 137.4,
   conditionMedian: 150,
   shareDerelict: 0.2,
@@ -34,6 +35,7 @@ const SPARSE_REPORT: BlightReport = {
   preEra5Standing: null,
   abandoned: null,
   craters: null,
+  organicAdded: null,
   railLost: null,
 };
 
@@ -55,6 +57,7 @@ const ALL_WATER_REPORT: BlightReport = {
   preEra5Standing: null,
   abandoned: null,
   craters: null,
+  organicAdded: null,
   conditionMean: 0,
   conditionMedian: 0,
   shareDerelict: 0,
