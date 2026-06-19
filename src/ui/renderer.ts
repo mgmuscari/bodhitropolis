@@ -9,7 +9,7 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import {
@@ -750,6 +750,20 @@ export class Renderer {
               if (div & S) { ctx.fillStyle = concrete; ctx.fillRect(dx, dy + ts - bw, ts, bw); ctx.fillStyle = ridge; ctx.fillRect(dx, dy + ts - bw, ts, 1); }
               if (div & W) { ctx.fillStyle = concrete; ctx.fillRect(dx, dy, bw, ts); ctx.fillStyle = ridge; ctx.fillRect(dx + bw - 1, dy, 1, ts); }
               if (div & E) { ctx.fillStyle = concrete; ctx.fillRect(dx + ts - bw, dy, bw, ts); ctx.fillStyle = ridge; ctx.fillRect(dx + ts - bw, dy, 1, ts); }
+            }
+
+            // CURB / sidewalk / gutter: on each edge where a surface road meets non-road (a parcel
+            // or open land), a light sidewalk strip with a dark gutter line on its road-facing side.
+            // Turns the "field of asphalt" into a street with edges. Per-tile (neighbour-dependent).
+            const curb = roadCurbMask(map, tx, ty);
+            if (curb !== 0) {
+              const sw = Math.max(1, Math.round(ts * 0.16));
+              const walk = '#b0aa9c'; // warm concrete sidewalk (distinct from the white barrier)
+              const gutter = '#26221c'; // the gutter channel where it meets the asphalt
+              if (curb & N) { ctx.fillStyle = walk; ctx.fillRect(dx, dy, ts, sw); ctx.fillStyle = gutter; ctx.fillRect(dx, dy + sw - 1, ts, 1); }
+              if (curb & S) { ctx.fillStyle = walk; ctx.fillRect(dx, dy + ts - sw, ts, sw); ctx.fillStyle = gutter; ctx.fillRect(dx, dy + ts - sw, ts, 1); }
+              if (curb & W) { ctx.fillStyle = walk; ctx.fillRect(dx, dy, sw, ts); ctx.fillStyle = gutter; ctx.fillRect(dx + sw - 1, dy, 1, ts); }
+              if (curb & E) { ctx.fillStyle = walk; ctx.fillRect(dx + ts - sw, dy, sw, ts); ctx.fillStyle = gutter; ctx.fillRect(dx + ts - sw, dy, 1, ts); }
             }
           }
 

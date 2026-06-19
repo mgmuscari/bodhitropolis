@@ -758,6 +758,27 @@ export function roadDividerMask(map: GameMap, x: number, y: number, minRun = 1):
   return out;
 }
 
+/**
+ * Curb mask for the road tile at (x, y): bit N=1/E=2/S=4/W=8 set on each 4-neighbour edge where a
+ * SURFACE road meets a NON-road tile (parcel / building / open land / water) — i.e. where a curb +
+ * gutter + sidewalk belongs. The complement of the connection: those edges merge, these meet the
+ * city. Excludes freeways (they get a limited-access barrier via {@link roadDividerMask}, not a
+ * sidewalk) and any edge facing another road. Render-only. (Future: tech could add edge props —
+ * street trees, bike racks — on the same curb edges.)
+ */
+export function roadCurbMask(map: GameMap, x: number, y: number): number {
+  const self = map.getBuilt(x, y);
+  if (transportCategory(self) !== 1 || self === BuiltKind.RoadHighway) return 0;
+  let mask = 0;
+  for (const [dx, dy, bit] of MASK_DIRS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    if (!map.inBounds(nx, ny)) continue; // map edge: no curb
+    if (transportCategory(map.getBuilt(nx, ny)) !== 1) mask |= bit; // non-road neighbour → curb
+  }
+  return mask;
+}
+
 /** The elevated deck (overpass) kind at (x, y), or 0 (none). Reads the second `deck` layer. */
 export function overpassAt(map: GameMap, x: number, y: number): number {
   return map.inBounds(x, y) ? map.deck[map.idx(x, y)]! : 0;

@@ -16,6 +16,7 @@ import {
   transportCategory,
   roadDividerMask,
   isLimitedAccessBoundary,
+  roadCurbMask,
   parcelTouchesRoad,
   demolishParcel,
   demolishTransportAt,
@@ -954,6 +955,41 @@ describe('roadDividerMask', () => {
     map.setBuilt(4, 3, BuiltKind.RoadAvenue);
     expect(roadDividerMask(map, 3, 2, 3)).toBe(0);
     expect(roadDividerMask(map, 3, 3, 3)).toBe(0);
+  });
+});
+
+describe('roadCurbMask (curb/sidewalk where a surface road meets non-road)', () => {
+  it('is 0 on a non-road tile', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.HouseSingle);
+    expect(roadCurbMask(map, 2, 2)).toBe(0);
+  });
+
+  it('is 0 on a freeway (it gets a barrier, not a sidewalk)', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.RoadHighway);
+    map.setBuilt(2, 1, BuiltKind.None); // open land north
+    expect(roadCurbMask(map, 2, 2)).toBe(0);
+  });
+
+  it('marks edges where a street faces non-road, not edges facing another road', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.RoadStreet);
+    map.setBuilt(2, 1, BuiltKind.RoadStreet); // north: road — connects, no curb
+    map.setBuilt(3, 2, BuiltKind.HouseSingle); // east: building — curb
+    map.setBuilt(2, 3, BuiltKind.None); // south: open land — curb
+    // west neighbour stays empty land — curb
+    expect(roadCurbMask(map, 2, 2)).toBe(E | S | W);
+  });
+
+  it('does not curb against another road, only against land (roads on 3 sides, land east)', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.RoadAvenue);
+    map.setBuilt(2, 1, BuiltKind.RoadStreet); // north road — no curb
+    map.setBuilt(2, 3, BuiltKind.RoadStreet); // south road — no curb
+    map.setBuilt(1, 2, BuiltKind.RoadStreet); // west road — no curb
+    map.setBuilt(3, 2, BuiltKind.None); // east land — curb
+    expect(roadCurbMask(map, 2, 2)).toBe(E);
   });
 });
 
