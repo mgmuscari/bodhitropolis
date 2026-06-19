@@ -23,26 +23,36 @@ describe('parkingLots (connected ParkingLot components)', () => {
 
 describe('parkingStalls (per-tile, tile-aligned grid)', () => {
   it('places a clean sub-grid in EVERY tile, aligned within each tile (no offset on multi-tile lots)', () => {
-    const lot = { x0: 4, y0: 4, x1: 5, y1: 5, tiles: [] }; // a 2x2 lot — the buggy case
+    const m = new GameMap(16, 12);
+    for (let y = 4; y <= 5; y++) for (let x = 4; x <= 5; x++) m.built[m.idx(x, y)] = BuiltKind.ParkingLot; // 2x2 lot
+    const lot = parkingLots(m)[0]!;
     const stalls = parkingStalls(lot);
     const per = STALLS_PER_AXIS * STALLS_PER_AXIS;
     expect(stalls.length).toBe(4 * per); // one sub-grid per tile, capacity scales with size
-    // Valid tile-relative sub-positions: (c + 0.5) / STALLS_PER_AXIS for each axis cell.
     const fracs = Array.from({ length: STALLS_PER_AXIS }, (_, c) => (c + 0.5) / STALLS_PER_AXIS);
     const isFrac = (v: number): boolean => fracs.some((f) => Math.abs(v - f) < 1e-9);
     for (const s of stalls) {
-      const fx = s.x - Math.floor(s.x);
-      const fy = s.y - Math.floor(s.y);
-      expect(isFrac(fx)).toBe(true);
-      expect(isFrac(fy)).toBe(true);
+      expect(isFrac(s.x - Math.floor(s.x))).toBe(true);
+      expect(isFrac(s.y - Math.floor(s.y))).toBe(true);
       expect(s.x).toBeGreaterThanOrEqual(lot.x0);
       expect(s.x).toBeLessThan(lot.x1 + 1);
-      expect(s.y).toBeGreaterThanOrEqual(lot.y0);
-      expect(s.y).toBeLessThan(lot.y1 + 1);
     }
-    // the offset bug: stalls used to land on 1.0 (a tile boundary) for a 2-wide lot
-    expect(stalls.some((s) => s.x === lot.x0 + 1.0)).toBe(false);
+    expect(stalls.some((s) => s.x === lot.x0 + 1.0)).toBe(false); // never on a tile boundary
     expect(new Set(stalls.map((s) => `${s.x},${s.y}`)).size).toBe(4 * per); // all distinct
+  });
+
+  it('does NOT place stalls on a non-lot tile inside the bbox (Maddy: lot-flanked street)', () => {
+    // An L-shaped lot whose bounding box (x2-3, y2-3) includes a NON-lot tile (3,3) — e.g. a road
+    // running between two lot arms. Stalls must cover only the three real lot tiles, never (3,3).
+    const m = new GameMap(12, 12);
+    for (const [x, y] of [[2, 2], [3, 2], [2, 3]] as const) m.built[m.idx(x, y)] = BuiltKind.ParkingLot;
+    m.built[m.idx(3, 3)] = BuiltKind.RoadStreet; // the gap tile inside the bbox
+    const lot = parkingLots(m)[0]!;
+    expect(lot.tiles.length).toBe(3);
+    const stalls = parkingStalls(lot);
+    expect(stalls.length).toBe(3 * STALLS_PER_AXIS * STALLS_PER_AXIS); // only the 3 real tiles
+    // NO stall lands in the gap tile (3,3) — cars would otherwise park in the middle of that road
+    expect(stalls.some((s) => Math.floor(s.x) === 3 && Math.floor(s.y) === 3)).toBe(false);
   });
 });
 

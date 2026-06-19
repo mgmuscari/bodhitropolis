@@ -16,6 +16,8 @@ export interface Lot {
   y0: number;
   x1: number;
   y1: number;
+  /** Map width, so `tiles` (map indices) can be decomposed to (x,y). */
+  w: number;
   tiles: number[];
 }
 
@@ -52,24 +54,26 @@ export function parkingLots(map: GameMap): Lot[] {
           }
         }
       }
-      lots.push({ x0, y0, x1, y1, tiles });
+      lots.push({ x0, y0, x1, y1, w: map.width, tiles });
     }
   }
   return lots;
 }
 
 /** Stall centres in WORLD tile coordinates (pass straight to camera.worldToScreen): a
- *  STALLS_PER_AXIS×STALLS_PER_AXIS sub-grid inside EVERY tile of the lot's bounding box,
- *  each stall at the same fractional offset within its tile so cars pack cleanly and
- *  tile-aligned regardless of lot size. Row-major over tiles, then over each tile's grid. */
+ *  STALLS_PER_AXIS×STALLS_PER_AXIS sub-grid inside each ACTUAL lot tile (not the bounding box — a
+ *  bbox over an L-shaped / split lot spills onto non-lot tiles like a road running through it, which
+ *  would put cars mid-street: Maddy "lot bounding box should not spill into non-lot tiles"). Each
+ *  stall sits at the same fractional offset within its tile so cars pack cleanly and tile-aligned
+ *  regardless of lot shape. Deterministic over the lot's tile list. */
 export function parkingStalls(lot: Lot): Array<{ x: number; y: number }> {
   const out: Array<{ x: number; y: number }> = [];
-  for (let ty = lot.y0; ty <= lot.y1; ty++) {
-    for (let tx = lot.x0; tx <= lot.x1; tx++) {
-      for (let r = 0; r < STALLS_PER_AXIS; r++) {
-        for (let c = 0; c < STALLS_PER_AXIS; c++) {
-          out.push({ x: tx + (c + 0.5) / STALLS_PER_AXIS, y: ty + (r + 0.5) / STALLS_PER_AXIS });
-        }
+  for (const idx of lot.tiles) {
+    const tx = idx % lot.w;
+    const ty = (idx - tx) / lot.w;
+    for (let r = 0; r < STALLS_PER_AXIS; r++) {
+      for (let c = 0; c < STALLS_PER_AXIS; c++) {
+        out.push({ x: tx + (c + 0.5) / STALLS_PER_AXIS, y: ty + (r + 0.5) / STALLS_PER_AXIS });
       }
     }
   }
