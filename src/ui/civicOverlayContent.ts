@@ -19,7 +19,7 @@ export type CivicOverlayView = 'belonging' | 'voice' | 'trust';
 export const CIVIC_VIEWS: readonly CivicOverlayView[] = ['belonging', 'voice', 'trust'];
 
 /** Fixed translucency for every civic overlay tint (matches the ecology overlay). */
-export const CIVIC_OVERLAY_ALPHA = 0.55;
+export const CIVIC_OVERLAY_ALPHA = 0.92;
 
 type RGB = readonly [number, number, number];
 

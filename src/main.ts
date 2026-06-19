@@ -448,6 +448,7 @@ export function main(): void {
       // river/ocean red reads wrong, so land only — like the eco overlays.
       const redline = world.map.redline;
       renderer.setOverlay({
+        dimBase: true,
         tint: (i) => (overlayWater[i] !== Water.None ? null : redlineOverlayTint(redline[i]!)),
       });
       return;
@@ -462,6 +463,7 @@ export function main(): void {
       }
       const t2n = deps.partition.tileToNeighborhood;
       renderer.setOverlay({
+        dimBase: true,
         tint: (i) => {
           const id = t2n[i]!;
           return id === 0 ? null : civicOverlayTint(view, values[id - 1]!);
@@ -473,6 +475,7 @@ export function main(): void {
     if (view === 'biodiversity') {
       const field = biodiversityField(world.map);
       renderer.setOverlay({
+        dimBase: true,
         tint: (i) => (overlayWater[i] !== Water.None ? null : overlayTint('biodiversity', field[i]!)),
       });
       return;
@@ -482,6 +485,7 @@ export function main(): void {
       // refreshes as the base redraws on the eco cadence. Clean where the player has calmed traffic.
       const poll = ambientState.pollution;
       renderer.setOverlay({
+        dimBase: true,
         tint: (i) =>
           overlayWater[i] !== Water.None ? null : overlayTint('airPollution', Math.min(255, poll.get(i) ?? 0)),
       });
@@ -492,6 +496,7 @@ export function main(): void {
       // poison the ground; clean land elsewhere. Reparable: it clears as the player heals/rewilds.
       const gp = ambientState.groundPollution;
       renderer.setOverlay({
+        dimBase: true,
         tint: (i) =>
           overlayWater[i] !== Water.None ? null : overlayTint('groundPollution', Math.min(255, gp.get(i) ?? 0)),
       });
@@ -502,6 +507,7 @@ export function main(): void {
       // blue where the water is healthy, murky where contamination collects.
       const wp = ambientState.waterPollution;
       renderer.setOverlay({
+        dimBase: true,
         tint: (i) =>
           overlayWater[i] === Water.None ? null : overlayTint('waterPollution', Math.min(255, wp.get(i) ?? 0)),
       });
@@ -514,6 +520,7 @@ export function main(): void {
           ? world.map.floraVitality
           : world.map.faunaPresence;
     renderer.setOverlay({
+      dimBase: true,
       tint: (i) => (overlayWater[i] !== Water.None ? null : overlayTint(view, layer[i]!)),
     });
   };

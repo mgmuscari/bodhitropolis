@@ -30,7 +30,7 @@ export const OVERLAY_VIEWS: readonly OverlayView[] = [
 export type OverlayState = OverlayView | null;
 
 /** Fixed translucency for every overlay tint (the tint sits under the preview). */
-export const OVERLAY_ALPHA = 0.55;
+export const OVERLAY_ALPHA = 0.92;
 
 /**
  * Cycle the overlay: off → soil → flora → fauna → biodiversity → off. Pure; the

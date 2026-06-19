@@ -21,7 +21,7 @@ export type RedlineOverlayView = 'grade';
 export const REDLINE_VIEWS: readonly RedlineOverlayView[] = ['grade'];
 
 /** Fixed translucency for the redline overlay (matches eco/civic). */
-export const REDLINE_OVERLAY_ALPHA = 0.55;
+export const REDLINE_OVERLAY_ALPHA = 0.92;
 
 type RGBA = [number, number, number, number];
 

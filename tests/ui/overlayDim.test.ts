@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { OVERLAY_DIM } from '../../src/ui/overlayLegend';
 import { POWER_OVERLAY_ALPHA, powerTint } from '../../src/ui/powerOverlayContent';
 import { COVERAGE_OVERLAY_ALPHA, coverageTint } from '../../src/ui/coverageOverlayContent';
+import { CIVIC_OVERLAY_ALPHA } from '../../src/ui/civicOverlayContent';
+import { REDLINE_OVERLAY_ALPHA } from '../../src/ui/redlineOverlayContent';
+import { OVERLAY_ALPHA } from '../../src/ui/ecoOverlayContent';
 
 // The sparse-overlay legibility contract (Maddy: U/V "don't toggle their layer views"). Power and
 // coverage tint only a few buildings; they read as a layer view ONLY if those highlights are strong
@@ -20,5 +23,13 @@ describe('sparse-overlay legibility (dim base + strong highlights)', () => {
     expect(COVERAGE_OVERLAY_ALPHA).toBeGreaterThan(0.8);
     expect(powerTint(true)[3]).toBe(POWER_OVERLAY_ALPHA);
     expect(coverageTint(false)[3]).toBe(COVERAGE_OVERLAY_ALPHA);
+  });
+
+  // Maddy: "fix overlays" — civic/eco/redline washed out at 0.55. They now use the SAME dim-base +
+  // strong-alpha treatment (the dim wiring lives in main.ts; here we pin the strong alpha contract).
+  it('civic, eco, and redline highlights are also strong (legible over the scrim)', () => {
+    expect(CIVIC_OVERLAY_ALPHA).toBeGreaterThan(0.8);
+    expect(OVERLAY_ALPHA).toBeGreaterThan(0.8);
+    expect(REDLINE_OVERLAY_ALPHA).toBeGreaterThan(0.8);
   });
 });
