@@ -170,10 +170,15 @@ layer (non-deterministic).
   always resolved to the first-scanned (upper-left) tile, clustering trips top-left. Fix: a direction-
   neutral `tieHash` breaks ties (deterministic, no rng). Live: destination centroid now tracks the plot
   centroid (no up-left pull). 
-- 🔴 **NE region spawns + immediately despawns travelers** (Maddy 2026-06-19) — travelers in the
-  northeast region spawn then despawn instantly. Likely a substrate/reachability issue there (homes
-  with no walkable neighbour, or an isolated/bridged mass whose citizens can't reach any stop → instant
-  respawn/despawn). Investigate next.
+- ✅ **NE region spawns + immediately despawns travelers** (PR pending) — diagnosed live: that cluster
+  is an ISOLATED landmass (~30-tile road component, walled by water) whose residents can reach no
+  mainland stop, but `nearestOfCategory` picks stops by RADIUS not reachability → citizens committed to
+  mainland stops, failed to route, gave up (`respawnAtHome` clears the itinerary → wander → despawn),
+  and re-spawned → churn. Fix: `stopReachable` (walkPath OR roadPath-to-parking-near-plot); `advance
+  Itinerary` only commits to reachable stops, returns false (→ dropped at spawn, stays home) when none.
+  Live: NE→mainland reachable=false (gated), core→shop=true, citizensOut 652≈occ/3, 61 FPS. NOTE:
+  isolated-exurb residents now stay home (no trips) — connecting those masses for CARS (ramps on the
+  satellite/bridge freeways so `canDrive` lets them on) is a separate worldgen follow-up.
 - 🔴 **Cars arriving at FULL parking should re-route to nearest available parking** (Maddy 2026-06-19) —
   a car that reaches a full lot (no free stall) should re-route to the nearest lot/curb with space,
   rather than curb-dumping / failing where it is. Investigate `tryPark`/`parkOwnedCarSomewhere`/
