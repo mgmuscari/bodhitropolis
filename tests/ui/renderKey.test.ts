@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { builtRenderKey, renderKeyspace, type FootprintPos } from '../../src/ui/renderKey';
+import { builtRenderKey, renderKeyspace, footprintCellKey, type FootprintPos } from '../../src/ui/renderKey';
 import { BuiltKind, isTransportKind } from '../../src/engine/fabric';
 import { ROAD_STYLE_KINDS, BUILDING_STYLE_KINDS, PAINTABLE_PREFIXES } from '../../src/ui/renderer';
 
@@ -175,5 +175,33 @@ describe('renderKeyspace is fully covered by renderer styles', () => {
       const kind = Number(key.split('-')[1]);
       expect(buildingKinds.has(kind), `BUILDING_STYLES missing kind ${kind} for ${key}`).toBe(true);
     }
+  });
+});
+
+describe('footprintCellKey (segmented multi-tile, tileset-only)', () => {
+  it('encodes kind, footprint size, cell col/row, and tier', () => {
+    expect(footprintCellKey(BuiltKind.Apartments, 2, 2, 0, 1, 0)).toBe('b-17-2x2-c0-r1-0');
+    expect(footprintCellKey(BuiltKind.Projects, 2, 3, 1, 2, 1)).toBe('b-18-2x3-c1-r2-1');
+  });
+
+  it('distinguishes cells, sizes, and tiers (no collisions across a footprint)', () => {
+    const seen = new Set<string>();
+    for (const [w, h] of [[2, 2], [2, 3]] as const) {
+      for (let row = 0; row < h; row++) {
+        for (let col = 0; col < w; col++) {
+          for (const tier of [0, 1]) {
+            const k = footprintCellKey(BuiltKind.HouseSingle, w, h, col, row, tier);
+            expect(seen.has(k)).toBe(false);
+            seen.add(k);
+          }
+        }
+      }
+    }
+  });
+
+  it('is NEVER part of renderKeyspace — a procedural atlas can never form it (forces fallback)', () => {
+    const space = new Set(renderKeyspace());
+    expect(space.has(footprintCellKey(BuiltKind.HouseSingle, 1, 1, 0, 0, 0))).toBe(false);
+    expect(space.has(footprintCellKey(BuiltKind.Apartments, 2, 2, 0, 0, 0))).toBe(false);
   });
 });

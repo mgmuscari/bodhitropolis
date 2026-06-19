@@ -23,6 +23,8 @@ import { Renderer } from './ui/renderer';
 import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, setPlantEmitters, seedDecay, liveInspectLine, applyLiveCaps } from './ui/ambientContent';
 import { loadSettings, saveSettings } from './ui/settingsStore';
 import { mountSettingsPanel } from './ui/settingsPanel';
+import { loadTileset } from './ui/tilesetLoader';
+import { PROCEDURAL } from './ui/tileset';
 import { mountHelpPanel } from './ui/helpPanel';
 import { clampSettings, type LiveCaps, type WorldSettings } from './ui/settings';
 import { residentialCensus } from './citizens/census';
@@ -121,6 +123,13 @@ export function main(): void {
 
   const renderer = new Renderer(canvas);
   renderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
+
+  // Tileset skin: the procedural look paints instantly (above); a non-procedural skin loads its
+  // committed PNGs async and hot-swaps in when ready (applyTileset invalidates the cached base →
+  // the next frame repaints). A partial/missing tileset falls back per-key to the painter.
+  if (settings.tileset !== PROCEDURAL) {
+    void loadTileset(settings.tileset).then((overrides) => renderer.applyTileset(overrides));
+  }
 
   // Two named dirty chokepoints (CRITIC-YP2). markDirty invalidates the cached
   // renderer base (map/camera/overlay changed); markPreviewDirty only requests a
@@ -413,6 +422,12 @@ export function main(): void {
     onWorldChange: (worldSettings: WorldSettings): void => {
       settings = clampSettings({ ...settings, world: { ...worldSettings } });
       saveSettings(settings); // takes effect on the next load (regenerate)
+    },
+    onTilesetChange: (tileset: string): void => {
+      settings = clampSettings({ ...settings, tileset });
+      saveSettings(settings);
+      // Hot-swap the skin live (no regen): load its PNGs, then rebuild the atlas + invalidate base.
+      void loadTileset(settings.tileset).then((overrides) => renderer.applyTileset(overrides));
     },
   });
 

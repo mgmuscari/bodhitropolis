@@ -12,7 +12,7 @@ import { GameMap, Water, LandCover } from '../engine/map';
 import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
-import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
+import { builtRenderKey, footprintCellKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 import { parcelGlyph } from './glyphContent';
 import { isPowerConsumer } from '../growth/power';
@@ -405,8 +405,21 @@ function paintForKey(key: string): HTMLCanvasElement {
   }
 }
 
-function buildAtlas(): Map<string, HTMLCanvasElement> {
-  const atlas = new Map<string, HTMLCanvasElement>();
+// The atlas is source-agnostic (ctx.drawImage takes any CanvasImageSource): procedural
+// painters return <canvas>, a tileset supplies decoded <img>. So a tileset is just an OVERRIDE
+// map layered on top of the painted base — present keys win, omitted keys keep the painter
+// (docs/art/asset-generation.md §0.5: an optional skin with per-key procedural fallback).
+type AtlasImage = CanvasImageSource;
+
+// The procedural atlas is byte-identical for every Renderer and every tileset swap, so paint it
+// ONCE (lazily, on first construction) and cache it process-wide. The tile values are read-only
+// canvases — safe to share. This is the perf hinge for tileset swaps: applyTileset becomes a
+// shallow Map clone + O(overrides) set, NOT an O(all-keys ≈ hundreds of paintTile) repaint.
+let PROCEDURAL_ATLAS: Map<string, AtlasImage> | null = null;
+
+function proceduralAtlas(): Map<string, AtlasImage> {
+  if (PROCEDURAL_ATLAS) return PROCEDURAL_ATLAS;
+  const atlas = new Map<string, AtlasImage>();
 
   // Terrain: kind × elevation band. (Terrain is not part of renderKeyspace — that
   // enumerates only the built layer.)
@@ -421,6 +434,20 @@ function buildAtlas(): Map<string, HTMLCanvasElement> {
   // Built layer: iterate the canonical keyspace so the painted set and the
   // requested set (builtRenderKey) have one source of truth.
   for (const key of renderKeyspace()) atlas.set(key, paintForKey(key));
+
+  PROCEDURAL_ATLAS = atlas;
+  return atlas;
+}
+
+function buildAtlas(overrides?: ReadonlyMap<string, AtlasImage>): Map<string, AtlasImage> {
+  // Shallow clone of the cached procedural atlas (shares the painted tile canvases by reference).
+  const atlas = new Map(proceduralAtlas());
+
+  // Tileset skin: overlay the committed PNGs so they replace the painter for the keys they cover
+  // (incl. segmented footprintCellKey tiles the procedural pass never paints). Each override value
+  // is a pre-decoded BASE_TILE canvas (tilesetLoader normalizes on load), so this is pure Map work
+  // — the base pass that bakes them into the single cached base texture is unchanged.
+  if (overrides) for (const [key, img] of overrides) atlas.set(key, img);
 
   return atlas;
 }
@@ -469,7 +496,11 @@ function footprintPos(map: GameMap, x: number, y: number, pid: number): Footprin
 
 export class Renderer {
   private readonly ctx: CanvasRenderingContext2D;
-  private readonly atlas: Map<string, HTMLCanvasElement>;
+  // Rebuilt on a tileset swap (applyTileset), so not readonly. Source-agnostic values.
+  private atlas: Map<string, AtlasImage>;
+  // True when a tileset supplied at least one override → enables the segmented-footprint
+  // cell-key lookup in drawBase. False (procedural) keeps that path byte-identical + zero-cost.
+  private hasTileset = false;
   // Cached base pass (terrain + built + overlay) on an offscreen canvas. Rebuilt
   // ONLY when invalidated (map/camera/overlay change), then blitted 1:1 onto the
   // visible canvas each frame. The hover preview and the ambient sprites live in
@@ -490,11 +521,27 @@ export class Renderer {
   // in this set draws an "unpowered" pip. null = grid unknown (no marks).
   private powered: Set<number> | null = null;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    overrides?: ReadonlyMap<string, AtlasImage>,
+  ) {
     this.ctx = canvas.getContext('2d')!;
     this.base = document.createElement('canvas');
     this.baseCtx = this.base.getContext('2d')!;
-    this.atlas = buildAtlas();
+    this.atlas = buildAtlas(overrides);
+    this.hasTileset = (overrides?.size ?? 0) > 0;
+  }
+
+  /**
+   * Swap the active tileset at runtime: rebuild the atlas with the given PNG overrides layered
+   * over the procedural painters, then invalidate the cached base so the next frame repaints.
+   * `overrides` empty/undefined ⇒ back to the pure procedural look. Lets the settings menu apply
+   * a tileset change live — no page reload, unlike a map-size change (which is a different seed).
+   */
+  applyTileset(overrides?: ReadonlyMap<string, AtlasImage>): void {
+    this.atlas = buildAtlas(overrides);
+    this.hasTileset = (overrides?.size ?? 0) > 0;
+    this.invalidateBase();
   }
 
   /** Set (or clear) the hover/drag preview tiles drawn as translucent tints. */
@@ -582,7 +629,17 @@ export class Renderer {
           // wideRoadAt is predicate-guarded (false for any non-road tile), so this
           // only ever flips the slab variant on for a 2-/3-row road corridor.
           const wide = wideRoadAt(map, tx, ty);
-          const builtTile = this.atlas.get(builtRenderKey(built, mask, pos, tier, wide));
+          // Building tiles under an active tileset try the SEGMENTED-footprint cell key first
+          // (a single W×H image sliced per cell, for seam continuity) and fall back to the
+          // procedural pos/tier key when the tileset doesn't supply that cell. The procedural
+          // path never enters this branch (hasTileset false), so it stays byte-identical.
+          let builtKey = builtRenderKey(built, mask, pos, tier, wide);
+          if (this.hasTileset && !isT && pid !== 0) {
+            const fp = parcels.get(pid - 1);
+            const cellKey = footprintCellKey(built, fp.width, fp.height, tx - fp.x, ty - fp.y, tier);
+            if (this.atlas.has(cellKey)) builtKey = cellKey;
+          }
+          const builtTile = this.atlas.get(builtKey);
           if (builtTile) ctx.drawImage(builtTile, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
 
           // Elevated deck (overpass): drawn LIFTED above the road below with a drop shadow, so it

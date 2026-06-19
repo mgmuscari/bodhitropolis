@@ -116,6 +116,30 @@ export function builtRenderKey(
 }
 
 /**
+ * The atlas key for ONE CELL of a segmented multi-tile building footprint — the
+ * tileset-only addressing mode for art generated as a single W×H image and sliced
+ * into per-cell PNGs (so a building's tiles read as one continuous picture with
+ * seam continuity, not a corner/edge/center motif repeated). Keyed by footprint
+ * size (w×h) and the cell's column/row within it, plus the condition tier, so
+ * different sizes and tiers never collide: `b-{kind}-{w}x{h}-c{col}-r{row}-{tier}`.
+ *
+ * This key is NEVER painted procedurally and is deliberately NOT in renderKeyspace
+ * — the procedural atlas can't form it, so a tile asks for it ONLY when a tileset
+ * supplied it, and otherwise falls back to {@link builtRenderKey}'s pos/tier key.
+ * Pure string construction (no DOM / no Math), like the rest of this seam.
+ */
+export function footprintCellKey(
+  kind: number,
+  width: number,
+  height: number,
+  col: number,
+  row: number,
+  condTier: number,
+): string {
+  return `b-${kind}-${width}x${height}-c${col}-r${row}-${condTier}`;
+}
+
+/**
  * The exhaustive, deterministic enumeration of every key {@link builtRenderKey}
  * can return. Order is stable (road kinds × masks, then each transport prefix ×
  * masks, then building kinds × positions × tiers) and free of duplicates. The
