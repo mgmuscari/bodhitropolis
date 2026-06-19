@@ -243,14 +243,17 @@ layer (non-deterministic).
 
 ### Pedestrian / vehicle agents (Maddy 2026-06-19)
 
-- 🔵 **DEFERRED feature: unhoused residents** (Maddy 2026-06-19) — model residents without housing: a
-  population that has no home plot (or has been displaced — abandonment/demolition/arrest-drain/eviction
-  by decay), living in the live agent layer outside the household census. Surface them as agents +
-  presumably a count/indicator, and tie into the existing systems (occupancy, wellbeing, civic voice,
-  redline/police harm, the revival↔decline loop — housing as the counter-move). Not started; record
-  only. Design Qs for when it's picked up: where they shelter (parks/streets/encampments), how
-  housing/displacement moves people in/out of the unhoused state, and the player's restorative levers
-  (build housing / commons / defund). Live layer (composes with [[live-layer-architecture]]).
+- 🟡 **Unhoused residents — FIRST CUT shipped, deeper mechanics await Maddy** (Maddy 2026-06-19; PR
+  pending) — shipped a conservative, loop-coupled COUNT + indicator: `unhousedContent.ts` (pure,
+  unit-tested, allowlisted) derives displacement as the per-home shortfall between the census CAPACITY
+  (`households`) and live `occupancy` — `Σ max(0, capacity − occ)`, a home over capacity not offsetting
+  another's loss. Surfaced as `· Unhoused N ↓/↑` on the always-on pulse line (down-is-good), trended on
+  the civic cadence. It's a pure READ — zero feedback into the delicate occupancy/wellbeing loop — and
+  moves the right way for free (decline raises it, healing + new housing lowers it → housing is the
+  legible counter-move). **Intentionally NOT built (Maddy's design call):** visible sheltering agents
+  (encampments), explicit per-event displacement, civic-voice/police-harm ties, dedicated shelter
+  kinds. All decisions + open Qs in `docs/design/unhoused-residents.md`. Composes with
+  [[live-layer-architecture]] and the homed-vs-homeless ped branch from the commute-home fix.
 - ✅ **Owned car despawns when its citizen disappears** (PR pending) — a car is the citizen's
   possession; it should stay parked while the ped is active and FOLLOW it home when sent home, not
   vanish on the spot. While active it already persisted (the car filter never despawns an owned car);

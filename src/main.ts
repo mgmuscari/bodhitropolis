@@ -45,6 +45,7 @@ import { pulseLine } from './ui/pulseContent';
 import { mountPulseDock } from './ui/pulseDock';
 import { sampleRestoration, restorationLines, type RestorationSample } from './ui/restorationContent';
 import { mountRestorationPanel } from './ui/restorationPanel';
+import { sampleUnhoused, unhousedSuffix } from './ui/unhousedContent';
 import { isRepairTool } from './ui/repairTools';
 import { mountOpening, type OpeningContent } from './ui/opening';
 import { TECH_TREE } from './tech/tree';
@@ -367,9 +368,18 @@ export function main(): void {
   // only to avoid per-tick flicker. The trend compares to the previous cadence.
   const pulseDock = mountPulseDock(document.body);
   let prevWellbeing: number | null = null;
+  // Unhoused residents (first cut): displaced-population count appended to the pulse line, trended on
+  // the civic cadence. Loop-coupled — decline raises it, healing/new housing lowers it.
+  let prevUnhoused: number | null = null;
+  const pulseText = (wb: number): string => {
+    const u = sampleUnhoused(ambientState, world.map.width);
+    const line = `${pulseLine(wb, prevWellbeing)}  ·  ${unhousedSuffix(u.unhoused, prevUnhoused)}`;
+    prevUnhoused = u.unhoused;
+    return line;
+  };
   const wellbeingNow = (): number =>
     wellbeing({ parcels: world.parcels, ecoMeans: deps.ecoMeans, civicMeans: deps.civicMeans });
-  pulseDock.set(pulseLine(wellbeingNow(), null)); // initial: flat, no prior cadence
+  pulseDock.set(pulseText(wellbeingNow())); // initial: flat, no prior cadence
 
   // Restoration readout panel (G): "is my renewal helping?" — surveys the live metrics (land value,
   // population, building health, ecology, air/ground/water pollution) with improvement-oriented trend
@@ -770,7 +780,7 @@ export function main(): void {
         markDirty(); // civic overlay re-push changes the base tint → invalidate base
       }
       const wb = wellbeingNow();
-      pulseDock.set(pulseLine(wb, prevWellbeing));
+      pulseDock.set(pulseText(wb));
       prevWellbeing = wb;
       // Restoration readout: sample the live metrics on this cadence and trend vs the prior sample
       // (only while the panel is shown — no work when hidden).

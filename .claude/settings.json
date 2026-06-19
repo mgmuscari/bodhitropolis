@@ -22,5 +22,16 @@
         ]
       }
     ]
+  },
+  "extraKnownMarketplaces": {
+    "comfyui-mcp": {
+      "source": {
+        "source": "github",
+        "repo": "artokun/comfyui-mcp"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "comfy@comfyui-mcp": true
   }
 }
