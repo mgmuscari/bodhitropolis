@@ -12,6 +12,7 @@ import { createTechState } from '../../src/tech/state';
 import { TECH_TREE } from '../../src/tech/tree';
 import { simTick, type SimDeps } from '../../src/civic/compose';
 import { parkingLots, parkingStalls } from '../../src/ui/parkingContent';
+import { layField, decayField } from '../../src/citizens/field';
 import { StopCategory } from '../../src/citizens/itinerary';
 import { TravelMode } from '../../src/citizens/modes';
 import {
@@ -46,6 +47,8 @@ import {
   liveInspectLine,
   accumulateWaterRunoff,
   accumulateGroundPollution,
+  driftPollution,
+  prevailingWind,
   flowWaterPollution,
   treatWaterPollution,
   stepRoadDecay,
@@ -434,6 +437,92 @@ describe('accumulateGroundPollution (Maddy: live land contamination; litter feed
     m.built[m.idx(4, 4)] = BuiltKind.None; // the player bulldozes / rewilds the source
     for (let i = 0; i < 2000; i++) accumulateGroundPollution(state, m);
     expect(state.groundPollution.get(m.idx(4, 4)) ?? 0).toBe(0); // the land recovers
+  });
+});
+
+describe('driftPollution (Maddy: prevailing wind carries smog downwind into plumes)', () => {
+  it('carries a fraction of a tile\'s smog one tile downwind, conserving the rest', () => {
+    const m = new GameMap(12, 12);
+    const state = createAmbientState();
+    state.wind = { dx: 1, dy: 0 }; // a westerly: smog blows due east
+    const src = m.idx(4, 4);
+    state.pollution.set(src, 100);
+    driftPollution(state, m);
+    const here = state.pollution.get(src) ?? 0;
+    const downwind = state.pollution.get(m.idx(5, 4)) ?? 0;
+    expect(downwind).toBeGreaterThan(0); // smog moved downwind
+    expect(here).toBeLessThan(100); // and the source dropped
+    expect(here + downwind).toBeCloseTo(100, 5); // conservative transfer inside the map
+    expect(downwind).toBeLessThan(here); // only a fraction moves per pass (a gradient, not teleport)
+  });
+
+  it('drifts toward the wind vector, not the opposite or perpendicular tiles', () => {
+    const m = new GameMap(12, 12);
+    const state = createAmbientState();
+    state.wind = { dx: 0, dy: 1 }; // blows due south
+    const src = m.idx(6, 6);
+    state.pollution.set(src, 80);
+    driftPollution(state, m);
+    expect(state.pollution.get(m.idx(6, 7)) ?? 0).toBeGreaterThan(0); // south (downwind) gets smog
+    expect(state.pollution.get(m.idx(6, 5)) ?? 0).toBe(0); // north (upwind) gets none
+    expect(state.pollution.get(m.idx(5, 6)) ?? 0).toBe(0); // west gets none
+    expect(state.pollution.get(m.idx(7, 6)) ?? 0).toBe(0); // east gets none
+  });
+
+  it('builds a streaking plume: repeated drift+decay spreads smog downwind from a steady source', () => {
+    const m = new GameMap(20, 8);
+    const state = createAmbientState();
+    state.wind = { dx: 1, dy: 0 };
+    const sx = 2;
+    const sy = 4;
+    const src = m.idx(sx, sy);
+    for (let i = 0; i < 30; i++) {
+      layField(state.pollution, src, 60, 255); // a steady source re-emitting each pass
+      driftPollution(state, m);
+      decayField(state.pollution, 0.4);
+    }
+    expect(state.pollution.get(m.idx(sx + 4, sy)) ?? 0).toBeGreaterThan(0); // plume reaches well downwind
+    expect(state.pollution.get(m.idx(sx - 1, sy)) ?? 0).toBe(0); // nothing upwind of the source
+  });
+
+  it('smog blowing off the map edge leaves the system (no wrap, no throw)', () => {
+    const m = new GameMap(6, 6);
+    const state = createAmbientState();
+    state.wind = { dx: 1, dy: 0 };
+    state.pollution.set(m.idx(5, 3), 50); // rightmost column
+    expect(() => driftPollution(state, m)).not.toThrow();
+    expect(state.pollution.get(m.idx(0, 3)) ?? 0).toBe(0); // did NOT wrap to the left edge
+  });
+
+  it('is a no-op when there is no wind (dx=dy=0)', () => {
+    const m = new GameMap(8, 8);
+    const state = createAmbientState();
+    state.wind = { dx: 0, dy: 0 };
+    state.pollution.set(m.idx(4, 4), 70);
+    driftPollution(state, m);
+    expect(state.pollution.get(m.idx(4, 4))).toBe(70); // unchanged
+  });
+});
+
+describe('prevailingWind (seeded per world, never both-zero)', () => {
+  it('returns an integer unit vector that is never (0,0)', () => {
+    for (let s = 0; s < 12; s++) {
+      const w = prevailingWind(ambientFork(`seed-${s}`));
+      expect(Number.isInteger(w.dx)).toBe(true);
+      expect(Number.isInteger(w.dy)).toBe(true);
+      expect(w.dx === 0 && w.dy === 0).toBe(false);
+      expect(Math.abs(w.dx)).toBeLessThanOrEqual(1);
+      expect(Math.abs(w.dy)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('is deterministic per seed (same world → same prevailing wind)', () => {
+    expect(prevailingWind(ambientFork('repeat'))).toEqual(prevailingWind(ambientFork('repeat')));
+  });
+
+  it('createAmbientState seeds the wind from the rng when given one', () => {
+    const state = createAmbientState(ambientFork('windy'));
+    expect(state.wind.dx === 0 && state.wind.dy === 0).toBe(false);
   });
 });
 
