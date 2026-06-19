@@ -742,6 +742,21 @@ describe('freewayLane (divided multi-lane roads — outer one-way, middle two-wa
     expect(freewayLane(m, 10, 6)).toEqual({ role: 'outer', dir: 3, outward: 0 }); // north → West
     expect(freewayLane(m, 10, 7)).toEqual({ role: 'outer', dir: 1, outward: 2 }); // south → East
   });
+
+  it('classifies a PlantedMedian tile as the (no-traffic) median role', () => {
+    const m = freewayH();
+    m.built[m.idx(10, 6)] = BuiltKind.PlantedMedian; // road-diet: the middle through-lane is planted
+    expect(freewayLane(m, 10, 6)).toEqual({ role: 'median' });
+  });
+
+  it('keeps the carriageways one-way when the middle is a planted median (band preserved)', () => {
+    const m = freewayH();
+    for (let x = 0; x < 20; x++) m.built[m.idx(x, 6)] = BuiltKind.PlantedMedian; // whole middle planted
+    // The outer carriageways must STILL read one-way (the median counts as part of the road's width
+    // band for orientation), or the divided road would collapse into two bidirectional 1-wide roads.
+    expect(freewayLane(m, 10, 5)).toEqual({ role: 'outer', dir: 3, outward: 0 }); // north → West
+    expect(freewayLane(m, 10, 7)).toEqual({ role: 'outer', dir: 1, outward: 2 }); // south → East
+  });
 });
 
 describe('canDrive (limited-access freeways — Maddy: no cross traffic except interchanges/ends)', () => {

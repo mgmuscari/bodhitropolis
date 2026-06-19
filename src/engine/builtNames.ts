@@ -19,6 +19,7 @@ const NAME_OF: ReadonlyMap<number, string> = new Map<number, string>([
   [BuiltKind.QuietStreet, 'Quiet Street'],
   [BuiltKind.ElevatedRail, 'Elevated Rail'],
   [BuiltKind.Promenade, 'Promenade'],
+  [BuiltKind.PlantedMedian, 'Planted Median'],
   // Moses-era buildings
   [BuiltKind.HouseSingle, 'Single-family Home'],
   [BuiltKind.Apartments, 'Apartments'],

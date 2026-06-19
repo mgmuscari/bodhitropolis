@@ -21,6 +21,7 @@ import {
   convertParcel,
   demolishParcel,
   demolishTransportAt,
+  isInteriorRoadLane,
 } from '../engine/fabric';
 import { builtKindName } from '../engine/builtNames';
 import { ZoneType, zoneTypeOf } from '../engine/zone';
@@ -61,6 +62,7 @@ export type ToolReason =
   | 'out-of-bounds'
   | 'occupied'
   | 'invalid-target'
+  | 'not-an-interior-lane'
   | 'nothing-to-bulldoze'
   | 'effort';
 
@@ -152,6 +154,7 @@ const CONVERT_TABLE: Readonly<Record<number, ConvertEntry>> = {
   [BuiltKind.Streetcar]: { label: 'Convert to Streetcar', cost: 4 },
   [BuiltKind.QuietStreet]: { label: 'Convert to Quiet Street', cost: 2 },
   [BuiltKind.Promenade]: { label: 'Convert to Promenade', cost: 3 },
+  [BuiltKind.PlantedMedian]: { label: 'Plant Median', cost: 3 },
   [BuiltKind.Park]: { label: 'Rezone: Park', cost: 6 },
   [BuiltKind.RewildedLand]: { label: 'Rezone: Rewilded Land', cost: 4 },
 };
@@ -269,7 +272,14 @@ function geometryValid(world: ToolWorld, tool: ToolDef, x: number, y: number): P
     const ok = isBuildingKind(tool.kind!)
       ? canConvertParcel(map, world.parcels, x, y, tool.kind!)
       : canConvertTransport(map, x, y, tool.kind!);
-    return ok ? { valid: true } : { valid: false, reason: 'invalid-target' };
+    if (!ok) return { valid: false, reason: 'invalid-target' };
+    // A planted median may only replace an interior two-way `through` lane of a 3-wide road —
+    // never a carriageway (would break the one-way lane) or a 1-wide road. The lane classifier
+    // is the single source of that geometry (canConvertTransport only checks the kind pair).
+    if (tool.kind === BuiltKind.PlantedMedian && !isInteriorRoadLane(map, x, y)) {
+      return { valid: false, reason: 'not-an-interior-lane' };
+    }
+    return { valid: true };
   }
 
   // build-*

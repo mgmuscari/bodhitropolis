@@ -486,6 +486,7 @@ describe('TRANSPORT_CONVERSIONS table + canConvertTransport / convertTransport',
     [BuiltKind.RoadAvenue, BuiltKind.RoadStreet],
     [BuiltKind.RoadAvenue, BuiltKind.QuietStreet],
     [BuiltKind.RoadHighway, BuiltKind.RoadAvenue],
+    [BuiltKind.RoadHighway, BuiltKind.PlantedMedian],
     [BuiltKind.Rail, BuiltKind.Streetcar],
   ];
 
@@ -499,8 +500,21 @@ describe('TRANSPORT_CONVERSIONS table + canConvertTransport / convertTransport',
       BuiltKind.RoadStreet,
       BuiltKind.QuietStreet,
     ]);
-    expect([...TRANSPORT_CONVERSIONS.get(BuiltKind.RoadHighway)!]).toEqual([BuiltKind.RoadAvenue]);
+    expect([...TRANSPORT_CONVERSIONS.get(BuiltKind.RoadHighway)!]).toEqual([
+      BuiltKind.RoadAvenue,
+      BuiltKind.PlantedMedian, // the road-diet planted median (tool-gated to interior lanes)
+    ]);
     expect([...TRANSPORT_CONVERSIONS.get(BuiltKind.Rail)!]).toEqual([BuiltKind.Streetcar]);
+  });
+
+  it('a planted median converts BACK to highway (the road diet is reversible)', () => {
+    const map = new GameMap(8, 8);
+    expect(placeTransport(map, 3, 3, BuiltKind.RoadHighway)).toBe(true);
+    expect(convertTransport(map, 3, 3, BuiltKind.PlantedMedian)).toBe(true);
+    expect(map.getBuilt(3, 3)).toBe(BuiltKind.PlantedMedian);
+    expect(canConvertTransport(map, 3, 3, BuiltKind.RoadHighway)).toBe(true);
+    expect(convertTransport(map, 3, 3, BuiltKind.RoadHighway)).toBe(true);
+    expect(map.getBuilt(3, 3)).toBe(BuiltKind.RoadHighway);
   });
 
   for (const [from, to] of CONVERSION_CASES) {

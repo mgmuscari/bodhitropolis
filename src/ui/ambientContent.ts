@@ -272,6 +272,7 @@ const AMENITY_KINDS: ReadonlySet<number> = new Set([
   BuiltKind.RewildedLand,
   BuiltKind.Parklet,
   BuiltKind.Promenade,
+  BuiltKind.PlantedMedian, // the road-diet green strip lifts the corridor it calms
   BuiltKind.HealingCommons,
   BuiltKind.VerticalFarm,
   BuiltKind.Civic,
@@ -803,7 +804,7 @@ function sameRun(map: GameMap, x: number, y: number, k: number, dx: number, dy: 
   for (let i = 1; i <= LANE_SCAN_CAP; i++) {
     const nx = x + dx * i;
     const ny = y + dy * i;
-    if (!map.inBounds(nx, ny) || !sameLaneKind(k, map.built[map.idx(nx, ny)]!)) break;
+    if (!map.inBounds(nx, ny) || !inLaneBand(k, map.built[map.idx(nx, ny)]!)) break;
     n++;
   }
   return n;
@@ -827,6 +828,9 @@ function sameRun(map: GameMap, x: number, y: number, k: number, dx: number, dy: 
  */
 export function freewayLane(map: GameMap, x: number, y: number): FreewayLane | null {
   const k = map.built[map.idx(x, y)]!;
+  // A planted median is a no-traffic lane in its own right (the road-diet upgrade) — classify it
+  // directly so canDrive treats it as a green barrier (no driving on or across it).
+  if (k === BuiltKind.PlantedMedian) return { role: 'median' };
   // Only worldgen-WIDENED roads are divided: avenues are 2-wide, highways 3-wide.
   // Streets are 1-wide by construction, so a same-kind street neighbour is a junction
   // arm, never a parallel lane — classifying a street as a lane misreads a staggered
@@ -835,7 +839,7 @@ export function freewayLane(map: GameMap, x: number, y: number): FreewayLane | n
   const same = (d: number): boolean => {
     const nx = x + DIR_DX[d]!;
     const ny = y + DIR_DY[d]!;
-    return map.inBounds(nx, ny) && sameLaneKind(k, map.built[map.idx(nx, ny)]!);
+    return map.inBounds(nx, ny) && inLaneBand(k, map.built[map.idx(nx, ny)]!);
   };
   const vert = 1 + sameRun(map, x, y, k, 0, -1) + sameRun(map, x, y, k, 0, 1);
   const horiz = 1 + sameRun(map, x, y, k, -1, 0) + sameRun(map, x, y, k, 1, 0);
@@ -1001,6 +1005,14 @@ function isFreewayKind(kind: number): boolean {
 /** Same lane material for run measurement: identical kinds, or both freeway-family (highway/ramp). */
 function sameLaneKind(a: number, b: number): boolean {
   return a === b || (isFreewayKind(a) && isFreewayKind(b));
+}
+
+/** Whether neighbour kind `b` belongs to road `a`'s WIDTH BAND for lane classification: the same
+ *  lane material, OR a PlantedMedian. A planted median is a no-traffic lane WITHIN the road, so it
+ *  must count toward the road's width — otherwise a road-diet median between two carriageways would
+ *  make each carriageway read as a 1-wide road and lose its one-way direction. */
+function inLaneBand(a: number, b: number): boolean {
+  return sameLaneKind(a, b) || b === BuiltKind.PlantedMedian;
 }
 
 /** An at-grade rail/tram LINE a car may CROSS at a level crossing (it can never drive ALONG it): a

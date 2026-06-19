@@ -85,6 +85,9 @@ const BUILDING_RENDER_KINDS: readonly number[] = [
   BuiltKind.HealingCommons,
   BuiltKind.Park,
   BuiltKind.RewildedLand,
+  // The road-diet planted median: a transport-slot tile that renders as a green strip (b-11-*),
+  // not an autotiled road (transportCategory 11 = 0), so it keys through the building-style path.
+  BuiltKind.PlantedMedian,
 ];
 
 /**
