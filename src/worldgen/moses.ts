@@ -1042,6 +1042,47 @@ export function placeCorridorRamps(map: GameMap, c: Corridor, p: MosesParams): v
 }
 
 /**
+ * A satellite/bridge connector is a 1-wide RoadHighway link to the core. A 1-wide
+ * highway is freely drivable, but where the connector CROSSES or abuts the core's
+ * worldgen-WIDENED (>=2-wide) expressways, those tiles read as one-way freeway lanes
+ * and `canDrive` forbids the perpendicular crossing in BOTH directions — so the exurb
+ * is 4-connected (roadNetwork is one component) yet NOT car-reachable: residents can
+ * reach no off-mass stop and stay home (the exurb-isolation bug; placeCorridorRamps
+ * only ramps the era3 corridors, never these connectors).
+ *
+ * This rams a RoadRamp — a freely-drivable at-grade crossing, the SAME primitive
+ * placeCorridorRamps uses — through every such crossing on the connector's `path`: a
+ * path tile that is a RoadHighway AND touches a same-kind highway NOT on the path (a
+ * FOREIGN band — the core expressway it crosses) becomes a ramp. Pure 1-wide connector
+ * tiles (whose only highway neighbours are their own collinear path tiles) are left as
+ * highway, so the "a freeway reaches each satellite" invariant holds. Water tiles
+ * (a bridge deck) are skipped — crossings are on land. Returns the count of crossings
+ * ramped. Deterministic; worldgen-only, folded into the hash.
+ */
+export function rampConnectorCrossings(map: GameMap, path: ReadonlyArray<number>): number {
+  const targets: number[] = [];
+  for (const i of path) {
+    if (map.built[i] !== BuiltKind.RoadHighway || map.water[i] !== Water.None) continue;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    // Highway neighbours by axis. A pure 1-wide STRAIGHT connector tile has highway neighbours on a
+    // single axis (its two collinear path tiles) — left alone, it stays a freely-drivable highway. A
+    // tile with highway neighbours on BOTH axes sits inside a multi-lane band: either the connector
+    // CROSSES a perpendicular expressway, or runs ALONGSIDE one (the 'outer'/'through' lanes canDrive
+    // forbids entering). Those are the limited-access crossings — ramp them to an at-grade crossing.
+    let horiz = false;
+    let vert = false;
+    if (x + 1 < map.width && map.built[map.idx(x + 1, y)] === BuiltKind.RoadHighway) horiz = true;
+    if (x - 1 >= 0 && map.built[map.idx(x - 1, y)] === BuiltKind.RoadHighway) horiz = true;
+    if (y + 1 < map.height && map.built[map.idx(x, y + 1)] === BuiltKind.RoadHighway) vert = true;
+    if (y - 1 >= 0 && map.built[map.idx(x, y - 1)] === BuiltKind.RoadHighway) vert = true;
+    if (horiz && vert) targets.push(i);
+  }
+  for (const i of targets) map.built[i] = BuiltKind.RoadRamp; // highway -> at-grade ramp (single-writer for ramps, as placeCorridorRamps)
+  return targets.length;
+}
+
+/**
  * Era 3 — urban renewal & highways. Scores every row/column corridor by the
  * boxDensity of alive parcels along its run, restricted to corridors that
  * actually cut through >= era3MinDemolish parcels (urban renewal demolishes
@@ -1486,7 +1527,14 @@ function laySatellite(map: GameMap, parcels: ParcelStore, sx: number, sy: number
  *  buildings — see canPlaceTransport), so the shortest such corridor is found even when it must bend
  *  around terrain; the open-land cells beyond the exurb footprint (its grid handles the rest) are the
  *  freeway. Deterministic: fixed neighbour order, parent reconstruction by index. */
-function freewayRoute(map: GameMap, sx: number, sy: number, cx: number, cy: number, half: number): number[] | null {
+function freewayRoute(
+  map: GameMap,
+  sx: number,
+  sy: number,
+  cx: number,
+  cy: number,
+  half: number,
+): { lay: number[]; path: number[] } | null {
   const W = map.width;
   const H = map.height;
   const N = W * H;
@@ -1526,11 +1574,17 @@ function freewayRoute(map: GameMap, sx: number, sy: number, cx: number, cy: numb
   // right from the exurb crossroads, so the corridor is gap-free: the grid's centre connects to the
   // first paved cell, then on to the core network. (`half` is unused now — kept for the call site.)
   void half;
+  // `lay` is the OPEN-LAND cells to pave (existing roads on the path are already drivable, and the
+  // exurb crossroad `start` is laid by laySatellite). `path` is the FULL corridor (every tile,
+  // start..goal inclusive) so rampConnectorCrossings can ramp where it crosses the core expressways.
   const lay: number[] = [];
-  for (let i = goal; i !== start && i !== -1; i = prev[i]!) {
-    if (map.built[i] === 0) lay.push(i);
+  const path: number[] = [];
+  for (let i = goal; i !== -1; i = prev[i]!) {
+    path.push(i);
+    if (i !== start && map.built[i] === 0) lay.push(i);
+    if (i === start) break;
   }
-  return lay;
+  return { lay, path };
 }
 
 /**
@@ -1611,6 +1665,7 @@ export function layBridgeToRoad(
   sy: number,
   distToRoad: Int32Array,
   maxBridge: number,
+  crossingPaths?: number[][],
 ): boolean {
   const start = distToRoad[map.idx(sx, sy)]!;
   if (start < 1 || start > maxBridge) return false; // already on a road, or too far to bridge
@@ -1644,6 +1699,14 @@ export function layBridgeToRoad(
   for (const [px, py] of path) {
     if (!isRoadKind(map.built[map.idx(px, py)]!)) placeBridge(map, px, py, BuiltKind.RoadHighway);
   }
+  // Record the full corridor (landward stretch + the road tile the bridge meets at d===0) so the
+  // caller can ramp the limited-access crossings AFTER all founding — ramping mid-founding would turn
+  // connector highways into ramps and perturb the road-distance field later masses are scored against.
+  if (crossingPaths) {
+    const idxPath = path.map(([px, py]) => map.idx(px, py));
+    idxPath.push(map.idx(x, y));
+    crossingPaths.push(idxPath);
+  }
   return true;
 }
 
@@ -1664,6 +1727,11 @@ export function eraSatellites(world: WorldState, rng: Rng, p: MosesParams, state
 
   const before = parcels.aliveCount();
   let n = 0;
+  // Connector corridors to ramp AFTER all founding. Deferred deliberately: rampConnectorCrossings
+  // turns connector highways into ramps (no longer isRoadKind), which would perturb hasRoadNear /
+  // freewayRoute passability / the bridge distance field that later masses are scored against. With
+  // ramping deferred, founding stays byte-identical to the un-ramped world; ramps are a pure overlay.
+  const crossingPaths: number[][] = [];
   // Each satellite is laid before the next is scored, so spacing + freeway routing see prior exurbs.
   for (const s of scoreSites(map, p)) {
     if (state.satellites.length >= p.satelliteCount) break;
@@ -1674,7 +1742,8 @@ export function eraSatellites(world: WorldState, rng: Rng, p: MosesParams, state
     if (!route) continue; // no drivable corridor to the core network
     // Pave the freeway BEFORE the exurb's houses, so fillFrontage can't drop a building onto a
     // corridor cell and break the link (a highway can't be laid over a parcel — canPlaceTransport).
-    for (const i of route) placeTransport(map, i % map.width, (i - (i % map.width)) / map.width, BuiltKind.RoadHighway);
+    for (const i of route.lay) placeTransport(map, i % map.width, (i - (i % map.width)) / map.width, BuiltKind.RoadHighway);
+    crossingPaths.push(route.path); // ramp its crossings at the end
     laySatellite(map, parcels, s.x, s.y, p, rng.fork(`sat${n}`));
     state.satellites.push({ x: s.x, y: s.y });
     n++;
@@ -1690,12 +1759,19 @@ export function eraSatellites(world: WorldState, rng: Rng, p: MosesParams, state
     if (bridged >= p.satelliteBridgeCount) break;
     if (distToRoad[map.idx(e.x, e.y)]! > p.satelliteMaxBridge) continue; // too far across the water
     if (state.satellites.some((c) => dist(c.x, c.y, e.x, e.y) < p.satelliteSpacing)) continue;
-    if (!layBridgeToRoad(map, e.x, e.y, distToRoad, p.satelliteMaxBridge)) continue;
+    if (!layBridgeToRoad(map, e.x, e.y, distToRoad, p.satelliteMaxBridge, crossingPaths)) continue;
     laySatellite(map, parcels, e.x, e.y, p, rng.fork(`bridge${bridged}`));
     state.satellites.push({ x: e.x, y: e.y });
     bridged++;
     n++;
   }
+
+  // All masses founded — now ramp every connector's limited-access crossings so cars can actually
+  // drive the links (else the exurbs are 4-connected but car-isolated: residents reach no off-mass
+  // stop and stay home). Pure post-process; deterministic over the fixed corridor order.
+  let ramped = 0;
+  for (const path of crossingPaths) ramped += rampConnectorCrossings(map, path);
+  if (ramped > 0) world.log.push(`satellites: ramped ${ramped} connector crossings`);
 
   world.log.push(
     `satellites: ${state.satellites.length} exurbs (${bridged} bridged), ` +

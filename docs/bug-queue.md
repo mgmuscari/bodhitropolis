@@ -209,15 +209,21 @@ layer (non-deterministic).
   greens. Investigate `advanceItinerary` end-of-round → home leg + owned-car retrieval
   (`setDriveLeg`/`sendOwnedCarHome`) + fuel refuel at stops. Needs a careful live run — and the MCP
   browser is MADDY'S real Chrome, so don't reload it while she's playing. Not started.
-- 🔴 **Satellite/bridged exurbs are car-ISOLATED — residents can't commute** (audit 2026-06-19; root
-  cause behind the NE spawn-despawn fix) — `eraSatellites` connects exurbs to the core by a FREEWAY,
-  but freeways are limited-access (`canDrive` lets cars on only at ramps/ends) and the satellite/bridge
-  connector freeways get NO ramps (`placeCorridorRamps` runs for era3 corridors only). So the exurb's
-  local streets can't get ONTO the connector → its residents can reach no off-mass stop by car (and
-  none on foot across water). The reachability gate (#116) stops the churn by keeping them home, but
-  they never travel — dead districts. Fix: drop `RoadRamp` cross-sections where a satellite/bridge
-  freeway is flanked by the exurb grid (reuse `placeCorridorRamps` for satellite routes), OR connect
-  the exurb with a surface arterial. Worldgen (hashed), N=120-gated. Would also let #116's residents commute.
+- ✅ **Satellite/bridged exurbs are car-ISOLATED — residents can't commute** (audit 2026-06-19; PR
+  pending) — `eraSatellites` links exurbs to the core by a 1-wide freeway. A 1-wide highway IS freely
+  drivable, but where the connector CROSSES (or runs alongside) the core's 3-wide era3 expressways,
+  those tiles read as one-way `outer`/`through` lanes and `canDrive` forbids the perpendicular crossing
+  BOTH ways → the exurb is 4-connected (the old `roadNetwork` one-component test passes) yet NOT
+  car-reachable. **Root cause was sharper than "no ramps on the connector": the barriers are the wide
+  EXPRESSWAY tiles the connector traverses, not the connector itself.** Fix: `rampConnectorCrossings`
+  (the path-aware generalization of `placeCorridorRamps`) walks each connector's full corridor and
+  converts to `RoadRamp` any tile inside a multi-lane band — detected geometrically as a RoadHighway
+  with highway neighbours on BOTH axes (a crossing or parallel-adjacency); pure 1-wide straight tiles
+  stay highway. **Ramping is DEFERRED to the end of `eraSatellites`** so it doesn't perturb `isRoadKind`
+  mid-founding (which would change later masses' siting / the bridge distance field) — founding stays
+  byte-identical, ramps are a pure overlay. New RED gate: a `canDrive`-respecting reachability BFS
+  (`carReachFrom`) — every satellite drivable from the core across 3 seeds (was 6/12 isolated → 12/12).
+  Worldgen (hashed), deterministic. Unblocks #116's exurb residents (they can now commute by car).
 - 🔵 **DEFERRED feature: restoration-progress / city-health readout** (audit 2026-06-19; from "is my
   renewal helping?") — the player can't easily tell whether their restorative work is moving the city.
   A HUD / overlay panel surveying the live metrics over time (mean land value, total occupancy, mean

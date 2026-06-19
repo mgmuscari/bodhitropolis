@@ -26,6 +26,7 @@ import {
   placeParkingField,
   promoteDenseStreets,
   placeCorridorRamps,
+  rampConnectorCrossings,
   layBridgeToRoad,
   otherMassEntries,
   DEFAULT_MOSES_PARAMS,
@@ -37,6 +38,50 @@ import { boxDensity, distanceField } from '../../src/worldgen/fields';
 import { gradeRedline } from '../../src/worldgen/redline';
 import { computePowerGrid } from '../../src/growth/power';
 import { wideRoadAt } from '../../src/ui/decoration';
+import { canDrive } from '../../src/ui/ambientContent';
+
+// Car-drivable reachability over canDrive edges — respects limited-access freeway
+// lanes, UNLIKE roadNetwork's 4-connected adjacency. Seeded from the nearest road
+// tile to (sx,sy); returns the visited-tile mask. A satellite is genuinely
+// commutable only if its grid is in this set (not merely 4-connected).
+function carReachFrom(map: GameMap, sx: number, sy: number): Uint8Array {
+  const { width, height } = map;
+  const isRoad = (i: number) => isRoadKind(map.built[i]!) || map.built[i] === BuiltKind.RoadRamp;
+  const seen = new Uint8Array(width * height);
+  let seed = -1;
+  let best = Infinity;
+  for (let i = 0; i < width * height; i++) {
+    if (!isRoad(i)) continue;
+    const x = i % width;
+    const y = (i - x) / width;
+    const d = Math.abs(x - sx) + Math.abs(y - sy);
+    if (d < best) {
+      best = d;
+      seed = i;
+    }
+  }
+  if (seed < 0) return seen;
+  const q = [seed];
+  seen[seed] = 1;
+  let head = 0;
+  while (head < q.length) {
+    const i = q[head++]!;
+    const x = i % width;
+    const y = (i - x) / width;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!map.inBounds(nx, ny)) continue;
+      const ni = map.idx(nx, ny);
+      if (seen[ni]) continue;
+      if (canDrive(map, x, y, nx, ny)) {
+        seen[ni] = 1;
+        q.push(ni);
+      }
+    }
+  }
+  return seen;
+}
 
 const SEEDS = ['moses-1', 'moses-2', 'moses-3'];
 const P = DEFAULT_MOSES_PARAMS;
@@ -1254,6 +1299,33 @@ describe('eraSatellites — exurbs/suburbs with their own grids, freeway-linked'
       expect(net.largestComponent).toBe(net.total);
     });
 
+    it(`seed "${seed}": every satellite grid is CAR-reachable from the core`, () => {
+      // The 4-connected one-component check above passes even when limited-access
+      // freeway crossings make the exurb undrivable. This is the real commutability
+      // gate: a car must be able to drive core <-> every exurb (the connector
+      // freeway crosses the core expressways, which need ramps to pass).
+      const { world, state } = runSatellites(seed);
+      const { map } = world;
+      const reached = carReachFrom(map, state.siteX, state.siteY);
+      for (const s of state.satellites) {
+        let anyRoad = false;
+        let reachable = false;
+        const r = P.satelliteSpan;
+        for (let y = s.y - r; y <= s.y + r; y++) {
+          for (let x = s.x - r; x <= s.x + r; x++) {
+            if (!map.inBounds(x, y)) continue;
+            const i = map.idx(x, y);
+            if (isRoadKind(map.built[i]!)) {
+              anyRoad = true;
+              if (reached[i]) reachable = true;
+            }
+          }
+        }
+        expect(anyRoad).toBe(true);
+        expect(reachable).toBe(true);
+      }
+    });
+
     it(`seed "${seed}": adds suburban houses beyond the era-4 city`, () => {
       const before = runEras(seed, 4).world.parcels.aliveCount();
       const after = runSatellites(seed).world.parcels.aliveCount();
@@ -1289,6 +1361,40 @@ describe('placeCorridorRamps — ramps connect to the surface grid, not at the f
     expect(map.built[map.idx(10, 5)]).toBe(BuiltKind.RoadHighway);
     expect(map.built[map.idx(11, 6)]).toBe(BuiltKind.RoadHighway);
     expect(map.built[map.idx(12, 7)]).toBe(BuiltKind.RoadHighway);
+  });
+});
+
+describe('rampConnectorCrossings — ramps where an exurb connector crosses a wide expressway', () => {
+  it('ramps the crossing tiles so a car can drive ACROSS, leaving the 1-wide connector as highway', () => {
+    // A horizontal 3-wide expressway (rows 4,5,6) and a 1-wide vertical connector (col 8) crossing it.
+    const map = new GameMap(16, 12);
+    for (let x = 0; x < 16; x++) for (const y of [4, 5, 6]) map.built[map.idx(x, y)] = BuiltKind.RoadHighway;
+    const path: number[] = [];
+    for (let y = 0; y < 12; y++) {
+      map.built[map.idx(8, y)] = BuiltKind.RoadHighway; // the connector down column 8
+      path.push(map.idx(8, y));
+    }
+    const n = rampConnectorCrossings(map, path);
+    expect(n).toBe(3); // exactly the three expressway-band tiles the connector crosses
+    for (const y of [4, 5, 6]) expect(map.built[map.idx(8, y)]).toBe(BuiltKind.RoadRamp);
+    // the 1-wide connector tiles OFF the band stay highway (still freely drivable, not over-ramped)
+    expect(map.built[map.idx(8, 1)]).toBe(BuiltKind.RoadHighway);
+    expect(map.built[map.idx(8, 9)]).toBe(BuiltKind.RoadHighway);
+    // a car can now drive straight down the connector across the expressway (ramp = at-grade crossing)
+    expect(canDrive(map, 8, 3, 8, 4)).toBe(true);
+    expect(canDrive(map, 8, 4, 8, 5)).toBe(true);
+    expect(canDrive(map, 8, 6, 8, 7)).toBe(true);
+  });
+
+  it('leaves a pure 1-wide connector (no expressway) entirely as highway', () => {
+    const map = new GameMap(16, 8);
+    const path: number[] = [];
+    for (let x = 0; x < 16; x++) {
+      map.built[map.idx(x, 4)] = BuiltKind.RoadHighway;
+      path.push(map.idx(x, 4));
+    }
+    expect(rampConnectorCrossings(map, path)).toBe(0);
+    for (let x = 0; x < 16; x++) expect(map.built[map.idx(x, 4)]).toBe(BuiltKind.RoadHighway);
   });
 });
 
