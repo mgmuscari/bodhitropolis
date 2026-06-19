@@ -82,7 +82,10 @@ import {
   nearestWalkable,
   canDrive,
   AMBIENT_MAX_FRAME_MS,
+  liveCaps,
+  applyLiveCaps,
 } from '../../src/ui/ambientContent';
+import { CAP_PRESETS } from '../../src/ui/settings';
 
 // A small grid of mixed roads so the stepper has somewhere to spawn/move.
 function gridMap(): GameMap {
@@ -1589,6 +1592,25 @@ describe('population: spawn target tracks live occupancy', () => {
   });
   it('is monotonic non-decreasing', () => {
     expect(spawnTargetFor(300)).toBeGreaterThanOrEqual(spawnTargetFor(120));
+  });
+});
+
+describe('liveCaps (settings move the live perf ceilings at runtime)', () => {
+  it('default caps match the medium preset (today’s shipped values)', () => {
+    expect(liveCaps).toEqual(CAP_PRESETS.medium);
+  });
+  it('applyLiveCaps shifts the spawn target via the citizen-out divisor', () => {
+    const before = { ...liveCaps };
+    try {
+      expect(spawnTargetFor(30)).toBe(10); // /3 at default
+      applyLiveCaps({ citizenOutDivisor: 6 });
+      expect(spawnTargetFor(30)).toBe(5); // /6 after applying
+      applyLiveCaps({ pedCap: 5000 });
+      expect(liveCaps.pedCap).toBe(5000);
+      expect(liveCaps.citizenOutDivisor).toBe(6); // partial apply leaves others
+    } finally {
+      applyLiveCaps(before); // never leak mutated caps into sibling tests
+    }
   });
 });
 

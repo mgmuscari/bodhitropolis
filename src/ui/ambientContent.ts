@@ -27,6 +27,7 @@ import { TravelMode, modeSpec, modeRidesNetwork, modeSpeedMult, MODE_CHOICE_ORDE
 import type { Household } from '../citizens/census';
 import { layField, decayField, sampleField } from '../citizens/field';
 import type { Rng } from '../engine/rng';
+import type { LiveCaps } from './settings';
 
 /** Maximum elapsed time honoured in a single stepAmbient call, mirroring
  *  FixedTickLoop.maxFrameMs (loop.ts): a GC pause / debugger break / OS sleep /
@@ -36,11 +37,22 @@ export const AMBIENT_MAX_FRAME_MS = 1000;
 /** Fixed substep size — the simulation cadence for ambient motion. */
 const SUBSTEP_MS = 50;
 
-// Global per-kind caps (bounded total ~hundreds). Placeholder magnitudes —
-// live-pass tuned; the contract is "cap-bounded step + viewport cull at draw".
-const CAR_CAP = 200;
-const PED_CAP = 1200; // hard perf ceiling only; the citizen target (occ/3) is the operative cap below it
-const FLOCK_CAP = 32;
+// Live agent/render perf ceilings — the "fast PC vs slow PC" knob, mutated at runtime by the settings
+// menu (main wires applyLiveCaps from the persisted store; settings.ts owns the shape/presets/clamp).
+// Defaults ARE today's shipped magnitudes (== settings' `medium` preset). pedCap is the only HARD
+// ceiling (perf safety); the operative citizen target is occupancy/citizenOutDivisor (spawnTargetFor).
+export const liveCaps: LiveCaps = {
+  carCap: 200,
+  pedCap: 1200,
+  flockCap: 32,
+  citizenOutDivisor: 3,
+  spawnPerSubstep: 4,
+};
+
+/** Apply a (partial) set of live caps — the single runtime mutation seam the settings menu drives. */
+export function applyLiveCaps(caps: Partial<LiveCaps>): void {
+  Object.assign(liveCaps, caps);
+}
 // Police cruisers patrol the redlined districts from their precincts (the visible
 // face of the over-policing the civic layer models). One per precinct, capped.
 const CRUISER_CAP = 8;
@@ -322,12 +334,11 @@ const AMENITY_KINDS: ReadonlySet<number> = new Set([
 
 /** Hard CAP on itinerary citizens out at once (perf): the live spawn target tracks total occupancy
  *  but never exceeds this. Below the ped cap, so there's still room for ambient wanderers, last-mile
- *  walkers, and respawned citizens. CITIZEN_SPAWN_PER_SUBSTEP tops up gently rather than all at once. */
+ *  walkers, and respawned citizens. liveCaps.spawnPerSubstep tops up gently rather than all at once. */
 // The citizen target SCALES with the city: a THIRD of the live residents are out on a round at once
 // (Maddy: "cap should be sum(citizens) / 3"). No flat ceiling — busier cities put proportionally more
-// people on the street; a declining one empties. PED_CAP is the only hard ceiling (perf safety).
-const CITIZEN_OUT_DIVISOR = 3;
-const CITIZEN_SPAWN_PER_SUBSTEP = 4; // top up a bit faster too, so the streets refill promptly
+// people on the street; a declining one empties. liveCaps.pedCap is the only hard ceiling (perf
+// safety). The divisor + per-substep top-up are settings-tunable (liveCaps), not fixed consts.
 
 /** AGENT-EMERGENT POPULATION (live, never hashed). Each residential home carries a live OCCUPANCY —
  *  how many people actually live there now — seeded from the deterministic census baseline, then
@@ -2146,7 +2157,7 @@ function sampleTile(map: GameMap, rng: Rng): { x: number; y: number } {
 /**
  * Spawn trip-cars from the sim's published origin→destination trips: cars ARE trips. Each
  * car follows its committed `path` leg by leg and despawns on arrival. Called once per
- * traffic cadence with that cadence's found trips; capped at CAR_CAP. Renderer-side and
+ * traffic cadence with that cadence's found trips; capped at liveCaps.carCap. Renderer-side and
  * deterministic — the paths come from the (deterministic) sim; the animation draws no rng.
  * `trips` is structural ({ path }) so this module stays decoupled from the traffic layer.
  */
@@ -2177,7 +2188,7 @@ export function ingestTrips(
     // calm, more trips fall under WALK_RANGE → people shift out of cars.
     const usesFreeway = trip.path.some((t) => map.built[t]! === BuiltKind.RoadHighway);
     if (home >= 0 && trip.path.length <= WALK_RANGE && !usesFreeway) {
-      if (state.peds.length >= PED_CAP) continue; // walkers are full this cadence
+      if (state.peds.length >= liveCaps.pedCap) continue; // walkers are full this cadence
       const destPlot = zonedNeighbor(map, trip.path[trip.path.length - 1]!);
       if (destPlot >= 0) {
         const dpx = destPlot % map.width;
@@ -2198,7 +2209,7 @@ export function ingestTrips(
       // no destination plot to aim at → fall through and drive
     }
 
-    if (moving >= CAR_CAP) continue;
+    if (moving >= liveCaps.carCap) continue;
     // Colour bound to the car: a spread hash of (origin, next) so neighbouring trips differ.
     // imul/xor are integer-exact (allowlist-safe); the renderer maps it mod its palette.
     const tint = (Math.imul(p0 ^ p1, 0x9e3779b1) >>> 0) % 0x10000;
@@ -2237,7 +2248,7 @@ function pathStep(map: GameMap, car: Mover, x: number, y: number): number {
 
 function spawnPeds(state: AmbientState, map: GameMap, rng: Rng): void {
   for (let s = 0; s < SAMPLES_PER_SUBSTEP; s++) {
-    if (state.peds.length >= PED_CAP) return;
+    if (state.peds.length >= liveCaps.pedCap) return;
     const { x, y } = sampleTile(map, rng);
     if (!isPedSubstrate(map, x, y)) continue;
     const dir = nextPedStep(map, x, y, -1, rng);
@@ -2283,10 +2294,10 @@ export function occupancyStep(occ: number, floor: number, capacity: number, sign
 
 /** How many citizens to keep out on their round, from the live total occupancy: a THIRD of the
  *  residents (Maddy), scaling with the city — no flat ceiling, so a populous city fills the streets
- *  and a declining one visibly empties them. The hard perf ceiling is PED_CAP, applied where peds
+ *  and a declining one visibly empties them. The hard perf ceiling is liveCaps.pedCap, applied where peds
  *  actually spawn (spawnCitizens), not here. */
 export function spawnTargetFor(totalOccupancy: number): number {
-  return Math.round(totalOccupancy / CITIZEN_OUT_DIVISOR);
+  return Math.round(totalOccupancy / liveCaps.citizenOutDivisor);
 }
 
 /** The LIVE sample values the inspector appends to its readout — each undefined when the tile
@@ -2363,7 +2374,7 @@ function spawnCitizens(state: AmbientState, map: GameMap, rng: Rng): void {
   for (const h of homes) total += occAt(h);
   if (total <= 0) return;
   const target = spawnTargetFor(total);
-  for (let s = 0; s < CITIZEN_SPAWN_PER_SUBSTEP; s++) {
+  for (let s = 0; s < liveCaps.spawnPerSubstep; s++) {
     if (citizenCount(state) >= target) return;
     // Occupancy-weighted pick: a home with more residents is proportionally likelier to send one out.
     let r = rng.next() * total;
@@ -2511,7 +2522,7 @@ function tryPark(state: AmbientState, c: Car, map: GameMap): boolean {
  *  destination building (the car→building leg). It later returns to the SAME car (by id) and
  *  releases it. No building nearby ⇒ no ped (the car will leave on its safety timeout). */
 function spawnBoundPed(state: AmbientState, c: Car, building: { x: number; y: number }): void {
-  if (state.peds.length >= PED_CAP) return;
+  if (state.peds.length >= liveCaps.pedCap) return;
   // Start on the car's TILE (rounded): a lot-parked car sits at a fractional stall position,
   // but the Manhattan router walks integer tiles, so the ped steps off from the tile centre.
   const sx = Math.round(c.x);
@@ -2748,7 +2759,7 @@ function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
 
 function spawnFlocks(state: AmbientState, map: GameMap, rng: Rng): void {
   for (let s = 0; s < SAMPLES_PER_SUBSTEP; s++) {
-    if (state.birds.length >= FLOCK_CAP) return;
+    if (state.birds.length >= liveCaps.flockCap) return;
     const { x, y } = sampleTile(map, rng);
     if (!birdSpawnAt(map, x, y)) continue;
     const size = FLOCK_MIN + rng.nextInt(FLOCK_MAX - FLOCK_MIN + 1);
