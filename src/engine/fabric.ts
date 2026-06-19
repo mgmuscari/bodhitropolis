@@ -685,6 +685,40 @@ export function transportMask(map: GameMap, x: number, y: number): number {
   return mask;
 }
 
+/**
+ * Is the edge between road kinds `a` and `b` a LIMITED-ACCESS boundary — i.e. should a physical
+ * divider (jersey barrier / guardrail) be drawn there? True exactly when both are road-category
+ * tiles that would otherwise merge (transportCategory 1), NEITHER is a ramp (the ramp is the legal
+ * crossing — no barrier), and EXACTLY ONE is the limited-access freeway (RoadHighway). So a freeway
+ * running alongside an avenue frontage road gets a divider, but freeway↔freeway and street↔avenue do
+ * not, and a ramp is an open gap. (Mechanical, not cosmetic: it's where you physically can't cross.)
+ */
+export function isLimitedAccessBoundary(a: number, b: number): boolean {
+  if (transportCategory(a) !== 1 || transportCategory(b) !== 1) return false;
+  if (a === BuiltKind.RoadRamp || b === BuiltKind.RoadRamp) return false;
+  return (a === BuiltKind.RoadHighway) !== (b === BuiltKind.RoadHighway);
+}
+
+/**
+ * Divider mask for the road tile at (x, y): bit N=1/E=2/S=4/W=8 is set on each 4-neighbour edge
+ * that is a {@link isLimitedAccessBoundary} (freeway ↔ surface road). 0 on a non-road tile or where
+ * no edge is a freeway boundary. The dual-purpose companion of {@link transportMask}: that one says
+ * which edges MERGE (same category); this says which edges are SEPARATED by a barrier. Render-only
+ * (reads the hashed `built` layer, never writes) so the worldgen hash is untouched.
+ */
+export function roadDividerMask(map: GameMap, x: number, y: number): number {
+  const self = map.getBuilt(x, y);
+  if (transportCategory(self) !== 1) return 0;
+  let mask = 0;
+  for (const [dx, dy, bit] of MASK_DIRS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    if (!map.inBounds(nx, ny)) continue;
+    if (isLimitedAccessBoundary(self, map.getBuilt(nx, ny))) mask |= bit;
+  }
+  return mask;
+}
+
 /** The elevated deck (overpass) kind at (x, y), or 0 (none). Reads the second `deck` layer. */
 export function overpassAt(map: GameMap, x: number, y: number): number {
   return map.inBounds(x, y) ? map.deck[map.idx(x, y)]! : 0;

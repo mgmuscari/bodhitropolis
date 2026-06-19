@@ -9,7 +9,7 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import {
@@ -733,6 +733,23 @@ export class Renderer {
           }
           const builtTile = this.atlas.get(builtKey);
           if (builtTile) ctx.drawImage(builtTile, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
+
+          // Limited-access DIVIDER: a concrete barrier on each edge where a freeway abuts a surface
+          // road (a frontage avenue) — you physically can't cross there, only at a ramp. Per-tile
+          // (depends on neighbour kinds), drawn OVER the road like the power poles, not an atlas key.
+          // Structural/mechanical, so always on (procedural + any tileset).
+          if (isT) {
+            const div = roadDividerMask(map, tx, ty);
+            if (div !== 0) {
+              const bw = Math.max(2, Math.round(ts * 0.16));
+              const concrete = '#d8d2c4';
+              const ridge = '#3a3630'; // shadow line on the road-facing side, for depth
+              if (div & N) { ctx.fillStyle = concrete; ctx.fillRect(dx, dy, ts, bw); ctx.fillStyle = ridge; ctx.fillRect(dx, dy + bw - 1, ts, 1); }
+              if (div & S) { ctx.fillStyle = concrete; ctx.fillRect(dx, dy + ts - bw, ts, bw); ctx.fillStyle = ridge; ctx.fillRect(dx, dy + ts - bw, ts, 1); }
+              if (div & W) { ctx.fillStyle = concrete; ctx.fillRect(dx, dy, bw, ts); ctx.fillStyle = ridge; ctx.fillRect(dx + bw - 1, dy, 1, ts); }
+              if (div & E) { ctx.fillStyle = concrete; ctx.fillRect(dx + ts - bw, dy, bw, ts); ctx.fillStyle = ridge; ctx.fillRect(dx + ts - bw, dy, 1, ts); }
+            }
+          }
 
           // Elevated deck (overpass): drawn LIFTED above the road below with a drop shadow, so it
           // reads as grade-separated. Keys through the same atlas tiles as at-grade elev/promenade

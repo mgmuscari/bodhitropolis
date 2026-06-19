@@ -14,6 +14,8 @@ import {
   checkParcelAgreement,
   transportMask,
   transportCategory,
+  roadDividerMask,
+  isLimitedAccessBoundary,
   parcelTouchesRoad,
   demolishParcel,
   demolishTransportAt,
@@ -854,6 +856,71 @@ describe('transportMask: transit category connections', () => {
     map.setBuilt(2, 3, BuiltKind.Promenade); // south promenade — connects
     map.setBuilt(1, 2, BuiltKind.RoadStreet); // west road — no connect
     expect(transportMask(map, 2, 2)).toBe(S);
+  });
+});
+
+describe('isLimitedAccessBoundary (freeway ↔ surface-road divider rule)', () => {
+  it('is true between a freeway and a surface road (avenue/street), either order', () => {
+    expect(isLimitedAccessBoundary(BuiltKind.RoadHighway, BuiltKind.RoadAvenue)).toBe(true);
+    expect(isLimitedAccessBoundary(BuiltKind.RoadStreet, BuiltKind.RoadHighway)).toBe(true);
+    expect(isLimitedAccessBoundary(BuiltKind.RoadHighway, BuiltKind.QuietStreet)).toBe(true);
+  });
+
+  it('is false freeway↔freeway and surface↔surface (no barrier where they truly merge)', () => {
+    expect(isLimitedAccessBoundary(BuiltKind.RoadHighway, BuiltKind.RoadHighway)).toBe(false);
+    expect(isLimitedAccessBoundary(BuiltKind.RoadAvenue, BuiltKind.RoadStreet)).toBe(false);
+  });
+
+  it('is false at a ramp — the ramp IS the legal crossing, not a barrier', () => {
+    expect(isLimitedAccessBoundary(BuiltKind.RoadHighway, BuiltKind.RoadRamp)).toBe(false);
+    expect(isLimitedAccessBoundary(BuiltKind.RoadRamp, BuiltKind.RoadAvenue)).toBe(false);
+  });
+
+  it('is false against non-road tiles (that edge is a curb, not a divider)', () => {
+    expect(isLimitedAccessBoundary(BuiltKind.RoadHighway, BuiltKind.None)).toBe(false);
+    expect(isLimitedAccessBoundary(BuiltKind.RoadHighway, BuiltKind.HouseSingle)).toBe(false);
+    expect(isLimitedAccessBoundary(BuiltKind.RoadHighway, BuiltKind.Rail)).toBe(false);
+  });
+});
+
+describe('roadDividerMask', () => {
+  it('is 0 on a non-road tile', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.Rail);
+    expect(roadDividerMask(map, 2, 2)).toBe(0);
+  });
+
+  it('marks the edge where a freeway abuts a frontage avenue, from BOTH sides', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.RoadHighway);
+    map.setBuilt(3, 2, BuiltKind.RoadAvenue); // east frontage road
+    expect(roadDividerMask(map, 2, 2)).toBe(E); // freeway sees the barrier east
+    expect(roadDividerMask(map, 3, 2)).toBe(W); // avenue sees it west (symmetric)
+  });
+
+  it('does NOT mark freeway↔freeway or surface↔surface edges', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.RoadHighway);
+    map.setBuilt(2, 1, BuiltKind.RoadHighway); // north: another freeway lane — merges
+    map.setBuilt(1, 2, BuiltKind.RoadAvenue); // west: frontage road — barrier
+    map.setBuilt(2, 3, BuiltKind.None); // south: open land — curb, not divider
+    expect(roadDividerMask(map, 2, 2)).toBe(W);
+  });
+
+  it('leaves a ramp edge open (no barrier — it is the on/off crossing)', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.RoadHighway);
+    map.setBuilt(2, 1, BuiltKind.RoadRamp); // north ramp — the gap
+    map.setBuilt(3, 2, BuiltKind.RoadAvenue); // east frontage — barrier
+    expect(roadDividerMask(map, 2, 2)).toBe(E);
+  });
+
+  it('ignores out-of-bounds neighbours', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(0, 0, BuiltKind.RoadHighway);
+    map.setBuilt(1, 0, BuiltKind.RoadAvenue); // east frontage
+    map.setBuilt(0, 1, BuiltKind.RoadStreet); // south frontage
+    expect(roadDividerMask(map, 0, 0)).toBe(E | S);
   });
 });
 
