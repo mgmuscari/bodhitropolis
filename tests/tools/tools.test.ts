@@ -13,6 +13,7 @@ import {
   hashWorld,
   placeParcel,
   placeTransport,
+  overpassAt,
   checkParcelAgreement,
 } from '../../src/engine/fabric';
 import { GameMap, Water } from '../../src/engine/map';
@@ -587,5 +588,46 @@ describe('plant median (road-diet upgrade — only on an interior through lane)'
     expect(applyTool(world, unlocked(), toolDef('convert-11')!, 7, 7).ok).toBe(true);
     expect(world.map.getBuilt(7, 7)).toBe(BuiltKind.PlantedMedian);
     expect(world.map.getParcel(7, 7)).toBe(0); // conversion never touches parcels
+  });
+});
+
+describe('overpass placement: an elevated kind built over a road decks it (grade-separated)', () => {
+  function promenadeTech(): TechState {
+    const t = freshTech(1000);
+    t.unlock('walkable-streets');
+    t.unlock('road-diets');
+    t.unlock('quiet-streets');
+    t.unlock('urban-promenades'); // grants Promenade (build-9)
+    return t;
+  }
+
+  it('building a Promenade OVER a road places an overpass deck (the road survives)', () => {
+    const world = freshWorld();
+    placeTransport(world.map, 5, 5, BuiltKind.RoadHighway);
+    const tech = promenadeTech();
+    expect(previewTool(world, tech, toolDef('build-9')!, 5, 5).valid).toBe(true);
+    expect(applyTool(world, tech, toolDef('build-9')!, 5, 5).ok).toBe(true);
+    expect(overpassAt(world.map, 5, 5)).toBe(BuiltKind.Promenade); // decked above
+    expect(world.map.getBuilt(5, 5)).toBe(BuiltKind.RoadHighway); // road below remains (grade-separated)
+  });
+
+  it('building a Promenade on OPEN land still places it at grade (no deck)', () => {
+    const world = freshWorld();
+    const tech = promenadeTech();
+    expect(applyTool(world, tech, toolDef('build-9')!, 2, 2).ok).toBe(true);
+    expect(world.map.getBuilt(2, 2)).toBe(BuiltKind.Promenade); // at grade
+    expect(overpassAt(world.map, 2, 2)).toBe(0); // no deck
+  });
+
+  it('bulldoze removes the overpass deck first, leaving the road below', () => {
+    const world = freshWorld();
+    placeTransport(world.map, 5, 5, BuiltKind.RoadHighway);
+    const tech = promenadeTech();
+    applyTool(world, tech, toolDef('build-9')!, 5, 5); // deck a promenade overpass
+    expect(applyTool(world, tech, toolDef('bulldoze')!, 5, 5).ok).toBe(true);
+    expect(overpassAt(world.map, 5, 5)).toBe(0); // deck gone first
+    expect(world.map.getBuilt(5, 5)).toBe(BuiltKind.RoadHighway); // road remains
+    expect(applyTool(world, tech, toolDef('bulldoze')!, 5, 5).ok).toBe(true);
+    expect(world.map.getBuilt(5, 5)).toBe(0); // a second bulldoze clears the road
   });
 });

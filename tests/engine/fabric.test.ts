@@ -20,6 +20,12 @@ import {
   TRANSPORT_CONVERSIONS,
   canConvertTransport,
   convertTransport,
+  isOverpassKind,
+  canPlaceOverpass,
+  placeOverpass,
+  removeOverpassAt,
+  overpassAt,
+  deckMask,
   REZONE_TARGETS,
   canConvertParcel,
   convertParcel,
@@ -1111,5 +1117,72 @@ describe('freeway corridors bridge water (Maddy 2026-06-18: freeway at 85,86 ski
       if (m.built[i] === BuiltKind.RoadHighway && m.water[i] !== Water.None) bridges++;
     }
     expect(bridges).toBeGreaterThan(0);
+  });
+});
+
+describe('overpasses (the elevated deck layer — grade-separated transit over roads)', () => {
+  it('isOverpassKind is the elevated transit set (ElevatedRail, Promenade)', () => {
+    expect(isOverpassKind(BuiltKind.ElevatedRail)).toBe(true);
+    expect(isOverpassKind(BuiltKind.Promenade)).toBe(true);
+    expect(isOverpassKind(BuiltKind.RoadStreet)).toBe(false);
+    expect(isOverpassKind(BuiltKind.HouseSingle)).toBe(false);
+  });
+
+  it('decks an overpass OVER a road/freeway/rail, leaving the road below intact', () => {
+    const m = new GameMap(8, 8);
+    placeTransport(m, 3, 3, BuiltKind.RoadHighway);
+    expect(canPlaceOverpass(m, 3, 3, BuiltKind.Promenade)).toBe(true);
+    expect(placeOverpass(m, 3, 3, BuiltKind.Promenade)).toBe(true);
+    expect(overpassAt(m, 3, 3)).toBe(BuiltKind.Promenade); // the deck
+    expect(m.getBuilt(3, 3)).toBe(BuiltKind.RoadHighway); // the road UNDER it survives (grade-separated)
+  });
+
+  it('refuses an overpass over open land (nothing to grade-separate) or a building', () => {
+    const m = new GameMap(8, 8);
+    expect(canPlaceOverpass(m, 2, 2, BuiltKind.Promenade)).toBe(false); // open land
+    m.built[m.idx(4, 4)] = BuiltKind.HouseSingle;
+    expect(canPlaceOverpass(m, 4, 4, BuiltKind.ElevatedRail)).toBe(false); // a building, not a road
+  });
+
+  it('refuses a second deck on an already-decked tile, and a non-overpass kind', () => {
+    const m = new GameMap(8, 8);
+    placeTransport(m, 5, 5, BuiltKind.RoadAvenue);
+    expect(placeOverpass(m, 5, 5, BuiltKind.ElevatedRail)).toBe(true);
+    expect(canPlaceOverpass(m, 5, 5, BuiltKind.Promenade)).toBe(false); // deck occupied
+    expect(canPlaceOverpass(m, 5, 5, BuiltKind.RoadStreet)).toBe(false); // not an overpass kind
+  });
+
+  it('removeOverpassAt clears the deck and leaves the road below', () => {
+    const m = new GameMap(8, 8);
+    placeTransport(m, 6, 6, BuiltKind.RoadStreet);
+    placeOverpass(m, 6, 6, BuiltKind.Promenade);
+    expect(removeOverpassAt(m, 6, 6)).toBe(true);
+    expect(overpassAt(m, 6, 6)).toBe(0); // deck cleared
+    expect(m.getBuilt(6, 6)).toBe(BuiltKind.RoadStreet); // road below remains
+    expect(removeOverpassAt(m, 6, 6)).toBe(false); // nothing left to remove
+  });
+
+  it('the deck layer is HASHED: an overpass changes the snapshot; equal content is equal', () => {
+    const a = new GameMap(8, 8);
+    const b = new GameMap(8, 8);
+    placeTransport(a, 3, 3, BuiltKind.RoadHighway);
+    placeTransport(b, 3, 3, BuiltKind.RoadHighway);
+    expect(a.snapshot()).toBe(b.snapshot()); // identical so far
+    placeOverpass(a, 3, 3, BuiltKind.Promenade);
+    expect(a.snapshot()).not.toBe(b.snapshot()); // the deck is part of the world hash
+    placeOverpass(b, 3, 3, BuiltKind.Promenade);
+    expect(a.snapshot()).toBe(b.snapshot()); // equal content → equal snapshot
+  });
+
+  it('deckMask connects same-category decks (a continuous elevated line)', () => {
+    const m = new GameMap(8, 8);
+    for (let x = 2; x <= 5; x++) {
+      placeTransport(m, x, 4, BuiltKind.RoadHighway);
+      placeOverpass(m, x, 4, BuiltKind.Promenade);
+    }
+    // a mid-deck tile connects E+W to its deck neighbours (bits 2 + 8 = 10)
+    expect(deckMask(m, 3, 4)).toBe(0b1010);
+    // a bare road tile (no deck) has no deck mask
+    expect(deckMask(m, 6, 4)).toBe(0);
   });
 });

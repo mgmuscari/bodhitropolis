@@ -9,7 +9,7 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask, isRoadKind } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
@@ -584,6 +584,20 @@ export class Renderer {
           const wide = wideRoadAt(map, tx, ty);
           const builtTile = this.atlas.get(builtRenderKey(built, mask, pos, tier, wide));
           if (builtTile) ctx.drawImage(builtTile, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
+
+          // Elevated deck (overpass): drawn LIFTED above the road below with a drop shadow, so it
+          // reads as grade-separated. Keys through the same atlas tiles as at-grade elev/promenade
+          // (deckMask over the deck layer), so no new keyspace.
+          const deck = map.deck[i]!;
+          if (deck !== 0) {
+            const deckTile = this.atlas.get(builtRenderKey(deck, deckMask(map, tx, ty), 'c', 0));
+            if (deckTile) {
+              const lift = Math.max(1, Math.round(ts * 0.2));
+              ctx.fillStyle = 'rgba(8, 6, 14, 0.32)'; // the overpass's shadow on the road
+              ctx.fillRect(dx + Math.round(ts * 0.1), dy + Math.round(ts * 0.12), ts, ts);
+              ctx.drawImage(deckTile, 0, 0, BASE_TILE, BASE_TILE, dx, dy - lift, ts, ts);
+            }
+          }
 
           // Power-line decoration: pure-visual ctx drawing (no atlas key). Every
           // DECISION is owned by decoration.ts — powerPoleAt picks the pole tiles,

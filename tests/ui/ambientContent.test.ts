@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { GameMap, Water } from '../../src/engine/map';
-import { ParcelStore, BuiltKind, hashWorld } from '../../src/engine/fabric';
+import { ParcelStore, BuiltKind, hashWorld, placeTransport, placeOverpass } from '../../src/engine/fabric';
 import { createRng } from '../../src/engine/rng';
 import { runPipeline } from '../../src/worldgen/pipeline';
 import { terrainStage } from '../../src/worldgen/terrain';
@@ -2628,5 +2628,22 @@ describe('canDrive on divided avenues (Maddy: avenues had the same lane-math pro
     expect(canDrive(m, 8, 4, 8, 5)).toBe(true); // street → north lane (crossing)
     expect(canDrive(m, 8, 5, 8, 6)).toBe(true); // across to the south lane
     expect(canDrive(m, 8, 6, 8, 7)).toBe(true); // out to the street on the far side
+  });
+});
+
+describe('promenade overpass lets peds traverse (incl. across a freeway)', () => {
+  it('an elevated promenade deck is ped substrate even over a freeway', () => {
+    const m = new GameMap(10, 10);
+    placeTransport(m, 5, 5, BuiltKind.RoadHighway);
+    expect(isPedSubstrate(m, 5, 5)).toBe(false); // a bare freeway is NOT walkable
+    placeOverpass(m, 5, 5, BuiltKind.Promenade);
+    expect(isPedSubstrate(m, 5, 5)).toBe(true); // the promenade overpass IS walkable across the freeway
+  });
+
+  it('an elevated RAIL deck is not a ped substrate (trains, not walkers)', () => {
+    const m = new GameMap(10, 10);
+    placeTransport(m, 5, 5, BuiltKind.RoadHighway);
+    placeOverpass(m, 5, 5, BuiltKind.ElevatedRail);
+    expect(isPedSubstrate(m, 5, 5)).toBe(false);
   });
 });

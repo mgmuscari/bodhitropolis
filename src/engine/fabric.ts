@@ -109,6 +109,9 @@ export type BuiltKind = (typeof BuiltKind)[keyof typeof BuiltKind];
 export const isRoadKind = (k: number): boolean => k >= 1 && k <= 3;
 /** A planted median (the road-diet green strip, 11): a transport-slot tile that carries NO traffic. */
 export const isPlantedMedian = (k: number): boolean => k === BuiltKind.PlantedMedian;
+/** Elevated transit that can deck OVER a road as an overpass: elevated rail (8) or promenade (9). */
+export const isOverpassKind = (k: number): boolean =>
+  k === BuiltKind.ElevatedRail || k === BuiltKind.Promenade;
 /** Any transport kind: classic roads/rail (1..4) or transit kinds (5..15). */
 export const isTransportKind = (k: number): boolean => k >= 1 && k <= 15;
 /** Any building kind across the widened 16..127 band (transport never overlaps). */
@@ -678,6 +681,62 @@ export function transportMask(map: GameMap, x: number, y: number): number {
     const ny = y + dy;
     if (!map.inBounds(nx, ny)) continue;
     if (transportCategory(map.getBuilt(nx, ny)) === selfCat) mask |= bit;
+  }
+  return mask;
+}
+
+/** The elevated deck (overpass) kind at (x, y), or 0 (none). Reads the second `deck` layer. */
+export function overpassAt(map: GameMap, x: number, y: number): number {
+  return map.inBounds(x, y) ? map.deck[map.idx(x, y)]! : 0;
+}
+
+/**
+ * True iff an overpass of `kind` can be DECKED at (x, y): `kind` is an elevated transit kind, the
+ * tile is in-bounds with an EMPTY deck, and the `built` layer below is a road/freeway/ramp/rail (the
+ * thing being grade-separated). Decking over open land or a building is refused — an overpass spans
+ * traffic, it isn't a free-standing viaduct.
+ */
+export function canPlaceOverpass(map: GameMap, x: number, y: number, kind: number): boolean {
+  if (!isOverpassKind(kind)) return false;
+  if (!map.inBounds(x, y)) return false;
+  const i = map.idx(x, y);
+  if (map.deck[i] !== 0) return false; // a tile decks at most once
+  const below = map.built[i]!;
+  return isRoadKind(below) || below === BuiltKind.RoadRamp || below === BuiltKind.Rail;
+}
+
+/** Deck an overpass at (x, y), writing only the `deck` layer (the road below is untouched). Returns
+ *  false (writing nothing) unless {@link canPlaceOverpass} holds. */
+export function placeOverpass(map: GameMap, x: number, y: number, kind: number): boolean {
+  if (!canPlaceOverpass(map, x, y, kind)) return false;
+  map.deck[map.idx(x, y)] = kind;
+  return true;
+}
+
+/** Remove the overpass deck at (x, y), leaving the road below. Returns false if there was no deck. */
+export function removeOverpassAt(map: GameMap, x: number, y: number): boolean {
+  if (!map.inBounds(x, y)) return false;
+  const i = map.idx(x, y);
+  if (map.deck[i] === 0) return false;
+  map.deck[i] = 0;
+  return true;
+}
+
+/**
+ * Autotiling connection mask for the DECK tile at (x, y): like {@link transportMask}, but over the
+ * `deck` layer — a deck tile connects (bit N=1/E=2/S=4/W=8) to a 4-neighbour deck tile of the SAME
+ * connection category (an elevated rail line, a promenade overpass). 0 on a tile with no deck.
+ */
+export function deckMask(map: GameMap, x: number, y: number): number {
+  if (!map.inBounds(x, y)) return 0;
+  const selfCat = transportCategory(map.deck[map.idx(x, y)]!);
+  if (selfCat === 0) return 0;
+  let mask = 0;
+  for (const [dx, dy, bit] of MASK_DIRS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    if (!map.inBounds(nx, ny)) continue;
+    if (transportCategory(map.deck[map.idx(nx, ny)]!) === selfCat) mask |= bit;
   }
   return mask;
 }
