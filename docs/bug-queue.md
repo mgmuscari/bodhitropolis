@@ -159,6 +159,33 @@ layer (non-deterministic).
   any overlay is up: a swatch per ramp endpoint / HOLC band with its label (top-left). Unified across
   eco/civic/redline/police via `OverlayLegend` + per-module `*Legend()`. Live-verified.
 
+### Travelers / trips batch (Maddy 2026-06-19)
+
+- ✅ **Traveler fuel +250% + more people on the street** (PR #114) — `FUEL_TANK` 600→2100 (travelers
+  reach farther); citizen spawn target was flat-capped at 120 so a populous city looked empty →
+  replaced with a SCALING cap = total occupancy / 3 (Maddy), `PED_CAP` 160→1200 (perf ceiling only),
+  `CITIZEN_SPAWN_PER_SUBSTEP` 2→4. Live: ~671 out (occ/3) vs 120, 61 FPS at 643 peds + 431 cars.
+- ✅ **Trip generation row-major upper-left bias** (PR pending) — `nearestOfCategory`/`nearestDemandTile`
+  scanned row-major with strict `<`, so score TIES (rampant early when uniform LV → score=distance)
+  always resolved to the first-scanned (upper-left) tile, clustering trips top-left. Fix: a direction-
+  neutral `tieHash` breaks ties (deterministic, no rng). Live: destination centroid now tracks the plot
+  centroid (no up-left pull). 
+- 🔴 **NE region spawns + immediately despawns travelers** (Maddy 2026-06-19) — travelers in the
+  northeast region spawn then despawn instantly. Likely a substrate/reachability issue there (homes
+  with no walkable neighbour, or an isolated/bridged mass whose citizens can't reach any stop → instant
+  respawn/despawn). Investigate next.
+- 🔴 **Cars arriving at FULL parking should re-route to nearest available parking** (Maddy 2026-06-19) —
+  a car that reaches a full lot (no free stall) should re-route to the nearest lot/curb with space,
+  rather than curb-dumping / failing where it is. Investigate `tryPark`/`parkOwnedCarSomewhere`/
+  `findLotStall`.
+- 🔴 **Power should distribute from the source OUTWARD** (Maddy 2026-06-19) — in a brownout (capacity <
+  demand), the plots NEAREST the power source should be powered first (distance-from-plant order),
+  not the current ascending-anchor order. `computePowerGrid` in `src/growth/power.ts`.
+- 🔵 **DEFERRED feature: civic overlay dimming + higher opacity** (Maddy 2026-06-19) — the civic (C)
+  overlay should use the same `dimBase` scrim as the power (U) / coverage (V) overlays + a higher fill
+  alpha, for legibility (it currently washes out against terrain). `civicOverlayContent.ts` +
+  `OverlaySource.dimBase` (the abstraction already exists). Record only.
+
 ### Pedestrian / vehicle agents (Maddy 2026-06-19)
 
 - 🔵 **DEFERRED feature: unhoused residents** (Maddy 2026-06-19) — model residents without housing: a

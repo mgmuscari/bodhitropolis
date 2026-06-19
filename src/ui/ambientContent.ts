@@ -1508,19 +1508,31 @@ export function walkPath(
   return null;
 }
 
+/** A direction-NEUTRAL spread hash of a tile index, for breaking distance/score TIES without the
+ *  upper-left bias a row-major scan + strict `<` produces (adjacent tiles hash far apart). Keeps
+ *  destination choice deterministic (no rng) — just unbiased across the map. Integer ops only
+ *  (allowlist-safe). */
+function tieHash(i: number): number {
+  return Math.imul(i ^ 0x9e3779b1, 0x85ebca6b) >>> 0;
+}
+
 /** The nearest demand tile (R/C/I/Civic via zoneTypeOf — a place a person walks to/from)
- *  within LASTMILE_RADIUS of (cx, cy), by Manhattan distance; null if none. */
+ *  within LASTMILE_RADIUS of (cx, cy), by Manhattan distance; null if none. Ties broken by tieHash
+ *  (not scan order) so equidistant choices don't all skew upper-left. */
 function nearestDemandTile(map: GameMap, cx: number, cy: number): { x: number; y: number } | null {
   let bx = -1;
   let by = -1;
   let bestD = 1e9;
+  let bestHash = 0;
   for (let y = cy - LASTMILE_RADIUS; y <= cy + LASTMILE_RADIUS; y++) {
     for (let x = cx - LASTMILE_RADIUS; x <= cx + LASTMILE_RADIUS; x++) {
       if (!map.inBounds(x, y)) continue;
       if (zoneTypeOf(map.built[map.idx(x, y)]!) === ZoneType.None) continue;
       const d = Math.abs(x - cx) + Math.abs(y - cy);
-      if (d < bestD) {
+      const h = tieHash(map.idx(x, y));
+      if (d < bestD || (d === bestD && h < bestHash)) {
         bestD = d;
+        bestHash = h;
         bx = x;
         by = y;
       }
@@ -1541,6 +1553,7 @@ export function nearestOfCategory(
   let bx = -1;
   let by = -1;
   let bestScore = 1e9;
+  let bestHash = 0;
   for (let y = cy - CITIZEN_TRIP_RADIUS; y <= cy + CITIZEN_TRIP_RADIUS; y++) {
     for (let x = cx - CITIZEN_TRIP_RADIUS; x <= cx + CITIZEN_TRIP_RADIUS; x++) {
       if (!map.inBounds(x, y)) continue;
@@ -1550,8 +1563,13 @@ export function nearestOfCategory(
       const d = Math.abs(x - cx) + Math.abs(y - cy);
       const lv = landValue ? sampleField(landValue, map.idx(x, y)) : 0;
       const score = d - (lv / LV_MAX) * LV_PULL;
-      if (score < bestScore) {
-        bestScore = score;
+      // Ties broken by tieHash, NOT scan order — else every equidistant choice skews upper-left
+      // (row-major + strict `<`), which clustered trips toward the map's top-left (Maddy).
+      const h = tieHash(map.idx(x, y));
+      const better = score < bestScore - 1e-9;
+      if (better || (score < bestScore + 1e-9 && h < bestHash)) {
+        if (better) bestScore = score;
+        bestHash = h;
         bx = x;
         by = y;
       }
