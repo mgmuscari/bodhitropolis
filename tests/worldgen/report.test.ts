@@ -184,8 +184,12 @@ describe('buildReport: real pipeline (terrain + moses)', () => {
       expect(r.preEra5Standing).not.toBeNull();
       expect(r.abandoned).not.toBeNull();
       expect(r.craters).not.toBeNull();
-      // Non-vacuous store<->chronicle identity (guarded to founded seeds).
-      expect(r.parcelsAlive).toBe(r.preEra5Standing! - r.abandoned! + r.craters!);
+      expect(r.organicAdded).not.toBeNull();
+      // Non-vacuous store<->chronicle identity (guarded to founded seeds). Organic growth is a NEW
+      // layer added after era 5, so it joins the identity as its own term.
+      expect(r.parcelsAlive).toBe(
+        r.preEra5Standing! - r.abandoned! + r.craters! + r.organicAdded!,
+      );
     });
 
     it(`seed "${seed}": shares are bounded and ordered; byKind sums to alive`, () => {

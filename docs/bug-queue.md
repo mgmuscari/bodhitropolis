@@ -258,14 +258,16 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
   Live layer, non-hashed; no transcendental Math (stays on the pure-ui allowlist). Live-verified: a
   steady source yields a clean downwind plume (250→189 over 6 tiles), zero upwind leakage; wind
   varies by seed.
-- 🔵 **DEFERRED feature: block-by-block organic growth** (Maddy 2026-06-18) — worldgen should grow the
-  city BLOCK BY BLOCK outward from seeds — the central districts AND the ENDS of transport lines
-  (bridge landings, freeway ends/ramps) — so settlement accretes organically along/from infrastructure
-  rather than the current per-era grid fill. Growth fronts: (1) central districts densify/expand
-  outward; (2) transport termini (bridges, freeways) seed new blocks at their ends. A worldgen
-  (hashed) growth-model redesign — a different accretion pattern than today's era-based grids; would
-  compose with the satellite/bridge masses (an exurb grows out from its bridgehead) and the redline
-  grade (growth biased by district). Not started.
+- ✅ **Block-by-block organic growth** (PR pending) — new `eraOrganicGrowth` (the newest layer, after
+  era5): settlement ACCRETES outward from the ENDS of transport lines (freeway ends, bridge landings,
+  arterial tips) into the open land beyond — `terminusOutward` finds termini facing open land + pointing
+  away from the core, each seeds a small organic cluster (stub + rungs + houses via fillFrontage),
+  spaced + capped. Composes with the satellite/bridge masses; stays one connected network; deterministic,
+  N=120-gated. The BlightReport tracks it as its own term (`organicAdded`) and excludes it from the
+  historical core/periphery disinvestment gradient (the report measures the inherited wound, not new
+  growth). Live-verified: 8 clusters / +305 parcels on the default seed. NOTE: this is the accretion-
+  from-termini half; "central districts densify/expand outward" is already served by the live
+  occupancy/revival densification loop. Tunables: organicSeeds/organicReach/organicBlocks/organicParcels.
 - ✅ **Freeway skipped a tile for water (gap at 85,86)** (PR pending) — the era3 highway carve called
   `placeTransport`, which refuses water, so a corridor crossing an inlet left a gap in the deck. Added
   a `placeBridge` engine primitive (decks transport OVER water, keeping the water layer underneath — a

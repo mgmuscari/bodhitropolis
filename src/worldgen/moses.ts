@@ -100,6 +100,14 @@ export interface MosesParams {
   satelliteMaxBridge: number; // max crossing length to bridge a satellite onto ANOTHER land mass
   satelliteBridgeCount: number; // how many other land masses to bridge the city onto
   satelliteMinMassSize: number; // min land-mass size (tiles) worth bridging to
+  // Organic growth (eraOrganicGrowth): settlement ACCRETES outward from the ENDS of transport lines
+  // (freeway ends, bridge landings, arterial tips) into the open land beyond, block by block.
+  organicSeeds: number; // max growth clusters seeded from transport termini
+  organicMinReach: number; // min contiguous open-land run beyond a terminus to seed growth there
+  organicReach: number; // how far the accretion stub extends into the open land
+  organicBlocks: number; // perpendicular street rungs each side of the stub (the cluster's depth)
+  organicSpacing: number; // growth clusters must be at least this far (Manhattan) from each other
+  organicParcels: number; // houses (a few strips) filling each cluster's frontage
 }
 
 export const DEFAULT_MOSES_PARAMS: MosesParams = {
@@ -163,6 +171,12 @@ export const DEFAULT_MOSES_PARAMS: MosesParams = {
   satelliteMaxBridge: 30,
   satelliteBridgeCount: 2,
   satelliteMinMassSize: 250,
+  organicSeeds: 8,
+  organicMinReach: 5,
+  organicReach: 9,
+  organicBlocks: 2,
+  organicSpacing: 12,
+  organicParcels: 60,
 };
 
 // --- Shared state --------------------------------------------------------
@@ -1689,6 +1703,145 @@ export function eraSatellites(world: WorldState, rng: Rng, p: MosesParams, state
   );
 }
 
+// --- Organic growth: accretion from transport termini --------------------
+
+const ORGANIC_DIRS: ReadonlyArray<readonly [number, number]> = [
+  [0, -1],
+  [1, 0],
+  [0, 1],
+  [-1, 0],
+];
+
+/** Contiguous OPEN (land + unbuilt) tiles beyond (sx,sy) in (dx,dy), up to `max`. */
+function openReach(map: GameMap, sx: number, sy: number, dx: number, dy: number, max: number): number {
+  let c = 0;
+  let x = sx + dx;
+  let y = sy + dy;
+  while (c < max && map.inBounds(x, y)) {
+    const i = map.idx(x, y);
+    if (map.water[i] !== Water.None || map.built[i] !== BuiltKind.None) break;
+    c++;
+    x += dx;
+    y += dy;
+  }
+  return c;
+}
+
+/**
+ * If (x,y) is a TRANSPORT TERMINUS facing open land — a highway/avenue tile that is the END of its
+ * line (a road behind it, open land ahead) with a long enough open-land run beyond — return the
+ * outward unit direction with the most room to grow into; else null. Bridge landings qualify (a
+ * freeway tip reaching land beyond the water). This is the seam Maddy named: settlement accretes
+ * from the ends of transport lines, not from a uniform grid fill.
+ */
+export function terminusOutward(
+  map: GameMap,
+  x: number,
+  y: number,
+  minReach: number,
+): [number, number] | null {
+  const k = map.built[map.idx(x, y)]!;
+  if (k !== BuiltKind.RoadHighway && k !== BuiltKind.RoadAvenue) return null;
+  let best: [number, number] | null = null;
+  let bestRun = minReach - 1;
+  for (const [dx, dy] of ORGANIC_DIRS) {
+    const bx = x - dx;
+    const by = y - dy;
+    // The line must continue BEHIND (so this is an end, not a mid-line edge).
+    if (!map.inBounds(bx, by) || !isRoadKind(map.built[map.idx(bx, by)]!)) continue;
+    const run = openReach(map, x, y, dx, dy, minReach + 6);
+    if (run >= minReach && run > bestRun) {
+      bestRun = run;
+      best = [dx, dy];
+    }
+  }
+  return best;
+}
+
+/**
+ * Grow one organic settlement cluster outward from a terminus at (sx,sy) in (dx,dy): a street stub
+ * into the open land, perpendicular rungs every blockSpacing (the cluster's depth), then houses
+ * filling the new frontage in random order (vacancy scatters). The stub roots adjacent to the seed
+ * road so the cluster joins the existing network (connectivity preserved). growArm self-limits at the
+ * first non-placeable tile, so rungs stop cleanly at terrain or the existing city. Returns the seed
+ * coords on success (for spacing), or null if the stub could not start.
+ */
+function growOrganicCluster(
+  map: GameMap,
+  parcels: ParcelStore,
+  sx: number,
+  sy: number,
+  dx: number,
+  dy: number,
+  p: MosesParams,
+  rng: Rng,
+): boolean {
+  const startX = sx + dx;
+  const startY = sy + dy;
+  const bbox: BBox = { x0: startX, y0: startY, x1: startX, y1: startY };
+  if (!roadAt(map, startX, startY, BuiltKind.RoadStreet, bbox)) return false; // connects to the seed road
+  const reach = growArm(map, startX, startY, dx, dy, p.organicReach, BuiltKind.RoadStreet, bbox);
+  const px = -dy; // perpendicular unit (rungs)
+  const py = dx;
+  for (let k = 0; k <= reach; k += p.blockSpacing) {
+    const rx = startX + dx * k;
+    const ry = startY + dy * k;
+    if (!map.inBounds(rx, ry) || !isRoadKind(map.built[map.idx(rx, ry)]!)) continue;
+    growArm(map, rx, ry, px, py, p.organicBlocks * p.blockSpacing, BuiltKind.RoadStreet, bbox);
+    growArm(map, rx, ry, -px, -py, p.organicBlocks * p.blockSpacing, BuiltKind.RoadStreet, bbox);
+  }
+  const roadTiles = collectRoadTiles(map, bbox.x0, bbox.y0, bbox.x1, bbox.y1);
+  shuffleInPlace(roadTiles, rng.fork('order'));
+  const kind = (i: number): BuiltKind =>
+    i % 9 === 0 ? BuiltKind.CommercialStrip : BuiltKind.HouseSingle;
+  fillFrontage(map, parcels, roadTiles, rng.fork('fill'), p.organicParcels, kind);
+  return true;
+}
+
+/**
+ * Era — organic growth. Settlement ACCRETES block-by-block OUTWARD from the ENDS of transport lines
+ * (freeway ends, bridge landings, arterial tips) into the open land beyond, rather than only as
+ * uniform per-era grids. Each terminus facing open land — and pointing AWAY from the core (fringe
+ * accretion, not interior infill) — seeds a small organic cluster (stub + rungs + houses); clusters
+ * are spaced apart and capped. Composes with the satellite/bridge masses (a bridgehead's freeway tip
+ * grows a settlement on the far shore) and stays a single connected road network (each cluster roots
+ * on an existing road). Deterministic; no-ops if never founded.
+ */
+export function eraOrganicGrowth(world: WorldState, rng: Rng, p: MosesParams, state: MosesState): void {
+  if (!state.founded) return;
+  const { map, parcels } = world;
+  const before = parcels.aliveCount();
+
+  const seeds: Array<{ x: number; y: number; dx: number; dy: number }> = [];
+  for (let y = 0; y < map.height; y++) {
+    for (let x = 0; x < map.width; x++) {
+      const out = terminusOutward(map, x, y, p.organicMinReach);
+      if (!out) continue;
+      // Grow only OUTWARD (away from the core) — fringe accretion, not interior infill. This keeps
+      // new growth on low-grade land that survives era 5, so it never inverts the abandonment gradient.
+      if (out[0]! * (x - state.siteX) + out[1]! * (y - state.siteY) <= 0) continue;
+      seeds.push({ x, y, dx: out[0]!, dy: out[1]! });
+    }
+  }
+
+  const centers: Array<{ x: number; y: number }> = [];
+  let grown = 0;
+  let n = 0;
+  for (const s of seeds) {
+    if (grown >= p.organicSeeds) break;
+    if (centers.some((c) => Math.abs(c.x - s.x) + Math.abs(c.y - s.y) < p.organicSpacing)) continue;
+    if (growOrganicCluster(map, parcels, s.x, s.y, s.dx, s.dy, p, rng.fork(`organic${n}`))) {
+      centers.push({ x: s.x, y: s.y });
+      grown++;
+    }
+    n++;
+  }
+
+  world.log.push(
+    `organic growth: ${grown} clusters from transport termini, +${parcels.aliveCount() - before} parcels`,
+  );
+}
+
 // --- Era 5: disinvestment ------------------------------------------------
 
 /** Mean redline grade (0..255) over parcel `i`'s footprint. */
@@ -1811,6 +1964,11 @@ export function mosesCenturyStage(params: Partial<MosesParams> = {}): WorldgenSt
       era4Suburbs(world, rng.fork('era4'), p, state);
       eraSatellites(world, rng.fork('satellites'), p, state);
       era5Disinvestment(world, rng.fork('era5'), p, state);
+      // Organic accretion is the NEWEST layer — recent settlement at the transport frontier, laid
+      // AFTER the historical disinvestment so it is pristine (not retroactively decayed) and grows
+      // only OUTWARD into the fringe. It joins the world as its own chronicle term (the report's
+      // store<->chronicle identity accounts for it) and leaves era-5's abandonment gradient intact.
+      eraOrganicGrowth(world, rng.fork('organic'), p, state);
     },
   };
 }

@@ -19,6 +19,8 @@ import {
   era3Highways,
   era4Suburbs,
   eraSatellites,
+  eraOrganicGrowth,
+  terminusOutward,
   era5Disinvestment,
   mosesCenturyStage,
   placeParkingField,
@@ -1346,3 +1348,49 @@ describe('otherMassEntries — finds other land masses to bridge to (Maddy feat)
     expect(otherMassEntries(m, 2, 8, distToRoad, 200).length).toBe(0); // too small to bother bridging
   });
 })
+
+describe('eraOrganicGrowth (Maddy: settlement accretes from transport termini)', () => {
+  it('terminusOutward finds a line END facing open land and returns the outward dir', () => {
+    const m = new GameMap(24, 24);
+    for (let x = 5; x <= 12; x++) m.built[m.idx(x, 12)] = BuiltKind.RoadHighway; // a horizontal line
+    expect(terminusOutward(m, 12, 12, 5)).toEqual([1, 0]); // east end → grow east (open to x=23)
+    expect(terminusOutward(m, 5, 12, 5)).toEqual([-1, 0]); // west end → grow west (open x=0..4)
+    expect(terminusOutward(m, 8, 12, 5)).toBeNull(); // a mid-line tile is not a terminus
+  });
+
+  it('terminusOutward rejects an end without enough open land beyond (e.g. water)', () => {
+    const m = new GameMap(16, 16);
+    for (let x = 4; x <= 10; x++) m.built[m.idx(x, 8)] = BuiltKind.RoadHighway;
+    m.water[m.idx(11, 8)] = Water.Ocean; // the east end faces water immediately
+    expect(terminusOutward(m, 10, 8, 5)).toBeNull(); // no room → no growth here
+  });
+
+  it('accretes a settlement outward from a freeway end into open land, staying connected', () => {
+    const map = new GameMap(48, 48);
+    const world: WorldState = { map, parcels: new ParcelStore(), seed: 'grow', log: [] };
+    for (let x = 6; x <= 24; x++) map.built[map.idx(x, 24)] = BuiltKind.RoadHighway; // line, open land E/W
+    const state = createMosesState();
+    state.founded = true;
+    state.siteX = 6;
+    state.siteY = 24;
+    const before = world.parcels.aliveCount();
+    eraOrganicGrowth(world, createRng('grow').fork('organic'), DEFAULT_MOSES_PARAMS, state);
+    expect(world.parcels.aliveCount()).toBeGreaterThan(before); // houses accreted
+    expect(isRoadKind(map.built[map.idx(25, 24)]!)).toBe(true); // a street stub grew east of the end
+    const net = roadNetwork(map);
+    expect(net.largestComponent).toBe(net.total); // the new fabric joins the existing network
+  });
+
+  it('is a no-op on an unfounded state', () => {
+    const map = new GameMap(16, 16);
+    const world: WorldState = { map, parcels: new ParcelStore(), seed: 'x', log: [] };
+    eraOrganicGrowth(world, createRng('x').fork('organic'), DEFAULT_MOSES_PARAMS, createMosesState());
+    expect(world.parcels.aliveCount()).toBe(0);
+  });
+
+  it('the full stage logs the organic-growth pass', () => {
+    for (const seed of SEEDS) {
+      expect(runFullStage(seed).log.some((l) => l.startsWith('organic growth:'))).toBe(true);
+    }
+  });
+});
