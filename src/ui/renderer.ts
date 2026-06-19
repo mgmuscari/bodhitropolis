@@ -9,7 +9,7 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask, freewayMedianAxis } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask, freewayMedianAxis, freewayAxis } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import {
@@ -777,6 +777,25 @@ export class Renderer {
               if (curb & S) { ctx.fillStyle = walk; ctx.fillRect(dx, dy + ts - sw, ts, sw); ctx.fillStyle = gutter; ctx.fillRect(dx, dy + ts - sw, ts, 1); }
               if (curb & W) { ctx.fillStyle = walk; ctx.fillRect(dx, dy, sw, ts); ctx.fillStyle = gutter; ctx.fillRect(dx + sw - 1, dy, 1, ts); }
               if (curb & E) { ctx.fillStyle = walk; ctx.fillRect(dx + ts - sw, dy, sw, ts); ctx.fillStyle = gutter; ctx.fillRect(dx + ts - sw, dy, 1, ts); }
+            }
+
+            // Freeway LANE LINE: a dashed gold line ALONG the corridor on each freeway tile, so the
+            // (wide, blank-asphalt) freeway reads as lanes. Drawn before the median, which covers the
+            // spine tile's line; the flank lanes keep theirs.
+            if (built === BuiltKind.RoadHighway) {
+              const fAxis = freewayAxis(map, tx, ty);
+              if (fAxis !== null) {
+                ctx.fillStyle = '#cebe6e'; // freeway lane gold
+                const dash = Math.max(1, Math.round(ts * 0.16));
+                const lw = Math.max(1, Math.round(ts * 0.06));
+                if (fAxis === 'v') {
+                  const lx = Math.floor(dx + ts / 2 - lw / 2);
+                  for (let yy = 0; yy < ts; yy += dash * 2) ctx.fillRect(lx, dy + yy, lw, dash);
+                } else {
+                  const ly = Math.floor(dy + ts / 2 - lw / 2);
+                  for (let xx = 0; xx < ts; xx += dash * 2) ctx.fillRect(dx + xx, ly, dash, lw);
+                }
+              }
             }
 
             // Freeway MEDIAN: a jersey barrier down the centre spine tile of the 3-wide corridor,

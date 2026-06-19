@@ -845,6 +845,31 @@ export function freewayMedianAxis(map: GameMap, x: number, y: number): 'v' | 'h'
   return null;
 }
 
+/**
+ * The lengthwise (travel) axis of a freeway tile — 'v' (N-S) or 'h' (E-W), whichever freeway run is
+ * longer through (x, y); null on a non-freeway or an exactly-square run (interchange centre). Used to
+ * lay a dashed lane line ALONG the corridor, so freeways read as lanes instead of blank asphalt
+ * (Maddy 2026-06-19: "freeways do not have lane markings"). Render-only.
+ */
+export function freewayAxis(map: GameMap, x: number, y: number): 'v' | 'h' | null {
+  if (map.getBuilt(x, y) !== BuiltKind.RoadHighway) return null;
+  const hwy = (px: number, py: number): boolean =>
+    map.inBounds(px, py) && map.getBuilt(px, py) === BuiltKind.RoadHighway;
+  let wl = 0;
+  while (hwy(x - wl - 1, y)) wl++;
+  let wr = 0;
+  while (hwy(x + wr + 1, y)) wr++;
+  let nu = 0;
+  while (hwy(x, y - nu - 1)) nu++;
+  let nd = 0;
+  while (hwy(x, y + nd + 1)) nd++;
+  const ewRun = wl + wr + 1;
+  const nsRun = nu + nd + 1;
+  if (nsRun > ewRun) return 'v';
+  if (ewRun > nsRun) return 'h';
+  return null;
+}
+
 /** The elevated deck (overpass) kind at (x, y), or 0 (none). Reads the second `deck` layer. */
 export function overpassAt(map: GameMap, x: number, y: number): number {
   return map.inBounds(x, y) ? map.deck[map.idx(x, y)]! : 0;

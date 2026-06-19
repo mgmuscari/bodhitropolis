@@ -19,6 +19,7 @@ import {
   roadCurbMask,
   rampMarkingMask,
   freewayMedianAxis,
+  freewayAxis,
   parcelTouchesRoad,
   demolishParcel,
   demolishTransportAt,
@@ -1023,6 +1024,34 @@ describe('freewayMedianAxis (jersey barrier down the centre tile, lengthwise)', 
     }
     map.setBuilt(3, 3, BuiltKind.RoadRamp); // a crossing on the spine
     expect(freewayMedianAxis(map, 3, 3)).toBe(null); // no median at the ramp itself
+  });
+});
+
+describe('freewayAxis (lengthwise axis for freeway lane lines)', () => {
+  it('is null on a non-freeway tile and on a lone 1×1 highway tile', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.RoadStreet);
+    expect(freewayAxis(map, 2, 2)).toBe(null);
+    const lone = new GameMap(5, 5);
+    lone.setBuilt(2, 2, BuiltKind.RoadHighway); // no run either way
+    expect(freewayAxis(lone, 2, 2)).toBe(null);
+  });
+
+  it('is vertical on a flank of a vertical freeway, horizontal on a horizontal one', () => {
+    const v = new GameMap(7, 7);
+    for (let y = 0; y < 7; y++) {
+      v.setBuilt(2, y, BuiltKind.RoadHighway);
+      v.setBuilt(3, y, BuiltKind.RoadHighway);
+      v.setBuilt(4, y, BuiltKind.RoadHighway);
+    }
+    expect(freewayAxis(v, 2, 3)).toBe('v'); // a flank lane → runs vertical
+    const h = new GameMap(7, 7);
+    for (let x = 0; x < 7; x++) {
+      h.setBuilt(x, 2, BuiltKind.RoadHighway);
+      h.setBuilt(x, 3, BuiltKind.RoadHighway);
+      h.setBuilt(x, 4, BuiltKind.RoadHighway);
+    }
+    expect(freewayAxis(h, 3, 2)).toBe('h');
   });
 });
 
