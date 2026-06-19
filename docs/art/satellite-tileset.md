@@ -102,6 +102,22 @@ for *any* arbitrary graph (a serialization bug — even a minimal standard SDXL 
 `$COMFYUI_URL/view?filename=<f>&type=output`. `COMFYUI_URL=https://comfyui.tailea7e08.ts.net`. This
 is fully scriptable (no UI needed); the first probe batch was generated this way.
 
+**Probe learnings (2026-06-19, v1+v2):**
+1. **Edge-to-edge is explicit.** "road reaches all four edges / fills the frame edge to edge, no
+   margins, no sidewalk" gives tile-connecting roads; a scene prompt ("intersection, crosswalks")
+   gives a centered traffic-circle *picture* that can't tile (Maddy's v1 note). v2 roads ran
+   edge-to-edge correctly.
+2. **"Bold black outline" is for BUILDINGS only.** On tesselable terrain it makes the model draw a
+   border AROUND the tile (v2 grass got framed → won't tile). For terrain/roads: "no border,
+   seamless, fills edge to edge" and DROP outline language.
+3. **Top-down needs reinforcing.** Single-building prompts drift to 3/4 facade view (v1 houses).
+   Prompt "roof seen from directly above" and/or generate the building as part of an aerial block.
+4. **The dense-block tile is the strongest unit** (v1 patch, v2 block): aerial Oakland block with
+   edge-to-edge streets — tiles as texture and matches the segmented-multi-tile path. Roads as their
+   own art need the full 16 autotile-mask variants (heavy) — the procedural autotiler may stay, just
+   restyled to the satellite palette.
+5. **Roads came out drab grey-on-grey** and lost the center line — needs more color/contrast.
+
 Per-category subject prompts:
 - **Terrain (grass)**: "seamless tileable grass / lawn texture, parks green, …"
 - **Terrain (water)**: "seamless tileable water, bay blue-green, gentle ripples, …"
