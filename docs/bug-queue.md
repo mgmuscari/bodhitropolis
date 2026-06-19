@@ -219,7 +219,8 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
     median in the road's width band so the flanking carriageways stay one-way; engine-pure
     `isInteriorRoadLane` gates `convert-11` to interior lanes only; reversible. Live-verified: medians
     inert (0 traffic), carriageways still flow (92 cars), renders as a green center strip.
-  🔮 FUTURE: ramps generalize to overpasses.
+  (Ramps generalize to overpasses — ✅ DONE via the `map.deck` elevation layer; see the overpass entry
+  under the freeway-bridge item below.)
 - ✅ **Avenues block cross traffic at intersections (the "streetcar" bug)** (PR pending) — the blocker
   was the tram tile: a `Streetcar` (transit) tile isn't `carTraversable`, so the A* router couldn't
   take a cross street through it. Fix: a LEVEL-CROSSING rule in `canDrive` — a car may CROSS an
@@ -273,9 +274,17 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
   a `placeBridge` engine primitive (decks transport OVER water, keeping the water layer underneath — a
   bridge, not a causeway; never decks a building); `carveCorridor` uses it. Live-verified: (85,86)/
   (86,86) now RoadHighway-over-water, the freeway continuous. Non-golden N=120 gate intact (bridging
-  only adds highway tiles). 🔮 FUTURE (Maddy): bridges generalize to OVERPASSES — elevated rail over
-  roads, promenades over freeways — the natural extension of `placeBridge` (a transport deck over
-  another), needs a per-tile layer/elevation model.
+  only adds highway tiles).
+  - ✅ **Overpasses (the per-tile elevation model)** (PR pending) — a second HASHED `map.deck` layer
+    holds ELEVATED transit (ElevatedRail/Promenade) over the road below — the generalization of
+    `placeBridge` (a transport deck over another). Cars/peds pass UNDER unaffected (grade-separated).
+    `canPlaceOverpass`/`placeOverpass`/`removeOverpassAt`/`overpassAt`/`deckMask`; building an elevated
+    kind OVER a road decks an overpass (over land it's at-grade); bulldoze removes the deck first.
+    An elevated promenade deck is ped substrate — a promenade overpass carries peds ACROSS a freeway
+    they can't cross at grade (live-verified: contiguous substrate across, bare freeway not walkable;
+    renders lifted w/ a drop shadow). Worldgen leaves the deck 0, so N=120 stays byte-identical.
+    🔮 FOLLOW-ONS (need playtest judgment): elevated-rail train sim on the deck; car-under-deck z-order;
+    worldgen-placed overpasses; an explicit ramp/incline model.
 - ✅ **Worldgen bridges expand the city to other land masses** (PR pending; Maddy feat) — eraSatellites
   now, after the land exurbs, detects the biggest OTHER land masses (`otherMassEntries`) and, for each
   within reach (`satelliteMaxBridge`=30, `satelliteBridgeCount`=2, `satelliteMinMassSize`=250), decks
