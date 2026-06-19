@@ -548,3 +548,44 @@ describe('previewTool / applyTool guard the map edges', () => {
     expect(applyTool(world, tech, toolDef('build-48')!, 5, 5).ok).toBe(false);
   });
 });
+
+describe('plant median (road-diet upgrade — only on an interior through lane)', () => {
+  function unlocked(): TechState {
+    const t = freshTech(1000);
+    t.unlock('walkable-streets');
+    t.unlock('road-diets');
+    return t;
+  }
+  function highwayBand(world: ToolWorld, rows: number[]): void {
+    for (const y of rows) for (let x = 2; x < 14; x++) placeTransport(world.map, x, y, BuiltKind.RoadHighway);
+  }
+
+  it('reveals convert-11 (Plant Median) exactly when road-diets is unlocked', () => {
+    expect(ids(freshTech(1000))).not.toContain('convert-11');
+    expect(ids(unlocked())).toContain('convert-11');
+  });
+
+  it('is valid on the interior through-lane of a 3-wide highway, not the carriageways', () => {
+    const world = freshWorld();
+    highwayBand(world, [6, 7, 8]); // 3-wide horizontal highway
+    const tech = unlocked();
+    const median = toolDef('convert-11')!;
+    expect(previewTool(world, tech, median, 7, 7).valid).toBe(true); // middle through-lane ✓
+    expect(previewTool(world, tech, median, 7, 6).valid).toBe(false); // north carriageway ✗
+    expect(previewTool(world, tech, median, 7, 8).valid).toBe(false); // south carriageway ✗
+  });
+
+  it('refuses a planted median on a 1-wide road (no interior lane)', () => {
+    const world = freshWorld();
+    for (let x = 2; x < 14; x++) placeTransport(world.map, x, 6, BuiltKind.RoadHighway); // single-wide
+    expect(previewTool(world, unlocked(), toolDef('convert-11')!, 7, 6).valid).toBe(false);
+  });
+
+  it('applies: plants the interior lane as a PlantedMedian in place (no parcel)', () => {
+    const world = freshWorld();
+    highwayBand(world, [6, 7, 8]);
+    expect(applyTool(world, unlocked(), toolDef('convert-11')!, 7, 7).ok).toBe(true);
+    expect(world.map.getBuilt(7, 7)).toBe(BuiltKind.PlantedMedian);
+    expect(world.map.getParcel(7, 7)).toBe(0); // conversion never touches parcels
+  });
+});

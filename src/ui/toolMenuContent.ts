@@ -129,6 +129,7 @@ const ICON_OF_KIND: ReadonlyMap<number, string> = new Map<number, string>([
   [BuiltKind.BikePath, '🚲'],
   [BuiltKind.Streetcar, '🚋'],
   [BuiltKind.QuietStreet, '🚸'],
+  [BuiltKind.PlantedMedian, '🌳'],
   [BuiltKind.ElevatedRail, '🚝'],
   [BuiltKind.Promenade, '🚶'],
   [BuiltKind.HouseSingle, '🏠'],

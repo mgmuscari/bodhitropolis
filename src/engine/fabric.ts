@@ -38,6 +38,13 @@ export const BuiltKind = {
   // limited-access on/off + at-grade crossing the worldgen drops through the freeway band so the
   // street grid stays connected (cars enter/exit/cross the freeway only here).
   RoadRamp: 10,
+  // Planted median 11 — a road-DIET upgrade (unlocked by the `road-diets` capability): the player
+  // converts the interior two-way `through` lane of a 3-wide highway into a planted, NO-TRAFFIC
+  // green median. It removes a traffic lane (less throughput → calmer corridor) and reads as a green
+  // amenity (lifts nearby land value). Cars never drive on or cross it — a green barrier, like a
+  // freeway's limited access. Created only by conversion (never worldgen), so the world hash is
+  // untouched; reversible (convert back to highway).
+  PlantedMedian: 11,
   // Police precinct 31 — NOT a service. Redlining over-policed the districts it
   // disinvested; the precinct is the apparatus of control, sited in the redlined
   // zones, that suppresses civic voice & trust (see civic/dynamics). The player
@@ -100,6 +107,8 @@ export type BuiltKind = (typeof BuiltKind)[keyof typeof BuiltKind];
 
 /** Roads (street/avenue/highway). Rail is transport but not a road. */
 export const isRoadKind = (k: number): boolean => k >= 1 && k <= 3;
+/** A planted median (the road-diet green strip, 11): a transport-slot tile that carries NO traffic. */
+export const isPlantedMedian = (k: number): boolean => k === BuiltKind.PlantedMedian;
 /** Any transport kind: classic roads/rail (1..4) or transit kinds (5..15). */
 export const isTransportKind = (k: number): boolean => k >= 1 && k <= 15;
 /** Any building kind across the widened 16..127 band (transport never overlaps). */
@@ -337,7 +346,11 @@ export const TRANSPORT_CONVERSIONS: ReadonlyMap<BuiltKind, readonly BuiltKind[]>
 >([
   [BuiltKind.RoadStreet, [BuiltKind.QuietStreet, BuiltKind.Promenade, BuiltKind.BikePath]],
   [BuiltKind.RoadAvenue, [BuiltKind.RoadStreet, BuiltKind.QuietStreet]],
-  [BuiltKind.RoadHighway, [BuiltKind.RoadAvenue]],
+  // A highway reverses to a boulevard-grade avenue, OR — once road diets are unlocked — its interior
+  // through-lane is planted as a no-traffic median (the tool fences PlantedMedian to interior lanes).
+  [BuiltKind.RoadHighway, [BuiltKind.RoadAvenue, BuiltKind.PlantedMedian]],
+  // The road diet is reversible: a planted median converts back to highway.
+  [BuiltKind.PlantedMedian, [BuiltKind.RoadHighway]],
   [BuiltKind.Rail, [BuiltKind.Streetcar]],
 ]);
 
@@ -470,6 +483,39 @@ export function convertTransport(map: GameMap, x: number, y: number, to: number)
   if (!canConvertTransport(map, x, y, to)) return false;
   map.built[map.idx(x, y)] = to;
   return true;
+}
+
+/**
+ * True iff (x, y) is the INTERIOR two-way lane of a 3+-wide divided road: the road runs along its
+ * longer same-band axis, and on the shorter (width) axis BOTH neighbours are in the road's lane band
+ * (the same road kind, the freeway family, or an existing planted median). This mirrors the car-sim's
+ * `freewayLane` `through` role, kept engine-pure so the tool layer can gate the road-diet planted
+ * median (interior-lane-only) without importing the UI. An avenue is 2-wide (no interior lane) and a
+ * square crossing (equal bands) is a junction — both return false.
+ */
+export function isInteriorRoadLane(map: GameMap, x: number, y: number): boolean {
+  const k = map.built[map.idx(x, y)]! as number;
+  if (k !== BuiltKind.RoadAvenue && k !== BuiltKind.RoadHighway) return false;
+  const freewayFamily = (c: number): boolean =>
+    c === BuiltKind.RoadHighway || c === BuiltKind.RoadRamp;
+  const band = (nx: number, ny: number): boolean => {
+    if (!map.inBounds(nx, ny)) return false;
+    const b = map.built[map.idx(nx, ny)]! as number;
+    return b === k || (freewayFamily(k) && freewayFamily(b)) || b === BuiltKind.PlantedMedian;
+  };
+  const run = (dx: number, dy: number): number => {
+    let n = 0;
+    for (let i = 1; i <= 3; i++) {
+      if (!band(x + dx * i, y + dy * i)) break;
+      n++;
+    }
+    return n;
+  };
+  const vert = 1 + run(0, -1) + run(0, 1);
+  const horiz = 1 + run(-1, 0) + run(1, 0);
+  if (horiz > vert) return band(x, y - 1) && band(x, y + 1); // road horizontal → N & S both in band
+  if (vert > horiz) return band(x - 1, y) && band(x + 1, y); // road vertical → E & W both in band
+  return false; // equal bands = a square crossing (a junction), not an interior lane
 }
 
 /**

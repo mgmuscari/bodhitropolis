@@ -192,6 +192,8 @@ const BUILDING_STYLES: Record<number, BuildingStyle> = {
   // Tech-tree-era 48..60 — solarpunk palette: parklet/garden greens, vertical-farm
   // teal, water blues, solar/AI blues, warm commune purples, bazaar/commons sandstone.
   [BuiltKind.Parklet]: { base: [88, 148, 84], accent: [104, 168, 98], roof: [64, 118, 62] },
+  // The road-diet planted median: a narrow strip of deep, even green between the carriageways.
+  [BuiltKind.PlantedMedian]: { base: [70, 130, 72], accent: [92, 158, 90], roof: [52, 104, 58] },
   [BuiltKind.CommunityGarden]: { base: [104, 150, 72], accent: [122, 170, 86], roof: [78, 120, 54] },
   [BuiltKind.CompostHub]: { base: [110, 84, 56], accent: [128, 100, 68], roof: [84, 62, 40] },
   [BuiltKind.VerticalFarm]: { base: [72, 140, 96], accent: [88, 162, 114], roof: [50, 108, 72] },
