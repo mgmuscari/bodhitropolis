@@ -30,12 +30,27 @@ below change game feel and need playtest judgement, so they're Maddy's call.
 
 ## Open questions / next steps (for Maddy)
 
-1. **Visible sheltering agents.** The brief wants the unhoused *surfaced as agents*, not just a count.
-   Natural fit: spawn ~`unhoused`-scaled ped agents tagged `unhoused` (no `homeTile`) that shelter on
-   park/rewilded/quiet-street substrate (encampments), distinct from ambient wanderers. This reuses the
-   ped substrate + the homed-vs-homeless branch already in `ambientContent` (a homeless ped wanders;
-   the commute-home fix keyed exactly on `homeTile`). Caps + spawn cadence are a feel knob.
-   - Q: where do they cluster — parks, under freeways/overpasses, vacant lots, near commons? Render?
+1. **Visible sheltering agents — SPEC'D (Maddy 2026-06-19).** "unhoused people either live in empty
+   tiles or out of cars, affects their schedule, but otherwise also go about having days."
+   - **Shelter, not a home.** An unhoused agent has a **shelter anchor** in place of `homeTile`: either
+     an **empty tile** (an encampment spot — open land / vacant lot / under an overpass) OR **their own
+     CAR** (living out of the vehicle — the car parked somewhere is the shelter). Tagged `unhoused`,
+     distinct from ambient wanderers (which have neither home nor shelter).
+   - **They still have DAYS.** They run a daily round (itinerary) like a housed citizen — Work / Shop /
+     Lifestyle stops, then return to the **shelter** instead of a home plot. The
+     spawn/itinerary/commute-home machinery generalises: treat the shelter anchor the way `homeTile` is
+     treated today (spawn from it, deposit/return to it). The homed-vs-homeless branch (the commute-home
+     fix keyed on `homeTile`) becomes homed-vs-**sheltered**-vs-truly-wandering.
+   - **Shelter AFFECTS the schedule.** Differences from a housed round: e.g. fewer/harder stops, no
+     overnight refuge → wellbeing erodes faster, a car-dweller's "shelter" moves with the car (so its
+     round re-anchors as the car parks), an empty-tile dweller is tied to its spot. The exact schedule
+     deltas are a feel knob (start small: same round, return to shelter, reduced refuel/wellbeing).
+   - **Tie to the count (shipped first cut).** The derived displacement count becomes ACTUAL agents: as
+     occupancy falls below capacity, displaced residents enter the `unhoused` agent pool with a shelter
+     anchor; re-housing (new/healed housing) pulls them back to a home. Keep the count as the aggregate
+     readout; the agents are the visible embodiment.
+   - Q: how a displaced resident PICKS its shelter (nearest empty tile to its old home? its car if it
+     had one?); render (a tent/encampment glyph, a car-as-dwelling); the cap on visible unhoused agents.
 
 2. **Displacement transitions (explicit, not just the derived shortfall).** Should a specific event —
    an arrest, a demolition, a home decaying to a derelict — *emit* a displaced agent at that tile (a

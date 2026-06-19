@@ -131,6 +131,30 @@ layer (non-deterministic).
   verified live the loop is metastable (a controlled ~19%/25s decline, the intended decline spiral,
   reversible by healing; NOT the old monotonic spiral-to-zero, which is fixed). Dial by playing.
 
+## FEATURE REQUESTS (Maddy 2026-06-19, playtest of `playtest/overnight-batch`)
+
+Captured as design docs for later implementation (not built yet). Direction noted; decisions Maddy's.
+
+- 🔵 **Tilesets — generated art is an OPTIONAL skin** — the procedural look is a permanent first-class
+  DEFAULT; ComfyUI-generated art is a named, swappable tileset over it (per-key procedural fallback).
+  Tileset selection is a user setting. Folded into `docs/art/asset-generation.md` §0.5 (on the
+  `feature/comfyui-pixelart-terrain` branch).
+- 🔵 **Settings menu** — configurable map size (regenerates the world) + live caps (PED_CAP, spawn
+  target, car/flock caps) + tileset selection, with Low/Med/High presets per machine; localStorage.
+  `docs/design/settings-menu.md`.
+- 🔵 **Multi-tile plots get built-in parking** — plots ≥2×2 (school/industry/powerplant) reserve one
+  `ParkingLot` tile on the edge facing a drivable neighbour; lots enterable from freeways (NJ-style
+  `canDrive` exception). The STRUCTURAL fix for the walled-off-job churn (the live "drove-there-enters"
+  patch is the safety net). `docs/design/multitile-parking.md`.
+- 🔵 **Smog diffusion + rain→runoff** — (a) smog DIFFUSES isotropically in addition to wind advection;
+  (b) occasional rain converts smog→ground pollution and ground→runoff seeking water, each with a
+  dilution factor (<1, so pollution RELOCATES, doesn't vanish — it lands in the low/redlined water).
+  Live layer, ambient-rng. `docs/design/pollution-weather.md`.
+- 🔵 **Unhoused agents — shelter + days (spec'd)** — unhoused people live in EMPTY tiles or out of
+  their CARS (shelter anchor in place of `homeTile`), still run daily rounds (return to the shelter);
+  shelter affects the schedule (harder/fewer stops, faster wellbeing erosion). Makes the shipped
+  displacement COUNT into visible agents. `docs/design/unhoused-residents.md` §1.
+
 ## Open
 
 - ✅ **Rapid spawn/despawn churn at (75,106) — walled-off job, impossible last-mile** (Maddy 2026-06-19;
