@@ -187,6 +187,11 @@ const PARK_RADIUS = 6;
 // cars up at a popular lot — Maddy) — it DRIVES to the nearest lot with a free stall within this
 // (generous) radius and re-checks on arrival, circling up to MAX_PARK_SEEKS times.
 const LOT_REROUTE_RADIUS = 64;
+// A lot stall only wins over a nearer STREET curb when it's within this many tiles of the curb's
+// distance (lots ABSORB cars when comparably close), so a car never drives to a lot several tiles off
+// when there's a free kerb stall the next tile over (Maddy). A car AT a lot still fills it (the stall
+// is the nearest spot); the margin only bites when a street curb is notably closer.
+const LOT_ABSORB_MARGIN = 3;
 const PARK_CLAIM_DIST = 2; // close enough to the chosen stall → claim it now instead of driving further
 const MAX_PARK_SEEKS = 6; // circle this many times for a free stall before settling (claim nearest / curb)
 
@@ -1851,11 +1856,16 @@ function nearestParkSpot(
   x: number,
   y: number,
 ): { x: number; y: number; lotIdx?: number; stallIdx?: number; dir?: number; slot?: number } | null {
-  const near = findLotStall(state, x, y, PARK_RADIUS);
-  if (near) return near;
+  const lot = findLotStall(state, x, y, PARK_RADIUS);
   const curb = findCurbSpot(state, map, x, y);
-  if (curb) return curb;
-  return findLotStall(state, x, y, LOT_REROUTE_RADIUS);
+  if (lot && curb) {
+    // Park at the CLOSER of the two; a lot wins within LOT_ABSORB_MARGIN of the curb's distance (it
+    // absorbs nearby cars), but a free street kerb the next tile over beats a lot several tiles off.
+    const dLot = Math.abs(lot.x - x) + Math.abs(lot.y - y);
+    const dCurb = Math.abs(curb.x - x) + Math.abs(curb.y - y);
+    return dLot - LOT_ABSORB_MARGIN <= dCurb ? lot : curb;
+  }
+  return lot ?? curb ?? findLotStall(state, x, y, LOT_REROUTE_RADIUS);
 }
 
 export function parkOwnedCarSomewhere(state: AmbientState, map: GameMap, car: Car): void {
@@ -2454,7 +2464,7 @@ function findCurbSpot(
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue; // ring at Chebyshev distance r
         const x = ax + dx;
         const y = ay + dy;
-        if (!isParkable(map, x, y)) continue; // no parking on a freeway or over water (a bridge)
+        if (!isParkable(map, x, y) || !isCarRoad(map.built[map.idx(x, y)]!)) continue; // a STREET kerb only (lots have their own stalls; not a freeway/bridge)
         const stalls = curbStallOffsets(map, x, y);
         if (stalls.length === 0) continue; // no kerb (a mid-road lane) → never a street park
         const base = map.idx(x, y) * 4;

@@ -664,6 +664,23 @@ describe('big parking lots fill nearest-tile-first (Maddy: blocks hold one car p
     expect(new Set(parked.map((c) => `${c.lotIdx},${c.stallIdx}`)).size).toBe(20);
   });
 
+  it('prefers a near STREET curb over a farther lot stall (Maddy: a stall the next tile over)', () => {
+    const m = new GameMap(24, 10);
+    for (let x = 2; x <= 20; x++) m.built[m.idx(x, 5)] = BuiltKind.RoadStreet; // a street, land both sides → kerb stalls
+    m.built[m.idx(14, 4)] = BuiltKind.ParkingLot; // a FREE lot stall ~5 tiles off (within PARK_RADIUS)
+    const state = createAmbientState();
+    setParkingLots(state, lotInfos(m));
+    const car = { x: 10, y: 5, dir: 1, tx: 10, ty: 5, owned: true, parked: false } as {
+      x: number; y: number; dir: number; tx: number; ty: number; owned: boolean; parked: boolean;
+      lotIdx?: number; curbSlot?: number;
+    };
+    state.cars.push(car);
+    parkOwnedCarSomewhere(state, m, car);
+    expect(car.parked).toBe(true);
+    expect(car.curbSlot).not.toBeUndefined(); // took the kerb stall right here...
+    expect(car.lotIdx).toBeUndefined(); // ...not the lot 5 tiles away
+  });
+
   it('a car reaches a big lot from its EDGE even when the lot CENTRE is out of park range', () => {
     const m = new GameMap(32, 8);
     for (let x = 1; x <= 24; x++) m.built[m.idx(x, 2)] = BuiltKind.ParkingLot; // centre at x=12.5
