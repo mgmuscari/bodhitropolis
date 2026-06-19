@@ -1303,6 +1303,14 @@ export function pedCost(
   return base + smog;
 }
 
+/** Which travel modes follow a COMMITTED walkPath (vs the greedy mode-cost step): the GROUND modes
+ *  over the walkable set — Walk and Bike. They route around barriers instead of dithering in a local
+ *  minimum (Maddy: looping cyclists). Transit (streetcar/elevated) rides a fixed line and Drive uses
+ *  the road A* (roadPath), so they keep their own movement. */
+export function usesCommittedPath(mode: TravelMode): boolean {
+  return mode === TravelMode.Walk || mode === TravelMode.Bike;
+}
+
 /** Fuel a citizen spends on one substep at (x,y) — the SPEND side of the fuel economy, twinned with
  *  `pedCost`'s routing: a beaten desire path is cheap, lush wild ground dear, pavement/built nominal.
  *  So citizens go further on worn paths (and the network of paths reinforces itself). */
@@ -3081,11 +3089,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       const hereKind = map.built[map.idx(Math.round(p.x), Math.round(p.y))]!;
       const speed = PED_SPEED * modeSpeedMult(mode, hereKind);
       let moving: boolean;
-      if (mode === TravelMode.Walk) {
-        // Walking legs follow a COMMITTED least-cost foot route (walkPath), so a citizen routes
-        // AROUND buildings/freeways instead of dithering in a greedy local minimum at a wall (the bug
-        // Maddy saw: peds piling up at a lot + drifting home "to nowhere" when the destination sat
-        // behind a barrier). Recompute only when the destination (walkTo) changes; reuse otherwise.
+      if (usesCommittedPath(mode)) {
+        // Walking AND cycling legs follow a COMMITTED least-cost route (walkPath), so the agent routes
+        // AROUND buildings/freeways instead of dithering in a greedy local minimum at a wall (Maddy:
+        // peds piling up / drifting "to nowhere", and looping cyclists). Recompute only when the
+        // destination (walkTo) changes; reuse otherwise.
         const goalIdx = map.idx(tgtx, tgty);
         if (p.path === undefined || p.pathGoal !== goalIdx) {
           const route = walkPath(
@@ -3111,8 +3119,8 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         }
         moving = p.path !== undefined && advanceMover(p, speed, map, (x, y) => pathStep(map, p, x, y));
       } else {
-        // Bike/transit legs hug their OWN network via the greedy mode-cost step (walkPath's pedCost
-        // doesn't know a tram line; a rider must prefer its rails). Dithering is rare on open lines.
+        // Transit legs (streetcar/elevated) hug their OWN line via the greedy mode-cost step (walkPath
+        // doesn't know a tram network; a rider must prefer its rails). Dithering is rare on open lines.
         moving = advanceMover(p, speed, map, (x, y, _fromDir, recent) =>
           nextStepToward(map, x, y, tgtx, tgty, recent, state.wear, mode, state.traffic, state.pollution),
         );

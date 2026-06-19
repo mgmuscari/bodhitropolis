@@ -34,6 +34,7 @@ import {
   nextRoadStep,
   walkPath,
   stopReachable,
+  usesCommittedPath,
   laneOffset,
   freewayLane,
   pollutionEmit,
@@ -2885,5 +2886,15 @@ describe('parking seek: nearby lot -> side-street curb -> farther lot (Maddy: fu
     const car = { x: 4, y: 4, dir: 0, tx: 4, ty: 4, owned: true, parked: false } as never as Car;
     expect(routeToParking(state, m, car)).toBe(false); // free stall adjacent → park now, don't circle
     expect(car.path).toBeUndefined();
+  });
+});
+
+describe('usesCommittedPath (Maddy: looping cyclists — bike legs need committed routes too)', () => {
+  it('Walk and Bike follow committed paths; transit + drive do not', () => {
+    expect(usesCommittedPath(TravelMode.Walk)).toBe(true);
+    expect(usesCommittedPath(TravelMode.Bike)).toBe(true); // the fix: cyclists route around barriers
+    expect(usesCommittedPath(TravelMode.Streetcar)).toBe(false);
+    expect(usesCommittedPath(TravelMode.ElevatedRail)).toBe(false);
+    expect(usesCommittedPath(TravelMode.Drive)).toBe(false); // Drive uses the road A* (roadPath)
   });
 });
