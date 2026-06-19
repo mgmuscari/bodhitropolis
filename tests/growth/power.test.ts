@@ -100,6 +100,22 @@ describe('computePowerGrid: brownout', () => {
     expect(grid.demand).toBeGreaterThan(grid.capacity);
   });
 
+  it('powers plots NEAREST the source first in a brownout (Maddy: distribute from the source out)', () => {
+    const { map, parcels } = world();
+    // A row of industry to the LEFT of the plant, so tile-index (anchor) order is the REVERSE of
+    // distance: the nearest home (x=8) has the HIGHEST anchor, the farthest (x=2) the lowest.
+    const homes: { x: number; idx: number }[] = [];
+    for (let x = 2; x <= 8; x++) {
+      placeParcel(map, parcels, { x, y: 2, width: 1, height: 1, kind: BuiltKind.Industrial, density: 1 });
+      homes.push({ x, idx: map.idx(x, 2) });
+    }
+    placeParcel(map, parcels, { x: 9, y: 2, width: 1, height: 1, kind: BuiltKind.WindTurbine }); // output 8 → 2 powered
+    const grid = computePowerGrid(map, parcels);
+    const powered = homes.filter((h) => grid.poweredAnchors.has(h.idx));
+    expect(powered.length).toBe(2); // capacity 8 / demand 3 each → 2
+    expect(powered.every((h) => h.x >= 7)).toBe(true); // the two NEAREST the plant (x=8,7), not x=2,3
+  });
+
   it('powers everything when capacity meets demand', () => {
     const { map, parcels } = world();
     placeParcel(map, parcels, { x: 2, y: 2, width: 1, height: 1, kind: BuiltKind.NuclearPlant });
