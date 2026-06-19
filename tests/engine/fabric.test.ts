@@ -18,6 +18,7 @@ import {
   isLimitedAccessBoundary,
   roadCurbMask,
   rampMarkingMask,
+  freewayMedianAxis,
   parcelTouchesRoad,
   demolishParcel,
   demolishTransportAt,
@@ -956,6 +957,58 @@ describe('roadDividerMask', () => {
     map.setBuilt(4, 3, BuiltKind.RoadAvenue);
     expect(roadDividerMask(map, 3, 2, 3)).toBe(0);
     expect(roadDividerMask(map, 3, 3, 3)).toBe(0);
+  });
+});
+
+describe('freewayMedianAxis (jersey barrier down the centre tile, lengthwise)', () => {
+  it('is null on a non-freeway tile', () => {
+    const map = new GameMap(7, 7);
+    map.setBuilt(3, 3, BuiltKind.RoadAvenue);
+    expect(freewayMedianAxis(map, 3, 3)).toBe(null);
+  });
+
+  it('marks the CENTRE spine of a 3-wide vertical freeway, running vertical; not the flanks', () => {
+    const map = new GameMap(7, 7);
+    for (let y = 0; y < 7; y++) {
+      map.setBuilt(2, y, BuiltKind.RoadHighway); // west flank
+      map.setBuilt(3, y, BuiltKind.RoadHighway); // centre spine
+      map.setBuilt(4, y, BuiltKind.RoadHighway); // east flank
+    }
+    expect(freewayMedianAxis(map, 3, 3)).toBe('v'); // centre → vertical median
+    expect(freewayMedianAxis(map, 2, 3)).toBe(null); // flank → none
+    expect(freewayMedianAxis(map, 4, 3)).toBe(null);
+  });
+
+  it('marks the centre spine of a 3-wide horizontal freeway, running horizontal', () => {
+    const map = new GameMap(7, 7);
+    for (let x = 0; x < 7; x++) {
+      map.setBuilt(x, 2, BuiltKind.RoadHighway);
+      map.setBuilt(x, 3, BuiltKind.RoadHighway);
+      map.setBuilt(x, 4, BuiltKind.RoadHighway);
+    }
+    expect(freewayMedianAxis(map, 3, 3)).toBe('h');
+    expect(freewayMedianAxis(map, 3, 2)).toBe(null);
+  });
+
+  it('draws no median on an even-width (2-wide) freeway — no single centre tile', () => {
+    const map = new GameMap(7, 7);
+    for (let y = 0; y < 7; y++) {
+      map.setBuilt(2, y, BuiltKind.RoadHighway);
+      map.setBuilt(3, y, BuiltKind.RoadHighway);
+    }
+    expect(freewayMedianAxis(map, 2, 3)).toBe(null);
+    expect(freewayMedianAxis(map, 3, 3)).toBe(null);
+  });
+
+  it('opens the median at a ramp (the spine tile is a RoadRamp, not highway)', () => {
+    const map = new GameMap(7, 7);
+    for (let y = 0; y < 7; y++) {
+      map.setBuilt(2, y, BuiltKind.RoadHighway);
+      map.setBuilt(3, y, BuiltKind.RoadHighway);
+      map.setBuilt(4, y, BuiltKind.RoadHighway);
+    }
+    map.setBuilt(3, 3, BuiltKind.RoadRamp); // a crossing on the spine
+    expect(freewayMedianAxis(map, 3, 3)).toBe(null); // no median at the ramp itself
   });
 });
 

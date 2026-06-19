@@ -9,7 +9,7 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask, freewayMedianAxis } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import {
@@ -771,6 +771,24 @@ export class Renderer {
               if (curb & S) { ctx.fillStyle = walk; ctx.fillRect(dx, dy + ts - sw, ts, sw); ctx.fillStyle = gutter; ctx.fillRect(dx, dy + ts - sw, ts, 1); }
               if (curb & W) { ctx.fillStyle = walk; ctx.fillRect(dx, dy, sw, ts); ctx.fillStyle = gutter; ctx.fillRect(dx + sw - 1, dy, 1, ts); }
               if (curb & E) { ctx.fillStyle = walk; ctx.fillRect(dx + ts - sw, dy, sw, ts); ctx.fillStyle = gutter; ctx.fillRect(dx + ts - sw, dy, 1, ts); }
+            }
+
+            // Freeway MEDIAN: a jersey barrier down the centre spine tile of the 3-wide corridor,
+            // running lengthwise (separates the opposing carriageways). Per-tile; opens at ramps.
+            const medianAxis = freewayMedianAxis(map, tx, ty);
+            if (medianAxis !== null) {
+              const mb = Math.max(2, Math.round(ts * 0.2));
+              const concrete = '#d8d2c4';
+              const ridge = '#3a3630';
+              if (medianAxis === 'v') {
+                const mx = Math.floor(dx + ts / 2 - mb / 2);
+                ctx.fillStyle = concrete; ctx.fillRect(mx, dy, mb, ts);
+                ctx.fillStyle = ridge; ctx.fillRect(Math.floor(dx + ts / 2), dy, 1, ts);
+              } else {
+                const my = Math.floor(dy + ts / 2 - mb / 2);
+                ctx.fillStyle = concrete; ctx.fillRect(dx, my, ts, mb);
+                ctx.fillStyle = ridge; ctx.fillRect(dx, Math.floor(dy + ts / 2), ts, 1);
+              }
             }
           }
 

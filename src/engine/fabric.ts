@@ -800,6 +800,40 @@ export function rampMarkingMask(map: GameMap, x: number, y: number): number {
   return mask;
 }
 
+/**
+ * The axis a freeway MEDIAN jersey barrier runs along on tile (x, y), or null if (x, y) isn't a
+ * median tile. A freeway corridor is 3 wide (centre spine + 2 flanks); the median sits on the CENTRE
+ * tile and runs LENGTHWISE (Maddy 2026-06-19: "barriers in the middle tile lengthwise"). 'v' = a
+ * vertical (N-S) freeway → a vertical barrier; 'h' = horizontal. A tile qualifies iff it is a
+ * freeway that continues lengthwise AND sits at the exact centre of an odd-width (≥3) perpendicular
+ * run of freeway lanes. Ramps (not RoadHighway) break the run, so the median opens at crossings.
+ * Render-only — reads the hashed `built` layer, never writes.
+ */
+export function freewayMedianAxis(map: GameMap, x: number, y: number): 'v' | 'h' | null {
+  if (map.getBuilt(x, y) !== BuiltKind.RoadHighway) return null;
+  const hwy = (px: number, py: number): boolean =>
+    map.inBounds(px, py) && map.getBuilt(px, py) === BuiltKind.RoadHighway;
+  // Measure the contiguous freeway run through (x, y) on BOTH axes. The median runs along the
+  // LENGTHWISE (longer) axis; the tile must sit at the centre of the strictly-SHORTER (width) band,
+  // which must be an odd ≥3 cross-section (a real centre lane). Comparing run lengths is what
+  // distinguishes the width band from the corridor length (a length-centred tile is symmetric too).
+  let wl = 0;
+  while (hwy(x - wl - 1, y)) wl++;
+  let wr = 0;
+  while (hwy(x + wr + 1, y)) wr++;
+  const ewRun = wl + wr + 1;
+  let nu = 0;
+  while (hwy(x, y - nu - 1)) nu++;
+  let nd = 0;
+  while (hwy(x, y + nd + 1)) nd++;
+  const nsRun = nu + nd + 1;
+  // Vertical freeway: E-W is the short, centred width band; N-S is strictly longer (the length).
+  if (wl === wr && ewRun >= 3 && ewRun % 2 === 1 && nsRun > ewRun) return 'v';
+  // Horizontal freeway: N-S is the short, centred width band; E-W is strictly longer.
+  if (nu === nd && nsRun >= 3 && nsRun % 2 === 1 && ewRun > nsRun) return 'h';
+  return null;
+}
+
 /** The elevated deck (overpass) kind at (x, y), or 0 (none). Reads the second `deck` layer. */
 export function overpassAt(map: GameMap, x: number, y: number): number {
   return map.inBounds(x, y) ? map.deck[map.idx(x, y)]! : 0;
