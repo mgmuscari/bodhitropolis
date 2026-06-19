@@ -68,6 +68,18 @@ export function buildingKeys(kind: number, tier?: number): string[] {
   return keys;
 }
 
+/**
+ * Reserved key namespace for SURFACE textures (e.g. road asphalt) — a tileset supplies the base
+ * pavement texture and the renderer paints the connection-mask lane markings OVER it procedurally
+ * (so one tileable texture skins all 16 autotile variants, instead of 16 generated tiles). A
+ * surface is an INGREDIENT, not a full-tile override: the `@` prefix can never collide with a real
+ * atlas key (those start with a letter), so the renderer treats `@surface/*` entries specially and
+ * never blits them as tiles. Role examples: `road` (all road kinds), `road-2` (avenue-specific).
+ */
+export function surfaceKey(role: string): string {
+  return `@surface/${role}`;
+}
+
 // ── The satellite tileset ──────────────────────────────────────────────────────────────────
 // Google-Maps-inspired top-down patchwork (see docs/art/satellite-tileset.md): a slightly
 // cartoonish, black-outlined, SimCity-2000-era look with Oakland, CA architectural cues —
@@ -76,7 +88,10 @@ export function buildingKeys(kind: number, tier?: number): string[] {
 // art lands. Keep it == files actually present in public/tilesets/satellite/ so selecting it
 // never triggers stray 404s.
 const SATELLITE_ASSETS: readonly TilesetAsset[] = [
-  // (populated as committed art lands — see the generation plan doc)
+  // Road asphalt SURFACE (a tileable texture): the renderer paints the connection-mask lane
+  // markings over it, so this one texture skins every road kind/mask. The rest of the world falls
+  // back to the procedural painter until more art lands.
+  { file: 'surfaces/asphalt.png', keys: [surfaceKey('road')] },
 ];
 
 export const TILESET_DEFS: readonly TilesetDef[] = [

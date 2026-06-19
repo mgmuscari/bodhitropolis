@@ -13,6 +13,7 @@ import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask } from 
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import { builtRenderKey, footprintCellKey, renderKeyspace, type FootprintPos } from './renderKey';
+import { surfaceKey } from './tileset';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 import { parcelGlyph } from './glyphContent';
 import { isPowerConsumer } from '../growth/power';
@@ -265,6 +266,31 @@ function paintTile(paint: (set: SetPixel) => void): HTMLCanvasElement {
   return c;
 }
 
+// Paint over a SUPPLIED base image (a tileset surface texture, e.g. asphalt): blit it into a
+// BASE_TILE canvas, then run the per-pixel `paint` callback (lane markings) on top. The procedural
+// twin is paintTile (which starts from a dithered/empty base). imageSmoothing off keeps a normalized
+// source crisp. Used so a single tileable road texture skins all 16 autotile mask variants.
+function paintTileOver(base: AtlasImage, paint: (set: SetPixel) => void): HTMLCanvasElement {
+  const c = document.createElement('canvas');
+  c.width = BASE_TILE;
+  c.height = BASE_TILE;
+  const ctx = c.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(base, 0, 0, BASE_TILE, BASE_TILE);
+  const img = ctx.getImageData(0, 0, BASE_TILE, BASE_TILE);
+  const set: SetPixel = (x, y, rgb) => {
+    if (x < 0 || x >= BASE_TILE || y < 0 || y >= BASE_TILE) return;
+    const o = (y * BASE_TILE + x) * 4;
+    img.data[o] = rgb[0];
+    img.data[o + 1] = rgb[1];
+    img.data[o + 2] = rgb[2];
+    img.data[o + 3] = 255;
+  };
+  paint(set);
+  ctx.putImageData(img, 0, 0);
+  return c;
+}
+
 function ditherFill(set: SetPixel, base: RGB, accent: RGB): void {
   for (let py = 0; py < BASE_TILE; py++) {
     for (let px = 0; px < BASE_TILE; px++) {
@@ -282,33 +308,45 @@ function makeTerrainTile(base: RGB, accent: RGB): HTMLCanvasElement {
   return paintTile((set) => ditherFill(set, base, accent));
 }
 
-function makeRoadTile(kind: number, mask: number, wide = false): HTMLCanvasElement {
+// The connection-mask lane markings for a road tile, drawn OVER whatever base is already laid
+// (procedural dither or a tileset asphalt surface). Extracted so both bases share one marking pass.
+function paintRoadMarkings(set: SetPixel, kind: number, mask: number, wide: boolean): void {
   const style = ROAD_STYLES[kind]!;
   const cols = style.double ? [6, 9] : [7];
   const rows = style.double ? [6, 9] : [7];
-  const mark = (set: SetPixel, x: number, y: number): void => {
+  const mark = (s: SetPixel, x: number, y: number): void => {
     if (style.dashed && ((x + y) & 1) !== 0) return; // dashed lane marking for streets
-    set(x, y, style.line);
+    s(x, y, style.line);
   };
+  if (wide) {
+    // Wide-body slab: a continuous asphalt mass for a 2-/3-row corridor. Suppress
+    // the per-edge lane markings AND the isolated stub so adjacent wide tiles read
+    // as one slab rather than parallel striped roads; lay only a faint center seam
+    // toward each connected edge to hint at travel direction (live-pass tunable).
+    const seam = shade(style.base, 10);
+    if (mask & N) for (let y = 0; y < 8; y++) set(7, y, seam);
+    if (mask & S) for (let y = 8; y < BASE_TILE; y++) set(7, y, seam);
+    if (mask & E) for (let x = 8; x < BASE_TILE; x++) set(x, 7, seam);
+    if (mask & W) for (let x = 0; x < 8; x++) set(x, 7, seam);
+    return;
+  }
+  if (mask & N) for (let y = 0; y < 8; y++) for (const cx of cols) mark(set, cx, y);
+  if (mask & S) for (let y = 8; y < BASE_TILE; y++) for (const cx of cols) mark(set, cx, y);
+  if (mask & E) for (let x = 8; x < BASE_TILE; x++) for (const cy of rows) mark(set, x, cy);
+  if (mask & W) for (let x = 0; x < 8; x++) for (const cy of rows) mark(set, x, cy);
+  if (mask === 0) rectFill(set, 7, 7, 8, 8, style.line); // isolated stub
+}
+
+// A road tile = base + lane markings. The base is the procedural dither, OR a tileset asphalt
+// SURFACE texture (Maddy's call: "generate road textures with diffusion, paint the lines on top").
+// One tileable surface skins all 16 mask variants — markings stay procedural so autotiling + the
+// player's live road-building keep working.
+function makeRoadTile(kind: number, mask: number, wide = false, surface?: AtlasImage): HTMLCanvasElement {
+  if (surface) return paintTileOver(surface, (set) => paintRoadMarkings(set, kind, mask, wide));
+  const style = ROAD_STYLES[kind]!;
   return paintTile((set) => {
     ditherFill(set, style.base, style.accent);
-    if (wide) {
-      // Wide-body slab: a continuous asphalt mass for a 2-/3-row corridor. Suppress
-      // the per-edge lane markings AND the isolated stub so adjacent wide tiles read
-      // as one slab rather than parallel striped roads; lay only a faint center seam
-      // toward each connected edge to hint at travel direction (live-pass tunable).
-      const seam = shade(style.base, 10);
-      if (mask & N) for (let y = 0; y < 8; y++) set(7, y, seam);
-      if (mask & S) for (let y = 8; y < BASE_TILE; y++) set(7, y, seam);
-      if (mask & E) for (let x = 8; x < BASE_TILE; x++) set(x, 7, seam);
-      if (mask & W) for (let x = 0; x < 8; x++) set(x, 7, seam);
-      return;
-    }
-    if (mask & N) for (let y = 0; y < 8; y++) for (const cx of cols) mark(set, cx, y);
-    if (mask & S) for (let y = 8; y < BASE_TILE; y++) for (const cx of cols) mark(set, cx, y);
-    if (mask & E) for (let x = 8; x < BASE_TILE; x++) for (const cy of rows) mark(set, x, cy);
-    if (mask & W) for (let x = 0; x < 8; x++) for (const cy of rows) mark(set, x, cy);
-    if (mask === 0) rectFill(set, 7, 7, 8, 8, style.line); // isolated stub
+    paintRoadMarkings(set, kind, mask, wide);
   });
 }
 
@@ -381,15 +419,19 @@ function makeBuildingTile(kind: number, pos: string, tier: number): HTMLCanvasEl
 // renderKey.ts (the single source of truth iterated below); this dispatch parses
 // each key back to the right tile maker. Every key renderKeyspace() emits must be
 // handled here, or a placeable kind would render as a blank tile.
-function paintForKey(key: string): HTMLCanvasElement {
+function paintForKey(key: string, surfaces?: ReadonlyMap<string, AtlasImage>): HTMLCanvasElement {
   const parts = key.split('-');
   switch (parts[0]) {
     case 'b':
       return makeBuildingTile(Number(parts[1]), parts[2]!, Number(parts[3]));
-    case 'road':
+    case 'road': {
       // parts[3] === 'w' is the wide-slab variant; key off the value, never the
-      // length (b-… building keys also split to length 4).
-      return makeRoadTile(Number(parts[1]), Number(parts[2]), parts[3] === 'w');
+      // length (b-… building keys also split to length 4). A tileset road SURFACE (asphalt) is
+      // looked up per-kind then generic; absent → procedural dither base.
+      const kind = Number(parts[1]);
+      const surface = surfaces?.get(surfaceKey(`road-${kind}`)) ?? surfaces?.get(surfaceKey('road'));
+      return makeRoadTile(kind, Number(parts[2]), parts[3] === 'w', surface);
+    }
     case 'rail':
       return makeRailTile(Number(parts[1]));
     case 'streetcar':
@@ -442,12 +484,23 @@ function proceduralAtlas(): Map<string, AtlasImage> {
 function buildAtlas(overrides?: ReadonlyMap<string, AtlasImage>): Map<string, AtlasImage> {
   // Shallow clone of the cached procedural atlas (shares the painted tile canvases by reference).
   const atlas = new Map(proceduralAtlas());
+  if (!overrides) return atlas;
 
-  // Tileset skin: overlay the committed PNGs so they replace the painter for the keys they cover
-  // (incl. segmented footprintCellKey tiles the procedural pass never paints). Each override value
-  // is a pre-decoded BASE_TILE canvas (tilesetLoader normalizes on load), so this is pure Map work
-  // — the base pass that bakes them into the single cached base texture is unchanged.
-  if (overrides) for (const [key, img] of overrides) atlas.set(key, img);
+  // Road SURFACE textures (asphalt): when a tileset supplies one, RE-PAINT the autotiled road tiles
+  // with the procedural lane markings drawn over that texture — one tileable surface skins all 16
+  // mask variants (so autotiling + live road-building keep working). Only when present, only the
+  // road keys — every other key stays the cached procedural canvas.
+  if ([...overrides.keys()].some((k) => k.startsWith(surfaceKey('road')))) {
+    for (const key of atlas.keys()) {
+      if (key.startsWith('road-')) atlas.set(key, paintForKey(key, overrides));
+    }
+  }
+
+  // Full-tile overrides (terrain/buildings/segmented cells) win last; `@surface/*` entries are
+  // marking-painter INGREDIENTS, never drawable tiles, so they're skipped here.
+  for (const [key, img] of overrides) {
+    if (!key.startsWith('@')) atlas.set(key, img);
+  }
 
   return atlas;
 }

@@ -6,6 +6,7 @@ import {
   tilesetMetas,
   terrainKeys,
   buildingKeys,
+  surfaceKey,
 } from '../../src/ui/tileset';
 import { BuiltKind } from '../../src/engine/fabric';
 import { builtRenderKey } from '../../src/ui/renderKey';
@@ -44,14 +45,31 @@ describe('tileset registry', () => {
     });
   });
 
-  it('every asset names a file and fills at least one well-formed atlas key', () => {
+  it('every asset names a file and fills at least one well-formed key (atlas key or @surface ingredient)', () => {
     for (const d of TILESET_DEFS) {
       for (const a of d.assets) {
         expect(a.file.length).toBeGreaterThan(0);
         expect(a.keys.length).toBeGreaterThan(0);
-        for (const k of a.keys) expect(k).toMatch(/^[a-z]/); // an atlas key, not a path
+        for (const k of a.keys) expect(k).toMatch(/^([a-z]|@surface\/)/); // an atlas key or a surface role, not a path
       }
     }
+  });
+
+  it('the satellite tileset ships the asphalt road surface (the first committed asset)', () => {
+    const sat = tilesetDef('satellite');
+    const asphalt = sat.assets.find((a) => a.keys.includes(surfaceKey('road')));
+    expect(asphalt).toBeTruthy();
+    expect(asphalt!.file).toMatch(/\.png$/);
+  });
+});
+
+describe('surfaceKey (road-texture ingredient namespace)', () => {
+  it('namespaces a surface role under @surface/ so it can never collide with an atlas key', () => {
+    expect(surfaceKey('road')).toBe('@surface/road');
+    expect(surfaceKey('road-2')).toBe('@surface/road-2');
+    // Atlas keys start with a letter (terrain `grass-0`, built `road-1-5`, `b-16-c-0`); a surface
+    // key starts with '@', so the renderer can tell ingredients from drawable tiles by prefix.
+    expect(surfaceKey('road').startsWith('@')).toBe(true);
   });
 });
 
