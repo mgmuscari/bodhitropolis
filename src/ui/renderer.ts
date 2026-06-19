@@ -9,7 +9,7 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask, freewayMedianAxis, freewayLaneBoundaryMask, freewayCenterLaneAxis } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask, freewayMedianAxis, freewayAxis, freewayLaneBoundaryMask, freewayCenterLaneAxis } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import {
@@ -715,14 +715,21 @@ export class Renderer {
           // The kind-dispatch is a single pure call (renderKey.ts); transport keys
           // on the connection mask, buildings on footprint position + condition tier.
           const isT = isTransportKind(built);
+          // A freeway center turn lane (a street through the freeway middle) draws its base markings
+          // ALONG travel, not toward the flanking freeway lanes (which would be orthogonal to travel).
+          const clAxis = isT ? freewayCenterLaneAxis(map, tx, ty) : null;
           // A ramp uses its FREEWAY-axis marking mask (not the full 4-way connection) so its dashed
           // line runs straight through the freeway instead of crossing the surface street it links.
           const mask =
             built === BuiltKind.RoadRamp
               ? rampMarkingMask(map, tx, ty)
-              : isT
-                ? transportMask(map, tx, ty)
-                : 0;
+              : clAxis !== null
+                ? clAxis === 'v'
+                  ? N | S // travels N-S → centerline N-S, not the orthogonal E-W highway connections
+                  : E | W
+                : isT
+                  ? transportMask(map, tx, ty)
+                  : 0;
           const pid = isT ? 0 : map.parcel[i]!;
           const tier = isT ? 0 : parcels.conditionAt(pid - 1) < 128 ? 1 : 0;
           const pos: FootprintPos = isT ? 'c' : footprintPos(map, tx, ty, pid);
@@ -780,15 +787,24 @@ export class Renderer {
             }
 
             // Freeway lane markings — ONLY on a WIDE (multi-lane) freeway (a 1-wide highway keeps its
-            // own double-yellow). One dashed gold line per INTER-LANE boundary, drawn ONCE per seam
-            // (the E/S side only — the neighbour's W/N edge is the same seam), so the lines don't
-            // double up and there's no extra lane centerline (Maddy 2026-06-19: "too many… double up").
+            // own double-yellow). Two parts, neither doubled (Maddy 2026-06-19): (1) a dashed gold
+            // CENTERLINE down each lane (hidden under the median on the spine, so it shows on the
+            // outer lanes); (2) one line per INTER-LANE boundary, drawn ONCE per seam — the E/S side
+            // only, since the neighbour's W/N edge is the same seam.
             if (built === BuiltKind.RoadHighway && wide) {
-              const bnd = freewayLaneBoundaryMask(map, tx, ty);
-              if (bnd !== 0) {
+              const fAxis = freewayAxis(map, tx, ty);
+              if (fAxis !== null) {
                 ctx.fillStyle = '#cebe6e'; // freeway lane gold
                 const dash = Math.max(1, Math.round(ts * 0.16));
                 const lw = Math.max(1, Math.round(ts * 0.06));
+                if (fAxis === 'v') {
+                  const lx = Math.floor(dx + ts / 2 - lw / 2);
+                  for (let yy = 0; yy < ts; yy += dash * 2) ctx.fillRect(lx, dy + yy, lw, dash);
+                } else {
+                  const ly = Math.floor(dy + ts / 2 - lw / 2);
+                  for (let xx = 0; xx < ts; xx += dash * 2) ctx.fillRect(dx + xx, ly, dash, lw);
+                }
+                const bnd = freewayLaneBoundaryMask(map, tx, ty);
                 if (bnd & E) for (let yy = 0; yy < ts; yy += dash * 2) ctx.fillRect(dx + ts - lw, dy + yy, lw, dash);
                 if (bnd & S) for (let xx = 0; xx < ts; xx += dash * 2) ctx.fillRect(dx + xx, dy + ts - lw, dash, lw);
               }
@@ -796,8 +812,7 @@ export class Renderer {
 
             // Freeway CENTER LANE (two-way left-turn / "suicide" lane): a surface street running
             // through the freeway middle. Draw the classic yellow solid-OUTER + dashed-INNER markings
-            // on the flanking edges (the boundary with the freeway lanes).
-            const clAxis = freewayCenterLaneAxis(map, tx, ty);
+            // on the flanking edges (the boundary with the freeway lanes). clAxis computed above.
             if (clAxis !== null) {
               const solid = '#e2c84e';
               const lw = Math.max(1, Math.round(ts * 0.06));
