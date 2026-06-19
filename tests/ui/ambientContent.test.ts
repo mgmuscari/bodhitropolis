@@ -65,6 +65,7 @@ import {
   buildSafeZones,
   computeCoverage,
   parkOwnedCarSomewhere,
+  routeToParking,
   sendOwnedCarHome,
   abandonOwnedCar,
   degradeAbandonedCar,
@@ -2830,5 +2831,59 @@ describe('stopReachable (Maddy: NE region spawns + immediately despawns traveler
     const m = islandWorld();
     const state = createAmbientState();
     expect(stopReachable(state, m, 9, 6, { x: 5, y: 5 })).toBe(true); // walkable along the road
+  });
+});
+
+describe('parking seek: nearby lot -> side-street curb -> farther lot (Maddy: full-lot pile + reroute)', () => {
+  const lotInfos = (map: GameMap) =>
+    parkingLots(map).map((lot) => ({
+      cx: (lot.x0 + lot.x1) / 2, cy: (lot.y0 + lot.y1) / 2,
+      x0: lot.x0, y0: lot.y0, x1: lot.x1, y1: lot.y1, stalls: parkingStalls(lot),
+    }));
+  const fillNearLot = (state: ReturnType<typeof createAmbientState>, m: GameMap) => {
+    for (let n = 0; n < 9; n++) {
+      const c = { x: 4, y: 4, dir: 0, tx: 4, ty: 4, owned: true, parked: false } as never as Car;
+      state.cars.push(c);
+      parkOwnedCarSomewhere(state, m, c);
+    }
+  };
+
+  it('parks in a nearby LOT when one has a free stall', () => {
+    const m = new GameMap(40, 8);
+    m.built[m.idx(4, 3)] = BuiltKind.ParkingLot;
+    for (let x = 1; x < 39; x++) m.built[m.idx(x, 4)] = BuiltKind.RoadStreet;
+    const state = createAmbientState();
+    setParkingLots(state, lotInfos(m));
+    const car = { x: 4, y: 4, dir: 0, tx: 4, ty: 4, owned: true, parked: false } as never as Car;
+    state.cars.push(car);
+    parkOwnedCarSomewhere(state, m, car);
+    expect(car.lotIdx).not.toBeUndefined(); // claimed a lot stall
+  });
+
+  it('when the nearby lot is FULL, pulls over to a visible SIDE-STREET curb (not piled in the lot)', () => {
+    const m = new GameMap(40, 8);
+    m.built[m.idx(4, 3)] = BuiltKind.ParkingLot; // near lot
+    m.built[m.idx(34, 3)] = BuiltKind.ParkingLot; // a far lot also exists
+    for (let x = 1; x < 39; x++) m.built[m.idx(x, 4)] = BuiltKind.RoadStreet; // side street with curbs
+    const state = createAmbientState();
+    setParkingLots(state, lotInfos(m));
+    fillNearLot(state, m);
+    const car = { x: 6, y: 4, dir: 0, tx: 6, ty: 4, owned: true, parked: false } as never as Car;
+    state.cars.push(car);
+    parkOwnedCarSomewhere(state, m, car);
+    expect(car.lotIdx).toBeUndefined(); // a curb, not a far lot — the nearby side street is preferred
+    expect(car.curbDir).not.toBeUndefined(); // pulled to the kerb (drawn there → visible nearby)
+    expect(Math.abs(Math.round(car.x) - 6)).toBeLessThanOrEqual(2); // it's RIGHT HERE, not teleported far
+  });
+
+  it('routeToParking does NOT drive when a spot is already at hand (claims in place)', () => {
+    const m = new GameMap(20, 8);
+    m.built[m.idx(4, 3)] = BuiltKind.ParkingLot; // a free near lot at hand
+    for (let x = 1; x < 19; x++) m.built[m.idx(x, 4)] = BuiltKind.RoadStreet;
+    const state = createAmbientState();
+    setParkingLots(state, lotInfos(m));
+    const car = { x: 4, y: 4, dir: 0, tx: 4, ty: 4, owned: true, parked: false } as never as Car;
+    expect(routeToParking(state, m, car)).toBe(false); // free stall adjacent → park now, don't circle
+    expect(car.path).toBeUndefined();
   });
 });

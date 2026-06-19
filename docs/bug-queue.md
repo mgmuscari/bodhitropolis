@@ -179,10 +179,14 @@ layer (non-deterministic).
   Live: NE→mainland reachable=false (gated), core→shop=true, citizensOut 652≈occ/3, 61 FPS. NOTE:
   isolated-exurb residents now stay home (no trips) — connecting those masses for CARS (ramps on the
   satellite/bridge freeways so `canDrive` lets them on) is a separate worldgen follow-up.
-- 🔴 **Cars arriving at FULL parking should re-route to nearest available parking** (Maddy 2026-06-19) —
-  a car that reaches a full lot (no free stall) should re-route to the nearest lot/curb with space,
-  rather than curb-dumping / failing where it is. Investigate `tryPark`/`parkOwnedCarSomewhere`/
-  `findLotStall`.
+- ✅ **Cars arriving at FULL parking re-route; (57,103) "infinite cars"; curb cars now visible** (PR
+  pending) — a full nearest lot made cars curb-DUMP on the spot (often invisibly) and the lot search
+  capped at PARK_RADIUS couldn't re-route → unbounded pile at popular lots (near (57,103) grew 32→64).
+  Fix = one parking-seek: `nearestParkSpot` (nearby lot stall → visible side-street curb (curbDir set) →
+  farther lot); `routeToParking` DRIVES to a far spot and re-checks on arrival, circling up to
+  MAX_PARK_SEEKS ("drive to the new spot; if same condition, try again"); `parkOwnedCarSomewhere`/
+  `tryPark` claim via it. `findLotStall` gained a radius param. Live: near (57,103) 64→~34 stable (max
+  9/tile, no infinite stack); 64/65 curb cars visible at kerbs; 61 FPS.
 - 🔴 **Power should distribute from the source OUTWARD** (Maddy 2026-06-19) — in a brownout (capacity <
   demand), the plots NEAREST the power source should be powered first (distance-from-plant order),
   not the current ascending-anchor order. `computePowerGrid` in `src/growth/power.ts`.

@@ -153,6 +153,12 @@ const LASTMILE_RADIUS = 4;
 /** How close (tile radius) a parking lot's centre must be to a trip-car's destination for
  *  the car to pull in and park. Lots sit by the zones they serve, so this stays modest. */
 const PARK_RADIUS = 6;
+// When the lots around a car's destination are FULL, it doesn't curb-dump on the spot (which piled
+// cars up at a popular lot — Maddy) — it DRIVES to the nearest lot with a free stall within this
+// (generous) radius and re-checks on arrival, circling up to MAX_PARK_SEEKS times.
+const LOT_REROUTE_RADIUS = 64;
+const PARK_CLAIM_DIST = 2; // close enough to the chosen stall → claim it now instead of driving further
+const MAX_PARK_SEEKS = 6; // circle this many times for a free stall before settling (claim nearest / curb)
 
 /** When no lot is free, a car parks at the nearest free curb (drivable tile) within this
  *  Chebyshev radius of its destination. Crowding (near curbs taken) pushes it farther out —
@@ -512,6 +518,9 @@ export interface Mover {
   path?: readonly number[];
   /** Cursor into `path`: the index of the NEXT tile to commit to. */
   leg?: number;
+  /** (Car) How many times it has re-routed seeking a free parking stall (circling for parking). Caps
+   *  the search at MAX_PARK_SEEKS so it eventually settles (claims the nearest stall / curbs). */
+  parkSeeks?: number;
   /** For a walking ped following a committed `walkPath`: the tile index of the path's GOAL, so the
    *  route is recomputed when the destination (`walkTo`) changes (a new itinerary stop / heading
    *  home) and reused otherwise. Undefined for cars (they recommit via their own leg machinery). */
@@ -1739,13 +1748,38 @@ function findParkingNear(state: AmbientState, map: GameMap, x: number, y: number
  * owner returns. The stall path mirrors the trip-car convention (x = stall.x - 0.5; renderer draws
  * the centre on the stall) and records lotIdx/stallIdx so findLotStall counts it.
  */
+/** The nearest available PARKING spot to (x,y), in priority order (Maddy: re-route to a side street
+ *  if available, not just a far lot): (1) a free stall in a NEARBY lot — the intended parking; (2)
+ *  failing that, a side-street CURB nearby (visible, close); (3) failing that, the nearest free stall
+ *  in a FARTHER lot (re-route across town). A lot result carries lotIdx/stallIdx (the stall position);
+ *  a curb result is a bare tile. Null when nothing is reachable. */
+function nearestParkSpot(
+  state: AmbientState,
+  map: GameMap,
+  x: number,
+  y: number,
+): { x: number; y: number; lotIdx?: number; stallIdx?: number } | null {
+  const near = findLotStall(state, x, y, PARK_RADIUS);
+  if (near) return near;
+  const curb = findCurbSpot(state, map, x, y);
+  if (curb) return curb;
+  return findLotStall(state, x, y, LOT_REROUTE_RADIUS);
+}
+
 export function parkOwnedCarSomewhere(state: AmbientState, map: GameMap, car: Car): void {
-  const stall = findLotStall(state, Math.round(car.x), Math.round(car.y));
-  if (stall) {
-    car.lotIdx = stall.lotIdx;
-    car.stallIdx = stall.stallIdx;
-    car.x = stall.x - 0.5;
-    car.y = stall.y - 0.5;
+  const spot = nearestParkSpot(state, map, Math.round(car.x), Math.round(car.y));
+  if (!spot) {
+    // No free stall or kerb anywhere in reach → the car LEAVES rather than freezing on the freeway
+    // tile its route ended on (Maddy: cars parking on freeways). Its owner finishes on foot.
+    const i = state.cars.indexOf(car);
+    if (i >= 0) state.cars.splice(i, 1);
+    return;
+  }
+  if (spot.lotIdx !== undefined) {
+    car.lotIdx = spot.lotIdx;
+    car.stallIdx = spot.stallIdx;
+    car.x = spot.x - 0.5;
+    car.y = spot.y - 0.5;
     car.tx = car.x;
     car.ty = car.y;
     car.curbDir = undefined;
@@ -1753,15 +1787,43 @@ export function parkOwnedCarSomewhere(state: AmbientState, map: GameMap, car: Ca
     car.recent = undefined;
     return;
   }
-  const spot = findCurbSpot(state, map, Math.round(car.x), Math.round(car.y));
-  if (spot) {
-    parkOwnedCar(car, map, spot);
-    return;
-  }
-  // No free, non-freeway, dry kerb anywhere in reach → the car LEAVES rather than freezing on the
-  // freeway tile its route ended on (Maddy: cars parking on freeways). Its owner finishes on foot.
-  const i = state.cars.indexOf(car);
-  if (i >= 0) state.cars.splice(i, 1);
+  parkOwnedCar(car, map, spot); // a side-street kerb (records curbDir → drawn at the kerb, visible)
+}
+
+/**
+ * When a driving car's route ends and the lots at hand are full, DRIVE to the nearest lot with a free
+ * stall and re-check on arrival (it may have been taken en route → seek again), circling up to
+ * MAX_PARK_SEEKS times — instead of curb-dumping a pile where it arrived (Maddy: "(57,103) accepting
+ * infinite cars"; "the car should drive to the new spot, and if it encounters the same condition, try
+ * again"). Returns true if it committed a new drive path toward a parking spot (the car keeps driving
+ * and seeking); false if it should park NOW — a free stall is already at hand, none is reachable, or
+ * it has circled enough. Pure of rng (live layer).
+ */
+export function routeToParking(state: AmbientState, map: GameMap, car: Car): boolean {
+  const spot = nearestParkSpot(state, map, Math.round(car.x), Math.round(car.y));
+  if (!spot) return false; // nothing reachable → park now (leaves)
+  // The drive target tile: a lot stall sits at tile+0.5; a curb spot is the bare tile.
+  const tx = spot.lotIdx !== undefined ? Math.round(spot.x - 0.5) : spot.x;
+  const ty = spot.lotIdx !== undefined ? Math.round(spot.y - 0.5) : spot.y;
+  const d = Math.abs(Math.round(car.x) - tx) + Math.abs(Math.round(car.y) - ty);
+  if (d <= PARK_CLAIM_DIST) return false; // already there → claim it now
+  if ((car.parkSeeks ?? 0) >= MAX_PARK_SEEKS) return false; // circled enough → settle (claim nearest / curb)
+  const path = roadPath(map, Math.round(car.x), Math.round(car.y), tx, ty, state.traffic);
+  if (!path || path.length < 2) return false; // can't drive there → park now
+  car.parkSeeks = (car.parkSeeks ?? 0) + 1;
+  const p0x = path[0]! % map.width;
+  const p0y = (path[0]! - p0x) / map.width;
+  const p1x = path[1]! % map.width;
+  const p1y = (path[1]! - p1x) / map.width;
+  car.x = p0x;
+  car.y = p0y;
+  car.tx = p1x;
+  car.ty = p1y;
+  car.dir = p1x > p0x ? 1 : p1x < p0x ? 3 : p1y > p0y ? 2 : 0;
+  car.path = path;
+  car.leg = 2;
+  car.parked = false;
+  return true; // keep driving toward the spot
 }
 
 /** Park an owned car at `spot` (a drivable tile), recording the kerb side, and keep it OWNED so it
@@ -2253,6 +2315,7 @@ function findLotStall(
   state: AmbientState,
   x: number,
   y: number,
+  radius: number = PARK_RADIUS,
 ): { lotIdx: number; stallIdx: number; x: number; y: number } | null {
   const lots = state.parkingLots;
   if (!lots || lots.length === 0) return null;
@@ -2266,7 +2329,7 @@ function findLotStall(
     }
   }
   let best: { lotIdx: number; stallIdx: number; x: number; y: number } | null = null;
-  let bestD = PARK_RADIUS * PARK_RADIUS;
+  let bestD = radius * radius;
   for (let i = 0; i < lots.length; i++) {
     const lot = lots[i]!;
     if (lotBboxDist2(lot, x, y) > bestD) continue; // no stall here can beat the best found
@@ -2320,25 +2383,25 @@ function tryPark(state: AmbientState, c: Car, map: GameMap): boolean {
   const ay = Math.round(c.y);
   // A citizen-car knows the exact plot it drove to; a sim/freight car deposits at the nearest one.
   const building = c.building ?? nearestDemandTile(map, ax, ay);
-  const lot = findLotStall(state, c.x, c.y);
-  if (lot) {
-    c.lotIdx = lot.lotIdx;
-    c.stallIdx = lot.stallIdx;
-    c.x = lot.x - 0.5; // tile-corner; renderer draws the centre (+0.5) on the stall
-    c.y = lot.y - 0.5;
+  const spot = nearestParkSpot(state, map, ax, ay); // nearby lot → side-street curb → farther lot
+  if (!spot) return false; // nowhere at all (rare) → despawn
+  if (spot.lotIdx !== undefined) {
+    c.lotIdx = spot.lotIdx;
+    c.stallIdx = spot.stallIdx;
+    c.x = spot.x - 0.5; // tile-corner; renderer draws the centre (+0.5) on the stall
+    c.y = spot.y - 0.5;
+    c.curbDir = undefined;
   } else {
-    const curb = findCurbSpot(state, map, ax, ay);
-    if (!curb) return false; // nowhere at all (rare) → despawn
     c.lotIdx = undefined; // street-parked (drawn at the curb)
     c.stallIdx = undefined;
-    c.x = curb.x;
-    c.y = curb.y;
+    c.x = spot.x;
+    c.y = spot.y;
     // Record which side the kerb is on (first non-road neighbour) so the renderer draws the
     // car pulled over to it, not sitting on the lane centre of a 1-wide street.
     c.curbDir = undefined;
     for (let d = 0; d < 4; d++) {
-      const nx = curb.x + DIR_DX[d]!;
-      const ny = curb.y + DIR_DY[d]!;
+      const nx = spot.x + DIR_DX[d]!;
+      const ny = spot.y + DIR_DY[d]!;
       if (!map.inBounds(nx, ny) || !carTraversable(map.built[map.idx(nx, ny)]!)) {
         c.curbDir = d;
         break;
@@ -2962,8 +3025,16 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       p.x = car.x; // ride along (hidden)
       p.y = car.y;
       if (moving) return true;
-      // route done → pull into a free lot stall (lots fill up), else a street curb; then walk the last mile.
+      // route done → if the lots at hand are full, DRIVE to the nearest one with a free stall and
+      // re-check on arrival (circling for parking), rather than curb-dumping a pile here.
+      if (routeToParking(state, map, car)) {
+        p.x = car.x; // keep riding (hidden) while it seeks a spot
+        p.y = car.y;
+        return true;
+      }
+      // a free stall is at hand (or it circled enough / no lot) → park, then walk the last mile.
       parkOwnedCarSomewhere(state, map, car);
+      car.parkSeeks = undefined;
       car.path = undefined;
       car.leg = undefined;
       p.x = car.x;
