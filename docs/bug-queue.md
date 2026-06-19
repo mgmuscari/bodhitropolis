@@ -173,10 +173,25 @@ layer (non-deterministic).
   possession; it should stay parked while the ped is active and FOLLOW it home when sent home, not
   vanish on the spot. While active it already persisted (the car filter never despawns an owned car);
   the gap was the departure paths — `respawnAtHome` retired it to a short linger that vanished, and an
-  ARREST orphaned it. Fix: `sendOwnedCarHome` warps a departed citizen's owned car to park near its
+  ARREST orphaned it. Fix: `sendOwnedCarHome` warps a SENT-HOME citizen's owned car to park near its
   home (unowned, clears on its dwell), or removes it only if home has no parking. Wired into
-  respawnAtHome + the arrest path. Pure (no rng); determinism untouched. Live-verified: a car 39 tiles
-  from home warped to 4 tiles from home instead of despawning where the ped disappeared.
+  respawnAtHome. Pure (no rng); determinism untouched. Live-verified: a car 39 tiles from home warped
+  to 4 tiles from home instead of despawning where the ped disappeared.
+- ✅ **Arrested citizens' cars → abandoned derelicts that rust into ground pollution** (PR pending) —
+  an ARRESTED citizen is removed from the game, so (revising the warp-home above for the arrest case —
+  no one drives it back) their car is ABANDONED: `abandonOwnedCar` dumps it on the nearest EMPTY tile
+  (open land, `isWearable`), marks it a derelict (abandoned/unowned/parked; `carOffNetwork` exempts
+  it), and the car filter's `degradeAbandonedCar` leaks ground pollution into its tile each substep
+  until it has rusted away (`ABANDONED_DEGRADE_TIME` ~2 min), then despawns — leaving the contaminated
+  patch (lingering, reparable). Pure; determinism untouched. Live-verified: a citizen's car was
+  abandoned onto an empty tile and its ground pollution rose to 255 (max) before the wreck rusted away.
+- 🔵 **DEFERRED feature: traffic pileups (cars sharing a tile slow down)** (Maddy 2026-06-19) — when
+  multiple driving cars occupy the same tile they should SLOW DOWN, producing emergent traffic
+  pileups/jams (the agent-driven congestion made physical, not just the live `traffic` field). Today
+  cars advance at CAR_SPEED (2× on freeways) independent of how many share a tile. Design: a per-tile
+  car-occupancy count → speed penalty (denser tile = slower), so cars bunch and crawl through
+  bottlenecks. Live layer; composes with the existing agent-driven traffic field + A\* congestion
+  routing. Not started.
 
 ### Pedestrian pathing (Maddy 2026-06-19)
 
