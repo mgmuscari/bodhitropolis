@@ -1712,7 +1712,10 @@ function advanceItinerary(state: AmbientState, p: Ped, map: GameMap): boolean {
     const plot = nearestOfCategory(map, cx, cy, itin[step]!, state.landValue);
     if (plot && stopReachable(state, map, cx, cy, plot)) {
       p.itinStep = step;
-      const mode = chooseMode(map, cx, cy, plot.x, plot.y);
+      // If the citizen took its CAR out (carId set), it RETURNS TO THE CAR and drives to the next stop
+      // — it doesn't abandon the car and walk off (Maddy: "if they've driven to a location, they should
+      // go back to their car"). Mode is only chosen freely from HOME (no car out yet → walk option).
+      const mode = p.carId !== undefined ? TravelMode.Drive : chooseMode(map, cx, cy, plot.x, plot.y);
       // DRIVE: walk to the owned car, drive it to a parking spot, then walk to the plot. If no car
       // can be had (land-locked), fall through and walk the leg.
       if (mode === TravelMode.Drive && setDriveLeg(state, p, map, plot, 'to-building')) return true;
@@ -1774,6 +1777,10 @@ function ensureOwnedCar(state: AmbientState, p: Ped, map: GameMap): Car | null {
   }
   const start = nearestDriveStart(map, Math.round(p.x), Math.round(p.y));
   if (!start) return null;
+  // A freshly-spawned owned car must rest in a VALID STALL (a kerb slot / lot bay), never warped onto a
+  // lane centre where they pile up (Maddy). No stall in reach → no car here → the citizen walks.
+  const spot = nearestParkSpot(state, map, start.x, start.y);
+  if (!spot) return null;
   const id = (state.nextCarId = (state.nextCarId ?? 0) + 1);
   const car: Car = {
     x: start.x,
@@ -1781,20 +1788,12 @@ function ensureOwnedCar(state: AmbientState, p: Ped, map: GameMap): Car | null {
     dir: 0,
     tx: start.x,
     ty: start.y,
-    parked: true,
     owned: true,
     id,
     dwell: PARK_MAX_WAIT,
     tint: (Math.imul((map.idx(start.x, start.y) + 1) ^ id, 0x9e3779b1) >>> 0) % 0x10000,
   };
-  for (let d = 0; d < 4; d++) {
-    const nx = start.x + DIR_DX[d]!;
-    const ny = start.y + DIR_DY[d]!;
-    if (!map.inBounds(nx, ny) || !carTraversable(map.built[map.idx(nx, ny)]!)) {
-      car.curbDir = d;
-      break;
-    }
-  }
+  applyParkSpot(car, spot); // parked in a real stall (sets x/y + curbSlot|lotIdx, parked = true)
   state.cars.push(car);
   p.carId = id;
   return car;
@@ -1934,15 +1933,22 @@ function retireOwnedCar(state: AmbientState, p: Ped, map: GameMap): void {
   if (p.carId === undefined) return;
   const car = findCar(state, p.carId);
   if (car && car.owned) {
-    if (isParkable(map, Math.round(car.x), Math.round(car.y))) {
+    if (car.parked && (car.curbSlot !== undefined || car.lotIdx !== undefined)) {
+      // Already at rest in a valid stall (drove home + parked) → just put it away to linger then leave.
       car.owned = false;
-      car.parked = true; // on a valid kerb → it lingers a beat ("put away"), then clears on its dwell
       car.dwell = RETIRED_CAR_LINGER;
     } else {
-      // Mid-drive on a freeway / over water when its owner is lost → it drives off rather than
-      // freezing parked on the freeway (Maddy: cars parking on freeways), no lingering wreck.
-      const i = state.cars.indexOf(car);
-      if (i >= 0) state.cars.splice(i, 1);
+      // Retired mid-drive (no stall) → re-park it in a real stall nearby so it never lingers stranded in
+      // a lane centre (Maddy); if no stall is in reach, it drives off rather than freezing on the road.
+      const spot = nearestParkSpot(state, map, Math.round(car.x), Math.round(car.y));
+      if (spot) {
+        applyParkSpot(car, spot);
+        car.owned = false;
+        car.dwell = RETIRED_CAR_LINGER;
+      } else {
+        const i = state.cars.indexOf(car);
+        if (i >= 0) state.cars.splice(i, 1);
+      }
     }
   }
   p.carId = undefined;
@@ -3266,6 +3272,9 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         car.path = path;
         car.leg = 2; // path[0]=start, path[1]=the committed next tile; pathStep targets path[2] next
         car.parked = false;
+        car.curbSlot = undefined; // it has left its stall
+        car.lotIdx = undefined;
+        car.stallIdx = undefined;
         car.recent = undefined;
         p.parkAt = spot;
         p.phase = 'driving';

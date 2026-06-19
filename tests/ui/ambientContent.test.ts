@@ -2383,6 +2383,27 @@ describe('citizen fuel economy (spend on terrain, refuel at good plots — Maddy
 });
 
 describe('citizen daily itinerary (home → work → shop → lifestyle → home — Maddy directive)', () => {
+  it('a citizen with its car out RETURNS TO THE CAR for the next leg, not walks off (Maddy droveHere)', () => {
+    const map = new GameMap(20, 10);
+    for (let x = 1; x <= 16; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadStreet; // a street to drive
+    map.built[map.idx(6, 5)] = BuiltKind.Industrial; // work it just visited
+    map.built[map.idx(9, 5)] = BuiltKind.CommercialStrip; // a SHORT next leg — chooseMode alone would WALK
+    map.built[map.idx(2, 5)] = BuiltKind.HouseSingle; // home
+    map.built[map.idx(6, 3)] = BuiltKind.Park; // keep the just-visited ped on the ped network (substrate)
+    const state = createAmbientState();
+    state.cars.push({ x: 5, y: 4, dir: 1, tx: 5, ty: 4, owned: true, parked: true, id: 7, curbSlot: 0 });
+    const ped = {
+      x: 6, y: 4, dir: 1, tx: 6, ty: 4, phase: 'inside' as const, dwellInside: 1,
+      carId: 7, homeTile: map.idx(2, 5), building: { x: 6, y: 5 },
+      itinerary: [StopCategory.Work, StopCategory.Shop], itinStep: 0,
+    };
+    state.peds.push(ped);
+    const rng = ambientFork('drovehere');
+    for (let i = 0; i < 5 && ped.phase === 'inside'; i++) stepAmbient(state, map, rng, 50);
+    // It returns to its car (walks to it, then drives) — NOT walking the leg directly on foot.
+    expect(['to-vehicle', 'driving']).toContain(ped.phase);
+  });
+
   it('walks the full round in order, banks each stop at home, then returns home', () => {
     const map = new GameMap(24, 8); // empty = walkable everywhere
     map.built[map.idx(2, 4)] = BuiltKind.HouseSingle; // home
