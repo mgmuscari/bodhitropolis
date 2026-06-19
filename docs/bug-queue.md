@@ -5,6 +5,24 @@ Maddy reports bugs as she playtests; Claude **records them here** (need not fix 
 
 Status: 🔴 open · 🟡 in progress · ✅ fixed (note the PR)
 
+## TILESET GRAPHICS — first skin (Maddy, 2026-06-19) — active
+
+The procedural Canvas2D look stays the **permanent default**; generated graphics are an OPTIONAL
+**tileset** skin over it. First skin = **satellite (Oakland)**: Google-Maps-style top-down patchwork,
+black outlines, SC2000-era, top-down (not iso), Oakland architectural cues. Plan: `docs/art/satellite-tileset.md`.
+
+- ✅ **Tileset seam** (overnight-batch) — atlas-override map layered over the procedural painters with
+  per-key fallback; `tileset.ts` (registry + key fan-out), `footprintCellKey` (segmented N×M plots),
+  async `tilesetLoader` (404→skip, decode-once-to-canvas), renderer `applyTileset` HOT-SWAP, settings
+  dropdown wired (live, no reload). Perf-preserving: procedural atlas cached (swap = clone + overrides,
+  not a repaint); single cached-base-texture bake + 1:1 blit unchanged; 16×16 tile contract. +19 tests.
+- 🟡 **Satellite art** — recipe + saved ComfyUI workflow ready (`z_image_pixelart_tile.json`: Z-Image
+  turbo + pixel_art_style LoRA + SeamlessTile + PixelOE). Categories: tesselable terrain/roads,
+  segmented multi-tile plots (one big image → 16×16 cells), 5–10 residential variants. Generation
+  DEFERRED 2026-06-19 (MCP `enqueue_workflow` POST path returned non-OK for any graph; run from the
+  ComfyUI UI). Open: variety-pick seam (per-parcel hash → variant) when residential variants land;
+  palette/first-slice to pin with Maddy (plan §6).
+
 ## PLAYTEST ROADMAP (Maddy, 2026-06-17) — sequenced
 
 The decline spiral "feels fairly accurate" (Detroit) — KEEP it; the game is decline ↔ **revival**.
