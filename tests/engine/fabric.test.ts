@@ -21,6 +21,7 @@ import {
   freewayMedianAxis,
   freewayAxis,
   freewayLaneBoundaryMask,
+  freewayCenterLaneAxis,
   parcelTouchesRoad,
   demolishParcel,
   demolishTransportAt,
@@ -1053,6 +1054,31 @@ describe('freewayAxis (lengthwise axis for freeway lane lines)', () => {
       h.setBuilt(x, 4, BuiltKind.RoadHighway);
     }
     expect(freewayAxis(h, 3, 2)).toBe('h');
+  });
+});
+
+describe('freewayCenterLaneAxis (street through the freeway = two-way turn lane)', () => {
+  it('is null for a freeway tile or a road not flanked by freeway both sides', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.RoadHighway);
+    expect(freewayCenterLaneAxis(map, 2, 2)).toBe(null); // a freeway, not a centre lane
+    const lone = new GameMap(5, 5);
+    lone.setBuilt(2, 2, BuiltKind.RoadStreet);
+    lone.setBuilt(1, 2, BuiltKind.RoadHighway); // only one freeway flank
+    expect(freewayCenterLaneAxis(lone, 2, 2)).toBe(null);
+  });
+
+  it('detects a street flanked by freeway on both perpendicular sides', () => {
+    const v = new GameMap(5, 5);
+    v.setBuilt(2, 2, BuiltKind.RoadStreet);
+    v.setBuilt(1, 2, BuiltKind.RoadHighway); // freeway west
+    v.setBuilt(3, 2, BuiltKind.RoadHighway); // freeway east → lane runs N-S
+    expect(freewayCenterLaneAxis(v, 2, 2)).toBe('v');
+    const h = new GameMap(5, 5);
+    h.setBuilt(2, 2, BuiltKind.RoadAvenue);
+    h.setBuilt(2, 1, BuiltKind.RoadHighway);
+    h.setBuilt(2, 3, BuiltKind.RoadHighway);
+    expect(freewayCenterLaneAxis(h, 2, 2)).toBe('h');
   });
 });
 

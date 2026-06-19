@@ -9,7 +9,7 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask, freewayMedianAxis, freewayAxis, freewayLaneBoundaryMask } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask, freewayMedianAxis, freewayLaneBoundaryMask, freewayCenterLaneAxis } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import {
@@ -779,31 +779,47 @@ export class Renderer {
               if (curb & E) { ctx.fillStyle = walk; ctx.fillRect(dx + ts - sw, dy, sw, ts); ctx.fillStyle = gutter; ctx.fillRect(dx + ts - sw, dy, 1, ts); }
             }
 
-            // Freeway lane markings — ONLY on a WIDE (multi-lane) freeway. A single-lane (1-wide)
-            // highway already carries its double-yellow from the tile painter, so it gets neither a
-            // dashed centerline nor lane dividers (Maddy 2026-06-19). On a wide freeway the tile is
-            // blank asphalt, so we lay: a dashed gold lane line down each lane (covered on the median
-            // spine), plus a dashed line on the BOUNDARY between adjacent lanes ("between the tiles").
+            // Freeway lane markings — ONLY on a WIDE (multi-lane) freeway (a 1-wide highway keeps its
+            // own double-yellow). One dashed gold line per INTER-LANE boundary, drawn ONCE per seam
+            // (the E/S side only — the neighbour's W/N edge is the same seam), so the lines don't
+            // double up and there's no extra lane centerline (Maddy 2026-06-19: "too many… double up").
             if (built === BuiltKind.RoadHighway && wide) {
-              const fAxis = freewayAxis(map, tx, ty);
-              if (fAxis !== null) {
+              const bnd = freewayLaneBoundaryMask(map, tx, ty);
+              if (bnd !== 0) {
                 ctx.fillStyle = '#cebe6e'; // freeway lane gold
                 const dash = Math.max(1, Math.round(ts * 0.16));
                 const lw = Math.max(1, Math.round(ts * 0.06));
-                // Lane centerline along travel.
-                if (fAxis === 'v') {
-                  const lx = Math.floor(dx + ts / 2 - lw / 2);
-                  for (let yy = 0; yy < ts; yy += dash * 2) ctx.fillRect(lx, dy + yy, lw, dash);
-                } else {
-                  const ly = Math.floor(dy + ts / 2 - lw / 2);
-                  for (let xx = 0; xx < ts; xx += dash * 2) ctx.fillRect(dx + xx, ly, dash, lw);
-                }
-                // Lane line on each boundary edge that abuts a parallel lane.
-                const bnd = freewayLaneBoundaryMask(map, tx, ty);
-                if (bnd & W) for (let yy = 0; yy < ts; yy += dash * 2) ctx.fillRect(dx, dy + yy, lw, dash);
                 if (bnd & E) for (let yy = 0; yy < ts; yy += dash * 2) ctx.fillRect(dx + ts - lw, dy + yy, lw, dash);
-                if (bnd & N) for (let xx = 0; xx < ts; xx += dash * 2) ctx.fillRect(dx + xx, dy, dash, lw);
                 if (bnd & S) for (let xx = 0; xx < ts; xx += dash * 2) ctx.fillRect(dx + xx, dy + ts - lw, dash, lw);
+              }
+            }
+
+            // Freeway CENTER LANE (two-way left-turn / "suicide" lane): a surface street running
+            // through the freeway middle. Draw the classic yellow solid-OUTER + dashed-INNER markings
+            // on the flanking edges (the boundary with the freeway lanes).
+            const clAxis = freewayCenterLaneAxis(map, tx, ty);
+            if (clAxis !== null) {
+              const solid = '#e2c84e';
+              const lw = Math.max(1, Math.round(ts * 0.06));
+              const dash = Math.max(1, Math.round(ts * 0.16));
+              const gap = lw + 1;
+              if (clAxis === 'v') {
+                // solid lines at the W and E edges, dashed lines just inside them
+                ctx.fillStyle = solid;
+                ctx.fillRect(dx, dy, lw, ts);
+                ctx.fillRect(dx + ts - lw, dy, lw, ts);
+                for (let yy = 0; yy < ts; yy += dash * 2) {
+                  ctx.fillRect(dx + gap, dy + yy, lw, dash);
+                  ctx.fillRect(dx + ts - lw - gap, dy + yy, lw, dash);
+                }
+              } else {
+                ctx.fillStyle = solid;
+                ctx.fillRect(dx, dy, ts, lw);
+                ctx.fillRect(dx, dy + ts - lw, ts, lw);
+                for (let xx = 0; xx < ts; xx += dash * 2) {
+                  ctx.fillRect(dx + xx, dy + gap, dash, lw);
+                  ctx.fillRect(dx + xx, dy + ts - lw - gap, dash, lw);
+                }
               }
             }
 

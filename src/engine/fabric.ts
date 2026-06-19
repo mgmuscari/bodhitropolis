@@ -893,6 +893,25 @@ export function freewayLaneBoundaryMask(map: GameMap, x: number, y: number): num
   return mask;
 }
 
+/**
+ * The axis of a freeway CENTER LANE on tile (x, y), or null. A surface road that runs through the
+ * middle of a freeway (flanked on both perpendicular sides by RoadHighway) reads as a two-way
+ * left-turn lane (the Midwest "suicide lane" — Maddy 2026-06-19, "i like it"). 'v' = the freeway
+ * flanks E-W so the centre lane runs N-S; 'h' = flanks N-S, lane runs E-W. The renderer draws the
+ * turn-lane's yellow solid-outer + dashed-inner markings on the flanking edges. Render-only.
+ */
+export function freewayCenterLaneAxis(map: GameMap, x: number, y: number): 'v' | 'h' | null {
+  const self = map.getBuilt(x, y);
+  if (transportCategory(self) !== 1 || self === BuiltKind.RoadHighway || self === BuiltKind.RoadRamp) {
+    return null;
+  }
+  const hwy = (px: number, py: number): boolean =>
+    map.inBounds(px, py) && map.getBuilt(px, py) === BuiltKind.RoadHighway;
+  if (hwy(x - 1, y) && hwy(x + 1, y)) return 'v'; // freeway lanes east & west → centre lane runs N-S
+  if (hwy(x, y - 1) && hwy(x, y + 1)) return 'h';
+  return null;
+}
+
 /** The elevated deck (overpass) kind at (x, y), or 0 (none). Reads the second `deck` layer. */
 export function overpassAt(map: GameMap, x: number, y: number): number {
   return map.inBounds(x, y) ? map.deck[map.idx(x, y)]! : 0;
