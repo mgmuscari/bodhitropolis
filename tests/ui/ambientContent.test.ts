@@ -32,6 +32,7 @@ import {
   isPedSubstrate,
   birdSpawnAt,
   nextRoadStep,
+  reachedPlot,
   congestionSpeedMult,
   congestionCount,
   walkPath,
@@ -368,6 +369,24 @@ describe('agent substrate invariants (Maddy: cars park on freeways, peds cross w
     const isolated = new GameMap(4, 4);
     for (let i = 0; i < 16; i++) isolated.water[i] = Water.Ocean; // all water
     expect(nearestWalkable(isolated, 2, 2)).toBeNull();
+  });
+
+  it('reachedPlot: visiting a multi-tile plot counts as entering ANY of its tiles (Maddy)', () => {
+    const m = new GameMap(16, 16);
+    // a 2x2 industrial plot at (6-7, 6-7), parcel id 9
+    for (const [x, y] of [[6, 6], [7, 6], [6, 7], [7, 7]] as const) {
+      m.built[m.idx(x, y)] = BuiltKind.Industrial;
+      m.parcel[m.idx(x, y)] = 9;
+    }
+    // target the FAR anchor (7,7); a ped at (5,6) is adjacent to the NEAR plot tile (6,6) → arrived
+    expect(reachedPlot(m, 5, 6, 7, 7)).toBe(true); // entered a different tile of the same plot
+    expect(reachedPlot(m, 6, 6, 7, 7)).toBe(true); // standing on a plot tile
+    expect(reachedPlot(m, 8, 7, 7, 7)).toBe(true); // adjacent to the exact target tile
+    expect(reachedPlot(m, 2, 2, 7, 7)).toBe(false); // nowhere near the plot
+    // a non-parcel target (a road tile) has no footprint → only the exact-tile door counts
+    m.built[m.idx(3, 3)] = BuiltKind.RoadStreet;
+    expect(reachedPlot(m, 3, 4, 3, 3)).toBe(true); // adjacent
+    expect(reachedPlot(m, 3, 6, 3, 3)).toBe(false); // 3 tiles off, no footprint
   });
 
   it('a curb-parking car pulls onto a SHOULDER, never the middle of a wide road (Maddy: (51,100))', () => {

@@ -1294,6 +1294,21 @@ function isWalkable(map: GameMap, x: number, y: number): boolean {
   return zoneTypeOf(k) === ZoneType.None;
 }
 
+/** Has a ped at (px,py) reached its destination PLOT? Adjacent to the exact target tile, OR — for a
+ *  MULTI-TILE footprint — on or adjacent to ANY tile of the same parcel. Maddy: "visiting a multitile
+ *  plot should count as entering any of its tiles," so a citizen needn't reach one specific anchor of a
+ *  big building/home (it enters whichever tile it gets to). A non-parcel target (a road/bare tile) has
+ *  no footprint, so only the exact-tile door counts. */
+export function reachedPlot(map: GameMap, px: number, py: number, tx: number, ty: number): boolean {
+  if (Math.abs(px - tx) + Math.abs(py - ty) <= 1) return true; // at/adjacent the exact target tile
+  const dp = map.parcel[map.idx(tx, ty)]!;
+  if (dp === 0) return false; // not a parcel — only the exact door
+  const onPlot = (x: number, y: number): boolean => map.inBounds(x, y) && map.parcel[map.idx(x, y)] === dp;
+  if (onPlot(px, py)) return true;
+  for (let d = 0; d < 4; d++) if (onPlot(px + DIR_DX[d]!, py + DIR_DY[d]!)) return true;
+  return false;
+}
+
 /** The nearest pedestrian-walkable tile to (x, y) within `maxR` (ring search, the tile itself
  *  first), or null if none is in reach. Rescues a ped that was placed OFF the walkable set — on
  *  water, a freeway, or a plot — back onto solid ground rather than leaving it stranded mid-water
@@ -3200,8 +3215,9 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       p.path = undefined;
       p.leg = undefined;
       p.pathGoal = undefined;
-      // advanceMover stopped: arrived (within a tile of the target) or boxed in.
-      const arrived = Math.abs(Math.round(p.x) - tgtx) + Math.abs(Math.round(p.y) - tgty) <= 1;
+      // advanceMover stopped: arrived (reached the destination plot — adjacent to the target, or any
+      // tile of a multi-tile footprint) or boxed in.
+      const arrived = reachedPlot(map, Math.round(p.x), Math.round(p.y), tgtx, tgty);
       if (!arrived) {
         // A citizen that DROVE to its destination but can't complete the last-mile on FOOT — the
         // building is walled off by other non-walkable kinds (a job hemmed in by industry/buildings,
