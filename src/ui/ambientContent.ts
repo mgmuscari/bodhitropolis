@@ -1578,17 +1578,41 @@ export function nearestOfCategory(
   return bx < 0 ? null : { x: bx, y: by };
 }
 
+/**
+ * Can a citizen at (cx,cy) actually REACH `plot`? — on foot (a walkPath exists) OR by car (a road
+ * near the citizen drives, via roadPath, to a parking spot near the plot). Trip-stop selection picks
+ * the nearest stop by RADIUS, which on an isolated landmass (a bridged exurb cut off for cars, an
+ * island across water) chooses a mainland stop the citizen can never get to — so it spawns, fails to
+ * route, gives up and churns ("the NE region spawns + immediately despawns travelers", Maddy). Gating
+ * on real reachability drops those doomed trips at the source (the resident stays home as occupancy).
+ * The plot's own door is a walkable neighbour by construction, so reachability to the plot tile
+ * suffices. Cheap: walkPath/roadPath that FAIL only explore the isolated component (small).
+ */
+export function stopReachable(
+  state: AmbientState,
+  map: GameMap,
+  cx: number,
+  cy: number,
+  plot: { x: number; y: number },
+): boolean {
+  if (walkPath(map, cx, cy, plot.x, plot.y, state.wear, state.traffic, state.pollution)) return true;
+  const from = findCurbSpot(state, map, cx, cy); // a road near the citizen to drive from
+  const to = findParkingNear(state, map, plot.x, plot.y); // a parking spot near the plot
+  return !!(from && to && roadPath(map, from.x, from.y, to.x, to.y, state.traffic));
+}
+
 /** Advance a citizen to the NEXT reachable stop on its daily round: from its current position,
- *  aim it at the nearest plot of the next itinerary category (skipping categories the district
- *  lacks). Sets it walking ('to-building') toward that plot and resets the leg's walk tolls.
- *  Returns false when no stops remain — the caller then sends it home. */
+ *  aim it at the nearest plot of the next itinerary category that it can actually REACH (skipping
+ *  categories the district lacks OR can't get to). Sets it walking ('to-building') toward that plot
+ *  and resets the leg's walk tolls. Returns false when no reachable stops remain — the caller then
+ *  sends it home (or, at spawn, drops it so it stays home instead of churning). */
 function advanceItinerary(state: AmbientState, p: Ped, map: GameMap): boolean {
   const itin = p.itinerary!;
   const cx = Math.round(p.x);
   const cy = Math.round(p.y);
   for (let step = (p.itinStep ?? 0) + 1; step < itin.length; step++) {
     const plot = nearestOfCategory(map, cx, cy, itin[step]!, state.landValue);
-    if (plot) {
+    if (plot && stopReachable(state, map, cx, cy, plot)) {
       p.itinStep = step;
       const mode = chooseMode(map, cx, cy, plot.x, plot.y);
       // DRIVE: walk to the owned car, drive it to a parking spot, then walk to the plot. If no car

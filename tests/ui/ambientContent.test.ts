@@ -33,6 +33,7 @@ import {
   birdSpawnAt,
   nextRoadStep,
   walkPath,
+  stopReachable,
   laneOffset,
   freewayLane,
   pollutionEmit,
@@ -2804,5 +2805,30 @@ describe('arrested citizens leave ABANDONED cars that rust into ground pollution
     expect(carOffNetwork(m, derelict)).toBe(false); // a derelict is allowed to sit off the road
     const stray = { x: 4, y: 4 } as never as Car;
     expect(carOffNetwork(m, stray)).toBe(true); // a normal car on empty land is still off-network
+  });
+});
+
+describe('stopReachable (Maddy: NE region spawns + immediately despawns travelers)', () => {
+  // An isolated landmass whose citizens can reach NO mainland stop should not be sent on trips there
+  // (they would spawn, fail to route, give up, and churn). stopReachable gates trip-stop selection.
+  function islandWorld(): GameMap {
+    const m = new GameMap(34, 12);
+    for (let x = 1; x <= 10; x++) m.built[m.idx(x, 6)] = BuiltKind.RoadStreet; // mainland road
+    m.built[m.idx(5, 5)] = BuiltKind.CommercialStrip; // mainland shop (door at 5,6)
+    for (let x = 11; x <= 17; x++) for (let y = 0; y < 12; y++) m.water[m.idx(x, y)] = Water.Ocean; // moat
+    for (let x = 20; x <= 26; x++) m.built[m.idx(x, 6)] = BuiltKind.RoadStreet; // island road (land)
+    return m;
+  }
+
+  it('a citizen on an isolated island cannot reach a mainland stop (no walk OR drive route)', () => {
+    const m = islandWorld();
+    const state = createAmbientState();
+    expect(stopReachable(state, m, 23, 5, { x: 5, y: 5 })).toBe(false); // island → mainland: across the moat
+  });
+
+  it('a mainland citizen CAN reach a mainland stop', () => {
+    const m = islandWorld();
+    const state = createAmbientState();
+    expect(stopReachable(state, m, 9, 6, { x: 5, y: 5 })).toBe(true); // walkable along the road
   });
 });
