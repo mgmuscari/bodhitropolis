@@ -128,8 +128,10 @@ export function main(): void {
   // (PRD Q2); the [Life] toggle / L key flip it. ambientOn=false restores the exact
   // legacy dirty-driven render path.
   let ambientOn = true;
-  const ambientState = createAmbientState();
   const ambientRng = createRng(seed).fork('ambient');
+  // Seed the ambient state (incl. the world's prevailing wind) from the ambient fork — a SEPARATE
+  // fork so the wind draw never advances the per-frame ambient stream below.
+  const ambientState = createAmbientState(createRng(seed).fork('ambient-wind'));
   // Revival/decay rng: a stable stream for the slow-cadence growth seam (densify
   // draws). Forked off the world seed, independent of the ambient + sim streams.
   const revivalRng = createRng(seed).fork('revival');

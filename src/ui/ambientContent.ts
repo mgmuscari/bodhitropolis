@@ -216,6 +216,31 @@ const POLL_CONGEST = 8; // up to this much MORE on a fully-jammed tile (idling s
 const POLL_DECAY = 0.4; // smog lingers — eases back slower than traffic (TRAFFIC_DECAY = 1) clears
 const PED_POLL_WEIGHT = 2.5; // a fully-smoggy tile costs about as much as a stroad to walk
 
+// Prevailing wind: the city has one dominant wind, so smog DRIFTS downwind into plumes instead of
+// only diffusing/lingering in place — the haze streaks away from its source (the freeway, the coal
+// plant) across the neighbourhoods downwind. The eight compass directions as integer (dx,dy) unit
+// vectors (no transcendental Math — the field is on the pure-ui allowlist).
+const WIND_DIRS: ReadonlyArray<readonly [number, number]> = [
+  [0, -1], // N
+  [1, -1], // NE
+  [1, 0], // E
+  [1, 1], // SE
+  [0, 1], // S
+  [-1, 1], // SW
+  [-1, 0], // W
+  [-1, -1], // NW
+];
+const WIND_CADENCE = 8; // substeps between drift passes (~0.4s) — the plume streaks, never teleports
+const WIND_FRACTION = 0.34; // share of a tile's smog carried one tile downwind each drift pass
+
+/** The world's prevailing wind as an integer unit vector, drawn from the (seeded) ambient rng so it
+ *  is consistent per world seed and NEVER touches the sim/worldgen streams. Defaults to a westerly
+ *  (blowing due east) when no rng is supplied, so the no-arg `createAmbientState()` stays usable. */
+export function prevailingWind(rng?: Rng): { dx: number; dy: number } {
+  const [dx, dy] = rng ? WIND_DIRS[rng.nextInt(WIND_DIRS.length)]! : WIND_DIRS[2]!;
+  return { dx, dy };
+}
+
 /** Live DERIVED land value (0..LV_MAX), keyed by inhabited PLOT tile (zoneTypeOf !== None): a tile's
  *  desirability, recomputed on a slow cadence from the healed land + amenity neighbours MINUS the
  *  live nuisances (pollution, traffic, decay). Unlike traffic/pollution it isn't laid by agents —
@@ -637,6 +662,12 @@ export interface AmbientState {
    *  drive (heavier on freeways / in congestion), lingering as smog that decays slowly. Peds shun it
    *  and it drags land value down. Renderer-side, never hashed — the smog emerges from the vehicles. */
   pollution: Map<number, number>;
+  /** The world's prevailing wind (integer unit vector): air pollution drifts one tile along it each
+   *  drift pass, so smog streaks downwind into plumes. Seeded per world from the ambient rng (never
+   *  the sim streams); defaults to a westerly. Renderer-side, never hashed. */
+  wind: { dx: number; dy: number };
+  /** Substep counter gating the smog-drift pass to WIND_CADENCE. */
+  windTick: number;
   /** Live DERIVED land value (0..LV_MAX), keyed by inhabited plot tile: desirability recomputed on a
    *  slow cadence from greenery + amenity neighbours minus pollution/traffic/decay. Steers citizen
    *  destinations (and, next, household growth). Renderer-side, never hashed. */
@@ -669,8 +700,10 @@ export interface AmbientState {
   plantEmitters?: ReadonlyArray<{ tile: number; amount: number }>;
 }
 
-export function createAmbientState(): AmbientState {
+export function createAmbientState(rng?: Rng): AmbientState {
   return {
+    wind: prevailingWind(rng),
+    windTick: 0,
     cars: [],
     peds: [],
     cruisers: [],
@@ -2883,6 +2916,12 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     for (const e of state.plantEmitters) layField(state.pollution, e.tile, e.amount, POLL_MAX);
   }
 
+  // 5d. Prevailing wind: on its own clock, carry the smog one tile downwind so plumes streak away
+  //     from their sources (the freeway, the coal plant) across the neighbourhoods downwind, rather
+  //     than only diffusing/lingering in place. Runs before the decay so the drifted haze still fades.
+  state.windTick += 1;
+  if (state.windTick % WIND_CADENCE === 0) driftPollution(state, map);
+
   // Air pollution lingers as smog and eases back slowly (slower than traffic) — so calming a
   // corridor clears its jam quickly but the haze takes longer to lift.
   decayField(state.pollution, POLL_DECAY);
@@ -3017,6 +3056,34 @@ export function accumulateGroundPollution(state: AmbientState, map: GameMap): vo
  * Hackensack: the harm is sited upstream, borne downstream). Live/non-hashed;
  * deterministic (sorted order); integer/rational only.
  */
+/** One smog-drift pass: carry WIND_FRACTION of every air-pollution tile's load ONE tile downwind
+ *  (along `state.wind`), so plumes streak away from their sources instead of only diffusing in place.
+ *  A conservative transfer — what leaves a tile arrives at its downwind neighbour (smog at the map
+ *  edge blows off the map and leaves the system); the normal POLL_DECAY then fades the whole plume
+ *  with distance/time. Air ignores substrate — it drifts over land and water alike. Departures are
+ *  computed from the pre-pass values and arrivals applied AFTER the scan, so it's a clean
+ *  simultaneous update (no within-pass cascade). Live/non-hashed; gated to WIND_CADENCE by the
+ *  caller. */
+export function driftPollution(state: AmbientState, map: GameMap): void {
+  const { dx, dy } = state.wind;
+  if (dx === 0 && dy === 0) return;
+  if (state.pollution.size === 0) return;
+  const arrivals: Array<[number, number]> = []; // (downwind tile, amount) — applied after the scan
+  for (const [i, p] of state.pollution) {
+    if (p <= 0) continue;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const nx = x + dx;
+    const ny = y + dy;
+    if (!map.inBounds(nx, ny)) continue; // blows off the map edge — leaves the system (no wrap)
+    const move = p * WIND_FRACTION;
+    if (move <= 0) continue;
+    arrivals.push([map.idx(nx, ny), move]);
+    state.pollution.set(i, p - move);
+  }
+  for (const [ni, amt] of arrivals) layField(state.pollution, ni, amt, POLL_MAX);
+}
+
 export function flowWaterPollution(state: AmbientState, map: GameMap): void {
   if (state.waterPollution.size === 0) return;
   const tiles = [...state.waterPollution.keys()].filter((i) => map.water[i] !== 0);
