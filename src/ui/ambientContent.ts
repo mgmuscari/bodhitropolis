@@ -3215,6 +3215,23 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       }
       return false; // unbound routed ped → despawn on arrival
     }
+    // An IDLE ped that HAS a home — a citizen repositioned beside home after a failed/boxed/exhausted
+    // trip (respawnAtHome cleared its round) — heads HOME and goes inside, instead of aimlessly
+    // wandering the green substrate forever (Maddy: "citizens not commuting home; peds roam parks/
+    // rewilded, may never go home"). At the door it goes inside (despawns into the household). A
+    // homeless ped is ambient street life and wanders.
+    if (p.homeTile !== undefined) {
+      const hx = p.homeTile % map.width;
+      const hy = (p.homeTile - hx) / map.width;
+      if (Math.abs(Math.round(p.x) - hx) + Math.abs(Math.round(p.y) - hy) <= 1) return false; // home → inside
+      p.phase = 'to-home';
+      p.walkTo = { x: hx, y: hy };
+      p.mode = TravelMode.Walk;
+      p.tx = Math.round(p.x);
+      p.ty = Math.round(p.y);
+      p.recent = undefined;
+      return true;
+    }
     return advanceMover(p, PED_SPEED, map, (x, y, fromDir) => nextPedStep(map, x, y, fromDir, rng));
   });
   for (const f of state.birds) advanceFlock(f);
