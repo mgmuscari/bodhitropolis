@@ -64,6 +64,11 @@ import {
   computeCoverage,
   parkOwnedCarSomewhere,
   sendOwnedCarHome,
+  abandonOwnedCar,
+  degradeAbandonedCar,
+  carOffNetwork,
+  type Car,
+  type Ped,
   pedDespawns,
   isParkable,
   nearestWalkable,
@@ -2732,5 +2737,45 @@ describe('owned cars follow their citizen home, never despawn on the spot (Maddy
     const state = createAmbientState();
     const p = { x: 3, y: 3, homeTile: m.idx(2, 2) } as never as import('../../src/ui/ambientContent').Ped;
     expect(() => sendOwnedCarHome(state, m, p, m.idx(2, 2))).not.toThrow();
+  });
+});
+
+describe('arrested citizens leave ABANDONED cars that rust into ground pollution (Maddy)', () => {
+  it('abandons an owned car on a nearby EMPTY tile (a derelict — not warped home, not despawned)', () => {
+    const m = new GameMap(20, 20);
+    for (let x = 2; x < 18; x++) m.built[m.idx(x, 10)] = BuiltKind.RoadStreet; // a road; open land around
+    const state = createAmbientState();
+    const car = { id: 1, x: 9, y: 10, tx: 9, ty: 10, dir: 0, owned: true, parked: true, tint: 0 } as never as Car;
+    state.cars.push(car);
+    const p = { x: 9, y: 11, carId: 1, homeTile: m.idx(2, 2) } as never as Ped;
+    abandonOwnedCar(state, m, p);
+    expect(state.cars.includes(car)).toBe(true); // did NOT despawn
+    expect(car.abandoned).toBe(true);
+    expect(car.owned).toBe(false);
+    expect(p.carId).toBeUndefined();
+    // it sits on an EMPTY tile (open land), not on the road
+    expect(m.built[m.idx(Math.round(car.x), Math.round(car.y))]).toBe(BuiltKind.None);
+    expect(m.water[m.idx(Math.round(car.x), Math.round(car.y))]).toBe(0);
+  });
+
+  it('degrades into ground pollution at its tile, then rusts away (despawns), leaving the contamination', () => {
+    const m = new GameMap(12, 12);
+    const state = createAmbientState();
+    const car = { id: 2, x: 6, y: 6, tx: 6, ty: 6, dir: 0, abandoned: true, parked: true, owned: false, tint: 0, dwell: 3 } as never as Car;
+    state.cars.push(car);
+    const tile = m.idx(6, 6);
+    expect(degradeAbandonedCar(state, m, car)).toBe(true); // dwell 3 -> 2
+    expect(degradeAbandonedCar(state, m, car)).toBe(true); // 2 -> 1
+    expect(state.groundPollution.get(tile) ?? 0).toBeGreaterThan(0); // poisoned its tile
+    expect(degradeAbandonedCar(state, m, car)).toBe(false); // 1 -> 0 -> rusted away (despawn)
+    expect(state.groundPollution.get(tile) ?? 0).toBeGreaterThan(0); // contamination LINGERS after the wreck
+  });
+
+  it('carOffNetwork exempts an abandoned car sitting on an empty tile', () => {
+    const m = new GameMap(8, 8);
+    const derelict = { x: 4, y: 4, abandoned: true } as never as Car;
+    expect(carOffNetwork(m, derelict)).toBe(false); // a derelict is allowed to sit off the road
+    const stray = { x: 4, y: 4 } as never as Car;
+    expect(carOffNetwork(m, stray)).toBe(true); // a normal car on empty land is still off-network
   });
 });
