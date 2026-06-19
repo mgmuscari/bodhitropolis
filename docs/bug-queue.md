@@ -25,10 +25,18 @@ black outlines, SC2000-era, top-down (not iso), Oakland architectural cues. Plan
     paints connection-mask markings over them (`@surface/road#n` ingredient seam). `satellite` skins
     roads; rest falls back to procedural. ✅ variant cycling per-tile (anti-plaid); ✅ dropped the
     wide-road per-tile seam (it tiled into a grid).
-  - 🔴 **Road STRUCTURE pass** (Maddy: wide roads read as a "field of asphalt") — sidewalks / setbacks
-    / gutters / curbs / jersey-barriers via a **border mask** (the dual of the connection mask: which
-    edges face NON-road → curb+gutter+sidewalk) + wide-corridor median/lane interior. Diffusion makes
-    the surface ingredients (concrete/sidewalk/gutter), painter composites at edges. Plan §5.5.
+  - 🟡 **Road STRUCTURE pass** (Maddy: wide roads read as a "field of asphalt") — procedural edge/median
+    treatment via neighbour-aware masks (the dual of the connection mask). Plan §5.5.
+    - ✅ **Curbs/sidewalk/gutter** (`roadCurbMask`) — surface-road edges facing non-road get a sidewalk
+      strip + gutter line. Maddy: "look great… roads have depth."
+    - ✅ **Freeway median jersey barrier** (`freewayMedianAxis`) — concrete barrier down the centre
+      spine of the 3-wide freeway, lengthwise; opens at ramps.
+    - ✅ **Ramp dashed line straight-through** (`rampMarkingMask`) — no more dotted-yellow cross at
+      freeway crossings; the line follows the freeway axis.
+    - ✅ **Freeway↔frontage divider** (`roadDividerMask` + run-length filter) — barrier only on a
+      sustained (>2-tile) stretch, not a 1-tile crossing/onramp.
+    - 🔴 Remaining: parcel-side setback/sidewalk (frontage), tech-gated edge props (street trees, bike
+      racks), per-corridor lane lines on wide roads.
   - 🔴 Terrain + buildings (segmented blocks).
   - 🔴 Variety-pick seam (per-parcel hash → variant) when residential variants land. Palette/slice to
     pin with Maddy (plan §6).
