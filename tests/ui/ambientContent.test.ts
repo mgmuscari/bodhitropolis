@@ -63,6 +63,7 @@ import {
   buildSafeZones,
   computeCoverage,
   parkOwnedCarSomewhere,
+  sendOwnedCarHome,
   pedDespawns,
   isParkable,
   nearestWalkable,
@@ -2691,5 +2692,45 @@ describe('walkPath (committed foot routing around barriers — Maddy: peds dithe
       const by = (b - bx) / 12;
       expect(Math.abs(ax - bx) + Math.abs(ay - by)).toBe(1); // adjacent
     }
+  });
+});
+
+describe('owned cars follow their citizen home, never despawn on the spot (Maddy)', () => {
+  function ownedCar(id: number, x: number, y: number): import('../../src/ui/ambientContent').Car {
+    return { id, x, y, tx: x, ty: y, dir: 0, owned: true, parked: true, tint: 0 } as never;
+  }
+
+  it("warps a sent-home citizen's parked car to park NEAR HOME (does not vanish it where it sat)", () => {
+    const m = new GameMap(40, 40);
+    for (let x = 2; x < 38; x++) m.built[m.idx(x, 20)] = BuiltKind.RoadStreet; // a road row
+    m.built[m.idx(5, 19)] = BuiltKind.HouseSingle; // home at (5,19); kerb at (5,20)
+    const state = createAmbientState();
+    const homeTile = m.idx(5, 19);
+    const car = ownedCar(1, 30, 20); // parked far from home (~25 tiles east)
+    state.cars.push(car);
+    const p = { x: 30, y: 21, carId: 1, homeTile, phase: 'to-building' } as never as import('../../src/ui/ambientContent').Ped;
+    sendOwnedCarHome(state, m, p, homeTile);
+    expect(state.cars.includes(car)).toBe(true); // the car did NOT despawn
+    expect(car.owned).toBe(false); // it's a put-away car now (clears on its dwell, like any parked car)
+    expect(Math.abs(car.x - 5) + Math.abs(car.y - 19)).toBeLessThan(8); // warped to near home (was ~25 away)
+    expect(p.carId).toBeUndefined(); // the ped→car link is released
+  });
+
+  it('removes the car only when home has no reachable parking (never strands it mid-map)', () => {
+    const m = new GameMap(20, 20);
+    m.built[m.idx(5, 5)] = BuiltKind.HouseSingle; // home with NO roads/parking anywhere
+    const state = createAmbientState();
+    const car = ownedCar(2, 10, 10);
+    state.cars.push(car);
+    const p = { x: 10, y: 11, carId: 2, homeTile: m.idx(5, 5) } as never as import('../../src/ui/ambientContent').Ped;
+    sendOwnedCarHome(state, m, p, m.idx(5, 5));
+    expect(state.cars.includes(car)).toBe(false); // nowhere to park → removed, not stranded
+  });
+
+  it('is a no-op for a ped that owns no car', () => {
+    const m = new GameMap(12, 12);
+    const state = createAmbientState();
+    const p = { x: 3, y: 3, homeTile: m.idx(2, 2) } as never as import('../../src/ui/ambientContent').Ped;
+    expect(() => sendOwnedCarHome(state, m, p, m.idx(2, 2))).not.toThrow();
   });
 });
