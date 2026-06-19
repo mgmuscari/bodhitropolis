@@ -193,10 +193,16 @@ layer (non-deterministic).
   consumer its network distance to the nearest source; the brownout now powers NEAREST-first (ties by
   anchor). Pure/deterministic, live-derived. Unit-verified: plant on the right of an industry row →
   the two NEAREST are powered (not the two lowest-index).
-- 🔵 **DEFERRED feature: civic overlay dimming + higher opacity** (Maddy 2026-06-19) — the civic (C)
-  overlay should use the same `dimBase` scrim as the power (U) / coverage (V) overlays + a higher fill
-  alpha, for legibility (it currently washes out against terrain). `civicOverlayContent.ts` +
-  `OverlaySource.dimBase` (the abstraction already exists). Record only.
+- ✅ **Overlay legibility: civic/eco/redline dim-base + higher opacity** (PR pending; "fix overlays") —
+  civic/eco/redline tinted at a faint 0.55 with no `dimBase` → washed out (civic, sparse per-
+  neighborhood, was nearly invisible). Now use the power/coverage treatment: alpha 0.55→0.92 +
+  `dimBase: true` on every direct-tint overlay (redline, civic, all eco views). Live: civic reads as
+  dimmed map + glowing neighborhoods; eco soil a vivid brown→green heatmap.
+- 🔴 **Citizens not commuting home from the commercial district; cars despawn when activity done**
+  (Maddy 2026-06-19) — after a citizen finishes at a commercial stop it isn't walking/driving HOME, and
+  its car despawns when the activity ends. Possible cause: fuel exhaustion or itinerary/activity
+  sequencing (the home leg after the last stop). Investigate `advanceItinerary` end-of-round → home
+  leg + the owned-car retrieval (`setDriveLeg`/`sendOwnedCarHome`) + fuel refuel at stops. Not started.
 
 ### Pedestrian / vehicle agents (Maddy 2026-06-19)
 
