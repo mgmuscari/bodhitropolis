@@ -152,6 +152,12 @@ Per-category subject prompts:
   top-down). Read: aerial/block prompts hold top-down; single-building prompts drift to facade view →
   prompt buildings as "roof from directly above" or generate as part of a block. 32-px PixelOE is
   coarse; outline/detail is weak — push LoRA weight + an outline pass + finer pixel size.
-- [ ] Pin style/palette/first-slice (§6) with Maddy.
-- [ ] Bake the first slice → commit PNGs → populate `SATELLITE_ASSETS`.
+- [x] **Road surfaces via diffusion** (Maddy's call) — a tileable asphalt SURFACE is generated and
+  committed (`public/tilesets/satellite/surfaces/asphalt.png`); the renderer paints the connection-
+  mask lane markings over it (`@surface/road` ingredient namespace → `makeRoadTile` surface base).
+  Selecting `satellite` now skins roads with asphalt + procedural lines; everything else falls back
+  to the painter. First visible slice. (Asphalt is medium-grey; markings should read — verify in the
+  browser, palette is a 1-line tweak if not.)
+- [ ] Pin style/palette/remaining-slice (§6) with Maddy.
+- [ ] Bake terrain + buildings → commit PNGs → grow `SATELLITE_ASSETS`.
 - [ ] Variety-pick seam (§6.1) when residential variants land.
