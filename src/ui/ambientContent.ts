@@ -146,6 +146,24 @@ const SAMPLES_PER_SUBSTEP = 8;
 const CAR_SPEED = 0.12;
 const PED_SPEED = 0.05;
 
+// Traffic pileups (Maddy): cars sharing a tile SLOW DOWN, so congestion becomes physical — bunching,
+// crawling bottlenecks — not just the lingering `traffic` field. Each car beyond the first on a tile
+// adds PILEUP_K to the speed-divisor; the multiplier floors at PILEUP_MIN so a jam crawls but never
+// deadlocks. Rational only (no transcendental — this file is on the pure-ui allowlist).
+const PILEUP_K = 0.3; // slowdown weight per extra car sharing the tile
+const PILEUP_MIN = 0.5; // a fully jammed tile still flows at HALF speed — a visible bottleneck, never a
+//                         deadlock and never a flow-starving freeze (cars must keep reaching lots/homes;
+//                         a playtest-feel knob, like OCC_RATE — dial it up by playing).
+
+/** Speed multiplier (0..1] for `count` cars sharing a tile (count includes the car itself). 1 for a
+ *  lone car; falls off as 1/(1 + PILEUP_K·(count−1)); floored at PILEUP_MIN so traffic crawls through
+ *  a jam rather than freezing. Pure. */
+export function congestionSpeedMult(count: number): number {
+  if (count <= 1) return 1;
+  const mult = 1 / (1 + PILEUP_K * (count - 1));
+  return mult < PILEUP_MIN ? PILEUP_MIN : mult;
+}
+
 /** Chebyshev radius searched around a parked car for the building its pedestrian walks
  *  to/from. Lots/curbs sit next to the demand they serve, so this stays small. */
 const LASTMILE_RADIUS = 4;
@@ -2913,6 +2931,18 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   spawnFlocks(state, map, rng);
   spawnCruisers(state, map, rng); // top the patrol fleet up from the precincts
 
+  // Per-tile count of MOVING cars (a snapshot at substep start), for the pileup slowdown: a car on a
+  // crowded tile creeps (congestion made physical). Counts free + owned-being-driven cars; parked and
+  // abandoned cars sit off to the side and don't jam the lane. Both car movers below read this.
+  const carDensity = new Map<number, number>();
+  for (const c of state.cars) {
+    if (c.parked || c.abandoned) continue;
+    const i = map.idx(Math.round(c.x), Math.round(c.y));
+    carDensity.set(i, (carDensity.get(i) ?? 0) + 1);
+  }
+  const speedAt = (base: number, x: number, y: number): number =>
+    base * congestionSpeedMult(carDensity.get(map.idx(x, y)) ?? 1);
+
   // 3. Move the cars. A PARKED car waits for its pedestrian (its bound ped zeroes `dwell` on
   //    return; the countdown is just a safety release). A moving trip-car follows its path
   //    and, on arrival, PARKS (a lot stall, or a street curb if none) — it no longer vanishes
@@ -2929,9 +2959,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       c.dwell! -= 1;
       return c.dwell! > 0;
     }
-    // A freeway moves traffic twice as fast as a surface street.
-    const onFreeway = map.built[map.idx(Math.round(c.x), Math.round(c.y))] === BuiltKind.RoadHighway;
-    const sp = onFreeway ? CAR_SPEED * 2 : CAR_SPEED;
+    // A freeway moves traffic twice as fast as a surface street; a crowded tile slows every car on it.
+    const cx = Math.round(c.x);
+    const cy = Math.round(c.y);
+    const onFreeway = map.built[map.idx(cx, cy)] === BuiltKind.RoadHighway;
+    const sp = speedAt(onFreeway ? CAR_SPEED * 2 : CAR_SPEED, cx, cy);
     if (c.path !== undefined) {
       const alive = advanceMover(c, sp, map, (x, y) => pathStep(map, c, x, y));
       return alive ? true : tryPark(state, c, map);
@@ -3025,8 +3057,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
         p.recent = undefined;
         return true;
       }
-      const onFreeway = map.built[map.idx(Math.round(car.x), Math.round(car.y))] === BuiltKind.RoadHighway;
-      const sp = onFreeway ? CAR_SPEED * 2 : CAR_SPEED; // freeways move traffic twice as fast
+      const carx = Math.round(car.x);
+      const cary = Math.round(car.y);
+      const onFreeway = map.built[map.idx(carx, cary)] === BuiltKind.RoadHighway;
+      // Freeways move traffic 2×; a crowded tile slows it (the same pileup field the car filter uses).
+      const sp = speedAt(onFreeway ? CAR_SPEED * 2 : CAR_SPEED, carx, cary);
       const moving = advanceMover(car, sp, map, (x, y) => pathStep(map, car, x, y));
       layTraffic(state, map, Math.round(car.x), Math.round(car.y)); // the car IS the traffic
       layPollution(state, map, Math.round(car.x), Math.round(car.y), onFreeway); // ...and the smog
