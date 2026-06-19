@@ -426,6 +426,91 @@
         white-space: pre;
         line-height: 1.5;
       }
+      .settings-panel {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 11;
+        min-width: 18rem;
+        padding: 0.7rem 1rem 0.9rem;
+        background: rgba(28, 26, 42, 0.97);
+        border: 2px solid #969e4a;
+        border-radius: 6px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+        font-family: "Courier New", ui-monospace, monospace;
+        font-size: 0.8rem;
+        color: #d8d4c2;
+      }
+      .settings-panel__title {
+        font-weight: bold;
+        color: #c9d07a;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: 0.74rem;
+        margin-bottom: 0.5rem;
+      }
+      .settings-panel__close {
+        position: absolute;
+        right: 0.5rem;
+        top: 0.45rem;
+        cursor: pointer;
+        color: #c9d07a;
+        font-weight: bold;
+      }
+      .settings-panel__section {
+        margin-top: 0.55rem;
+        border-top: 1px solid rgba(150, 158, 74, 0.4);
+        padding-top: 0.45rem;
+      }
+      .settings-panel__heading {
+        color: #9aa0c0;
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 0.35rem;
+      }
+      .settings-panel__row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        margin: 0.22rem 0;
+      }
+      .settings-panel button {
+        font-family: inherit;
+        font-size: 0.74rem;
+        color: #d8d4c2;
+        background: rgba(60, 58, 84, 0.9);
+        border: 1px solid #969e4a;
+        border-radius: 4px;
+        padding: 0.15rem 0.5rem;
+        cursor: pointer;
+      }
+      .settings-panel button.is-active {
+        background: #969e4a;
+        color: #1c1a2a;
+        font-weight: bold;
+      }
+      .settings-panel button:hover {
+        border-color: #c9d07a;
+      }
+      .settings-panel select,
+      .settings-panel input {
+        font-family: inherit;
+        font-size: 0.74rem;
+        color: #d8d4c2;
+        background: rgba(60, 58, 84, 0.9);
+        border: 1px solid #969e4a;
+        border-radius: 4px;
+        padding: 0.1rem 0.3rem;
+      }
+      .settings-panel__note {
+        color: #b6b08c;
+        font-size: 0.66rem;
+        line-height: 1.4;
+        margin-top: 0.3rem;
+      }
     </style>
   </head>
   <body>

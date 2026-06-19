@@ -20,7 +20,10 @@ import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer } from './ui/renderer';
-import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, setPlantEmitters, seedDecay, liveInspectLine } from './ui/ambientContent';
+import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, setPlantEmitters, seedDecay, liveInspectLine, applyLiveCaps } from './ui/ambientContent';
+import { loadSettings, saveSettings } from './ui/settingsStore';
+import { mountSettingsPanel } from './ui/settingsPanel';
+import { clampSettings, type LiveCaps, type WorldSettings } from './ui/settings';
 import { residentialCensus } from './citizens/census';
 import { parkingLots, parkingStalls } from './ui/parkingContent';
 import { attachInput } from './ui/input';
@@ -75,7 +78,16 @@ export function main(): void {
 
   const params = new URLSearchParams(window.location.search);
   const seed = params.get('seed') ?? DEFAULT_SEED;
-  const world = runPipeline({ seed }, [terrainStage(), mosesCenturyStage(), ecoSeedStage()]);
+
+  // Settings: live caps apply NOW (perf ceilings the agent layer reads); the world size feeds
+  // worldgen at creation (a different size is a different seeded world — apply-on-restart). Persisted
+  // in localStorage; defaults reproduce today's 128² medium-preset game byte-for-byte.
+  let settings = loadSettings();
+  applyLiveCaps(settings.live);
+  const world = runPipeline(
+    { seed, width: settings.world.mapWidth, height: settings.world.mapHeight },
+    [terrainStage(), mosesCenturyStage(), ecoSeedStage()],
+  );
 
   // Tech-tree state: communal effort accrues into it each sim tick (see below).
   const tech = createTechState(TECH_TREE);
@@ -387,6 +399,22 @@ export function main(): void {
   const restorationPanel = mountRestorationPanel(document.body);
   let prevRestoration: RestorationSample | null = null;
 
+  // Settings panel (',' key): live caps apply instantly via applyLiveCaps; world size persists for the
+  // next load. Every change re-persists the whole settings blob so a reload restores it.
+  const settingsPanel = mountSettingsPanel(document.body, {
+    getSettings: () => settings,
+    onLiveChange: (live: LiveCaps): void => {
+      // clamp the merged blob so applied == persisted == shown (the input could be out of range)
+      settings = clampSettings({ ...settings, live: { ...settings.live, ...live } });
+      applyLiveCaps(settings.live);
+      saveSettings(settings);
+    },
+    onWorldChange: (worldSettings: WorldSettings): void => {
+      settings = clampSettings({ ...settings, world: { ...worldSettings } });
+      saveSettings(settings); // takes effect on the next load (regenerate)
+    },
+  });
+
   // Composite heatmap overlay: a SINGLE active overlay (eco or civic, never both),
   // cycled by E (off → soil → flora → fauna → biodiversity → off) and C (off →
   // belonging → voice → trust → off). Pressing the other key replaces the active
@@ -628,6 +656,14 @@ export function main(): void {
       restorationPanel.set(restorationLines(sample, null));
       prevRestoration = sample;
     }
+  });
+
+  // ',' toggles the settings menu (gated like L/G so it never fires under the opening overlay).
+  window.addEventListener('keydown', (event) => {
+    if (overlayActive) return;
+    if (event.key !== ',') return;
+    event.preventDefault();
+    settingsPanel.toggle();
   });
 
   const previewAt = (tx: number, ty: number): void => {
