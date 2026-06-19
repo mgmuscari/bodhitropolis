@@ -90,13 +90,17 @@ perspective, satellite map tile, slightly cartoonish, bold black outline, clean 
 drop shadow, blurry`.
 
 **Runnable workflow**: the saved ComfyUI workflow **`z_image_pixelart_tile.json`** is exactly this
-recipe (Z-Image turbo + `pixel_art_style` LoRA + `SeamlessTile` + dual `PixelOE` → a 1024 chunky
-preview *and* a true 32×32 tile). To generate: open it in the ComfyUI UI, edit node 7 (positive
-prompt) with a recipe below, set `SeamlessTile.tiling` = `enable` for tesselable terrain/roads or
-`disable` for buildings, run. (Note 2026-06-19: the MCP `enqueue_workflow` direct-POST path was
-returning non-OK for *any* arbitrary graph — standard or custom — while `generate_image` and the
-saved-workflow UI run both worked; so drive generation from the ComfyUI UI until that path is
-healthy. `pixel_size` ≤ 32, so the true tile is 32×32 → the loader normalizes to 16×16 on decode.)
+recipe (Z-Image turbo + `pixel_art_style` LoRA + `SeamlessTile` + `PixelOE`). Node 7 = positive
+prompt; `SeamlessTile.tiling` = `enable` for tesselable terrain/roads, `disable` for buildings;
+`pixel_size` ≤ 32 (true tile 32×32 → loader normalizes to 16×16 on decode).
+
+**How to drive it (the working path, 2026-06-19)** — the MCP `enqueue_workflow` tool returns non-OK
+for *any* arbitrary graph (a serialization bug — even a minimal standard SDXL graph fails), while
+`generate_image` works. So POST the API-format graph to ComfyUI directly:
+`curl -sX POST $COMFYUI_URL/prompt -H 'Content-Type: application/json' -d '{"client_id":"…","prompt":{…graph…}}'`
+→ poll `$COMFYUI_URL/history/<prompt_id>` for the SaveImage filename → GET
+`$COMFYUI_URL/view?filename=<f>&type=output`. `COMFYUI_URL=https://comfyui.tailea7e08.ts.net`. This
+is fully scriptable (no UI needed); the first probe batch was generated this way.
 
 Per-category subject prompts:
 - **Terrain (grass)**: "seamless tileable grass / lawn texture, parks green, …"
@@ -126,9 +130,12 @@ Per-category subject prompts:
 - [x] Async **loader** (404→skip, decode-once-to-canvas).
 - [x] **Settings** dropdown wired (live hot-swap).
 - [x] Pure **registry/manifest** (`tileset.ts`) + key fan-out helpers.
-- [~] Style **probes** — recipe + saved workflow ready (`z_image_pixelart_tile.json`); generation
-  deferred (MCP `enqueue_workflow` POST path down 2026-06-19 — run from the ComfyUI UI). Probes land
-  under `docs/art/probes/satellite/` for review.
+- [x] Style **probes** — first batch generated 2026-06-19 (direct `curl` to `/prompt`, see §5) under
+  `docs/art/probes/satellite/`: `patch` (nails the satellite-grid gestalt), `street` (clean tileable
+  top-down intersection), `grass` (coarse terrain), `houses` (6-up variant sheet but 3/4 view, not
+  top-down). Read: aerial/block prompts hold top-down; single-building prompts drift to facade view →
+  prompt buildings as "roof from directly above" or generate as part of a block. 32-px PixelOE is
+  coarse; outline/detail is weak — push LoRA weight + an outline pass + finer pixel size.
 - [ ] Pin style/palette/first-slice (§6) with Maddy.
 - [ ] Bake the first slice → commit PNGs → populate `SATELLITE_ASSETS`.
 - [ ] Variety-pick seam (§6.1) when residential variants land.
