@@ -779,6 +779,27 @@ export function roadCurbMask(map: GameMap, x: number, y: number): number {
   return mask;
 }
 
+/**
+ * The MARKING mask for a RoadRamp tile (a street overlaid on a freeway tile): only the edges toward
+ * the FREEWAY band (RoadHighway / RoadRamp neighbours). Used instead of the full connection mask so
+ * the ramp's dashed line runs STRAIGHT THROUGH along the freeway, instead of forming a + cross with
+ * the surface street it also connects (Maddy 2026-06-19 — "go straight through instead of crosses").
+ * The street arms stay functional (canDrive crosses there); they're just not drawn as a crossing.
+ * 0 on a non-ramp tile. Render-only.
+ */
+export function rampMarkingMask(map: GameMap, x: number, y: number): number {
+  if (map.getBuilt(x, y) !== BuiltKind.RoadRamp) return 0;
+  let mask = 0;
+  for (const [dx, dy, bit] of MASK_DIRS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    if (!map.inBounds(nx, ny)) continue;
+    const n = map.getBuilt(nx, ny);
+    if (n === BuiltKind.RoadHighway || n === BuiltKind.RoadRamp) mask |= bit;
+  }
+  return mask;
+}
+
 /** The elevated deck (overpass) kind at (x, y), or 0 (none). Reads the second `deck` layer. */
 export function overpassAt(map: GameMap, x: number, y: number): number {
   return map.inBounds(x, y) ? map.deck[map.idx(x, y)]! : 0;

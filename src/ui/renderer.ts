@@ -9,7 +9,7 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import {
@@ -709,7 +709,14 @@ export class Renderer {
           // The kind-dispatch is a single pure call (renderKey.ts); transport keys
           // on the connection mask, buildings on footprint position + condition tier.
           const isT = isTransportKind(built);
-          const mask = isT ? transportMask(map, tx, ty) : 0;
+          // A ramp uses its FREEWAY-axis marking mask (not the full 4-way connection) so its dashed
+          // line runs straight through the freeway instead of crossing the surface street it links.
+          const mask =
+            built === BuiltKind.RoadRamp
+              ? rampMarkingMask(map, tx, ty)
+              : isT
+                ? transportMask(map, tx, ty)
+                : 0;
           const pid = isT ? 0 : map.parcel[i]!;
           const tier = isT ? 0 : parcels.conditionAt(pid - 1) < 128 ? 1 : 0;
           const pos: FootprintPos = isT ? 'c' : footprintPos(map, tx, ty, pid);
