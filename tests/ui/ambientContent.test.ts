@@ -69,6 +69,7 @@ import {
   buildSafeZones,
   computeCoverage,
   parkOwnedCarSomewhere,
+  curbStallOffsets,
   routeToParking,
   sendOwnedCarHome,
   abandonOwnedCar,
@@ -387,6 +388,46 @@ describe('agent substrate invariants (Maddy: cars park on freeways, peds cross w
     m.built[m.idx(3, 3)] = BuiltKind.RoadStreet;
     expect(reachedPlot(m, 3, 4, 3, 3)).toBe(true); // adjacent
     expect(reachedPlot(m, 3, 6, 3, 3)).toBe(false); // 3 tiles off, no footprint
+  });
+
+  it('curbStallOffsets: <=4 discrete kerb stalls; a no-shoulder lane interior offers NONE', () => {
+    const m = new GameMap(12, 12);
+    for (let x = 1; x <= 10; x++) m.built[m.idx(x, 6)] = BuiltKind.RoadStreet; // a 1-wide street, land both sides
+    const s = curbStallOffsets(m, 5, 6);
+    expect(s.length).toBe(4); // 2 stalls on each kerb (N + S)
+    for (const st of s) {
+      expect(Math.abs(st.dx)).toBeLessThan(0.5); // each offset stays within the tile (rounds to the road tile)
+      expect(Math.abs(st.dy)).toBeLessThan(0.5);
+    }
+    // widen to a 3-lane road: the middle lane has drivable neighbours all round → no kerb → no stalls
+    for (let y = 5; y <= 7; y++) for (let x = 1; x <= 10; x++) m.built[m.idx(x, y)] = BuiltKind.RoadStreet;
+    expect(curbStallOffsets(m, 5, 6).length).toBe(0); // lane interior → no double-parking in the middle
+  });
+
+  it('cars curb-park in DISTINCT kerb stalls (<=4 per road tile), never the lane centre (Maddy: (51,102))', () => {
+    const m = new GameMap(20, 12);
+    for (let x = 2; x <= 17; x++) m.built[m.idx(x, 6)] = BuiltKind.RoadStreet; // a street, land both sides
+    const state = createAmbientState(); // no lots → kerb stalls only
+    const cars: Array<{ x: number; y: number; curbSlot?: number; parked?: boolean }> = [];
+    for (let i = 0; i < 6; i++) {
+      const c = { x: 9, y: 6, dir: 1, tx: 9, ty: 6, owned: true, parked: false };
+      state.cars.push(c);
+      cars.push(c);
+      parkOwnedCarSomewhere(state, m, c);
+    }
+    const parked = cars.filter((c) => c.parked && state.cars.includes(c as never));
+    expect(parked.length).toBeGreaterThanOrEqual(4);
+    for (const c of parked) expect(c.curbSlot).not.toBeUndefined(); // a discrete stall, not a warp
+    // no two cars share the same (road tile, slot)
+    const keys = parked.map((c) => `${Math.round(c.x)},${Math.round(c.y)},${c.curbSlot}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    // at most 4 cars per road tile
+    const perTile = new Map<string, number>();
+    for (const c of parked) {
+      const t = `${Math.round(c.x)},${Math.round(c.y)}`;
+      perTile.set(t, (perTile.get(t) ?? 0) + 1);
+    }
+    for (const n of perTile.values()) expect(n).toBeLessThanOrEqual(4);
   });
 
   it('a curb-parking car pulls onto a SHOULDER, never the middle of a wide road (Maddy: (51,100))', () => {
@@ -1766,7 +1807,7 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     expect(k).not.toBe(BuiltKind.RoadStreet); // curb points off the road, not down the lane
   });
 
-  it('crowding: a second car to the same destination parks at a different (farther) curb', () => {
+  it('crowding: a second car to the same destination takes a DIFFERENT kerb stall', () => {
     const map = new GameMap(20, 12); // a road + a building, NO lot → both cars street-park
     for (let x = 2; x <= 8; x++) map.built[map.idx(x, 5)] = BuiltKind.RoadStreet;
     map.built[map.idx(8, 6)] = BuiltKind.HouseSingle;
@@ -1780,8 +1821,11 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     }
     const parked = state.cars.filter((c) => c.parked);
     expect(parked.length).toBe(2);
-    const tiles = new Set(parked.map((c) => `${Math.round(c.x)},${Math.round(c.y)}`));
-    expect(tiles.size).toBe(2); // the crowded-out car parked on a different curb tile
+    // They take DISTINCT (tile, slot) kerb stalls — never the same spot — whether on the same road
+    // tile (different slots) or a neighbouring one once a tile's 4 slots fill.
+    const stalls = new Set(parked.map((c) => `${Math.round(c.x)},${Math.round(c.y)},${c.curbSlot}`));
+    expect(stalls.size).toBe(2);
+    for (const c of parked) expect(c.curbSlot).not.toBeUndefined();
   });
 
   it('parking is deterministic for the same seed', () => {

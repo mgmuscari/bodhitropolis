@@ -16,7 +16,7 @@ import { builtRenderKey, renderKeyspace, type FootprintPos } from './renderKey';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 import { parcelGlyph } from './glyphContent';
 import { isPowerConsumer } from '../growth/power';
-import { laneOffset, curbParkOffset, pedCurbOffset } from './ambientContent';
+import { laneOffset, pedCurbOffset } from './ambientContent';
 import type { AmbientState } from './ambientContent';
 import { OVERLAY_DIM } from './overlayLegend';
 
@@ -833,21 +833,14 @@ export class Renderer {
     const parkedSize = Math.max(2, ts * 0.3);
     for (const c of ambient.cars) {
       ctx.fillStyle = CAR_COLORS[(c.tint ?? 0) % CAR_COLORS.length]!;
-      if (c.parked && c.lotIdx !== undefined) {
-        // Lot stall: centred on the stall.
-        const { sx, sy } = camera.worldToScreen(c.x + 0.5, c.y + 0.5);
-        if (!onScreen(sx, sy)) continue;
-        ctx.fillRect(Math.floor(sx - parkedSize / 2), Math.floor(sy - parkedSize / 2), parkedSize, parkedSize);
-      } else {
-        // A street-parked car hugs its recorded curb side (off the lane); a moving car rides
-        // its lane (right of heading). Parked cars draw at the smaller parked size.
-        const off =
-          c.parked && c.curbDir !== undefined ? curbParkOffset(c.curbDir) : laneOffset(c.dir);
-        const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
-        if (!onScreen(sx, sy)) continue;
-        const size = c.parked ? parkedSize : carSize;
-        ctx.fillRect(Math.floor(sx - size / 2), Math.floor(sy - size / 2), size, size);
-      }
+      // A PARKED car (lot bay or kerb slot) carries its exact stall position in c.x/c.y, so it draws
+      // ON the stall (+0.5) — never warped to the lane centre. A MOVING car rides its lane (laneOffset,
+      // right of heading) so opposing traffic separates. Parked cars use the smaller size.
+      const off = c.parked ? { dx: 0, dy: 0 } : laneOffset(c.dir);
+      const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
+      if (!onScreen(sx, sy)) continue;
+      const size = c.parked ? parkedSize : carSize;
+      ctx.fillRect(Math.floor(sx - size / 2), Math.floor(sy - size / 2), size, size);
     }
 
     // Police Violence map (toggled, P): a blood-red stain on every tile where the state has done

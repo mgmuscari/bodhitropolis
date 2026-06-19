@@ -576,6 +576,10 @@ export interface Mover {
   /** For a street-parked car: the direction (0=N/1=E/2=S/3=W) toward its curb (the adjacent
    *  non-road tile), so the renderer draws it hugging the kerb instead of in the lane. */
   curbDir?: number;
+  /** For a street-parked car: which discrete CURB STALL (0..3) of its road tile it occupies — a kerb
+   *  slot, like a lot stall (curbStallOffsets). Up to 4 per road tile, so cars line the kerb instead of
+   *  warping into the lane centre (Maddy). Undefined ⇒ not curb-parked (moving, or a lot stall). */
+  curbSlot?: number;
   /** A colour tag bound to the car at spawn (a non-negative int the renderer maps into its
    *  palette mod its length). Stays with the car for its whole life, so it shows the same
    *  colour moving on the road and parked in a lot. */
@@ -1107,13 +1111,31 @@ export function isParkable(map: GameMap, x: number, y: number): boolean {
  *  it sits at the kerb, not stranded in the middle of a wide road/avenue lane (Maddy: "cars parking in
  *  the middle of the street"). A tile ringed by drivable road on all four sides (a lane interior) has
  *  no shoulder and is not a valid street park. */
-function hasShoulder(map: GameMap, x: number, y: number): boolean {
-  for (let d = 0; d < 4; d++) {
-    const nx = x + DIR_DX[d]!;
-    const ny = y + DIR_DY[d]!;
-    if (!map.inBounds(nx, ny) || !carTraversable(map.built[map.idx(nx, ny)]!)) return true;
+const KERB_PULL = 0.34; // a curb stall sits this far from the tile centre toward its kerb edge
+const STALL_ALONG = 0.18; // the two stalls on a kerb side sit this far either way ALONG the kerb
+
+/**
+ * The curb-parking STALLS of a road tile — up to 4 discrete kerb slots, an offset (from the tile
+ * centre out to a kerb) per slot. Two stalls on each SHOULDER side (a non-drivable orthogonal
+ * neighbour / map edge), capped at 4 total. A tile with NO shoulder — a lane interior of a wide road,
+ * all four neighbours drivable — offers NONE, so a car can never double-park in the middle of the
+ * street (Maddy: "they keep piling into the middle of the street"). Pure geometry; the kerb-pull keeps
+ * each offset < 0.5 on its axis, so a parked car still rounds to its road tile (occupancy by tile+slot).
+ */
+export function curbStallOffsets(map: GameMap, tx: number, ty: number): Array<{ dir: number; dx: number; dy: number }> {
+  const out: Array<{ dir: number; dx: number; dy: number }> = [];
+  for (let dir = 0; dir < 4 && out.length < 4; dir++) {
+    const nx = tx + DIR_DX[dir]!;
+    const ny = ty + DIR_DY[dir]!;
+    if (map.inBounds(nx, ny) && carTraversable(map.built[map.idx(nx, ny)]!)) continue; // not a kerb side
+    const kx = DIR_DX[dir]! * KERB_PULL;
+    const ky = DIR_DY[dir]! * KERB_PULL;
+    const px = -DIR_DY[dir]! * STALL_ALONG; // perpendicular to the kerb (along it)
+    const py = DIR_DX[dir]! * STALL_ALONG;
+    out.push({ dir, dx: kx + px, dy: ky + py });
+    if (out.length < 4) out.push({ dir, dx: kx - px, dy: ky - py });
   }
-  return false;
+  return out;
 }
 
 /** The grid direction (0..3) of the step from (fx,fy) to an orthogonally-adjacent (tx,ty). */
@@ -1805,8 +1827,12 @@ function nearestLotCenter(state: AmbientState, x: number, y: number): { x: numbe
 }
 
 function findParkingNear(state: AmbientState, map: GameMap, x: number, y: number): { x: number; y: number } | null {
-  // Head for a lot if one is near (cars fill the stalls); otherwise a street curb.
-  return nearestLotCenter(state, x, y) ?? findCurbSpot(state, map, x, y);
+  // The drive target TILE near (x,y): a lot edge if one is near (cars fill its stalls), else the road
+  // tile of the nearest free kerb slot (round the stall position back to its tile to drive to).
+  const lot = nearestLotCenter(state, x, y);
+  if (lot) return lot;
+  const curb = findCurbSpot(state, map, x, y);
+  return curb ? { x: Math.round(curb.x - 0.5), y: Math.round(curb.y - 0.5) } : null;
 }
 
 /**
@@ -1825,7 +1851,7 @@ function nearestParkSpot(
   map: GameMap,
   x: number,
   y: number,
-): { x: number; y: number; lotIdx?: number; stallIdx?: number } | null {
+): { x: number; y: number; lotIdx?: number; stallIdx?: number; dir?: number; slot?: number } | null {
   const near = findLotStall(state, x, y, PARK_RADIUS);
   if (near) return near;
   const curb = findCurbSpot(state, map, x, y);
@@ -1842,19 +1868,7 @@ export function parkOwnedCarSomewhere(state: AmbientState, map: GameMap, car: Ca
     if (i >= 0) state.cars.splice(i, 1);
     return;
   }
-  if (spot.lotIdx !== undefined) {
-    car.lotIdx = spot.lotIdx;
-    car.stallIdx = spot.stallIdx;
-    car.x = spot.x - 0.5;
-    car.y = spot.y - 0.5;
-    car.tx = car.x;
-    car.ty = car.y;
-    car.curbDir = undefined;
-    car.parked = true;
-    car.recent = undefined;
-    return;
-  }
-  parkOwnedCar(car, map, spot); // a side-street kerb (records curbDir → drawn at the kerb, visible)
+  applyParkSpot(car, spot); // a lot bay or a kerb slot — the renderer draws it on the stall
 }
 
 /**
@@ -1869,9 +1883,10 @@ export function parkOwnedCarSomewhere(state: AmbientState, map: GameMap, car: Ca
 export function routeToParking(state: AmbientState, map: GameMap, car: Car): boolean {
   const spot = nearestParkSpot(state, map, Math.round(car.x), Math.round(car.y));
   if (!spot) return false; // nothing reachable → park now (leaves)
-  // The drive target tile: a lot stall sits at tile+0.5; a curb spot is the bare tile.
-  const tx = spot.lotIdx !== undefined ? Math.round(spot.x - 0.5) : spot.x;
-  const ty = spot.lotIdx !== undefined ? Math.round(spot.y - 0.5) : spot.y;
+  // The drive target TILE: both a lot stall and a curb stall carry an absolute stall position (x = the
+  // tile centre + the bay/kerb offset), so its tile is round(x − 0.5) either way.
+  const tx = Math.round(spot.x - 0.5);
+  const ty = Math.round(spot.y - 0.5);
   const d = Math.abs(Math.round(car.x) - tx) + Math.abs(Math.round(car.y) - ty);
   if (d <= PARK_CLAIM_DIST) return false; // already there → claim it now
   if ((car.parkSeeks ?? 0) >= MAX_PARK_SEEKS) return false; // circled enough → settle (claim nearest / curb)
@@ -1893,24 +1908,21 @@ export function routeToParking(state: AmbientState, map: GameMap, car: Car): boo
   return true; // keep driving toward the spot
 }
 
-/** Park an owned car at `spot` (a drivable tile), recording the kerb side, and keep it OWNED so it
- *  persists at rest until its owner returns to it. */
-function parkOwnedCar(car: Car, map: GameMap, spot: { x: number; y: number }): void {
-  car.x = spot.x;
-  car.y = spot.y;
-  car.tx = spot.x;
-  car.ty = spot.y;
-  car.lotIdx = undefined;
-  car.stallIdx = undefined;
-  car.curbDir = undefined;
-  for (let d = 0; d < 4; d++) {
-    const nx = spot.x + DIR_DX[d]!;
-    const ny = spot.y + DIR_DY[d]!;
-    if (!map.inBounds(nx, ny) || !carTraversable(map.built[map.idx(nx, ny)]!)) {
-      car.curbDir = d;
-      break;
-    }
-  }
+/** The single writer for "a car comes to rest in a STALL" — a lot stall (lotIdx/stallIdx) or a curb
+ *  stall (curbDir/curbSlot). `spot.x/y` is the stall's absolute position; the car stores x = pos − 0.5,
+ *  so the renderer draws it ON the stall (lot bay or kerb slot), never warped to the lane centre. */
+function applyParkSpot(
+  car: Car,
+  spot: { x: number; y: number; lotIdx?: number; stallIdx?: number; dir?: number; slot?: number },
+): void {
+  car.x = spot.x - 0.5;
+  car.y = spot.y - 0.5;
+  car.tx = car.x;
+  car.ty = car.y;
+  car.lotIdx = spot.lotIdx;
+  car.stallIdx = spot.stallIdx;
+  car.curbDir = spot.dir;
+  car.curbSlot = spot.slot;
   car.parked = true;
   car.recent = undefined;
 }
@@ -1952,9 +1964,9 @@ export function sendOwnedCarHome(state: AmbientState, map: GameMap, p: Ped, home
   if (!car || !car.owned) return;
   const hx = homeTile % map.width;
   const hy = (homeTile - hx) / map.width;
-  const spot = findParkingNear(state, map, hx, hy);
+  const spot = nearestParkSpot(state, map, hx, hy);
   if (spot) {
-    parkOwnedCar(car, map, spot); // warp it home and park
+    applyParkSpot(car, spot); // warp it home and park in a kerb slot / lot bay
     car.owned = false; // a put-away car now — clears on its dwell, isn't kept alive as "owned"
     car.dwell = RETIRED_CAR_LINGER;
   } else {
@@ -2423,9 +2435,13 @@ function findCurbSpot(
   map: GameMap,
   ax: number,
   ay: number,
-): { x: number; y: number } | null {
-  const occupied = new Set<number>();
-  for (const o of state.cars) if (o.parked) occupied.add(map.idx(Math.round(o.x), Math.round(o.y)));
+): { x: number; y: number; dir: number; slot: number } | null {
+  // Occupied CURB STALLS, keyed tile*4 + slot — so a road tile holds up to 4 cars, each in its own kerb
+  // slot, never two on the same slot and never in the lane interior.
+  const taken = new Set<number>();
+  for (const o of state.cars) {
+    if (o.parked && o.curbSlot !== undefined) taken.add(map.idx(Math.round(o.x), Math.round(o.y)) * 4 + o.curbSlot);
+  }
   for (let r = 0; r <= CURB_RADIUS; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
@@ -2433,9 +2449,16 @@ function findCurbSpot(
         const x = ax + dx;
         const y = ay + dy;
         if (!isParkable(map, x, y)) continue; // no parking on a freeway or over water (a bridge)
-        if (!hasShoulder(map, x, y)) continue; // only pull onto a kerb/shoulder, never a mid-road lane
-        if (occupied.has(map.idx(x, y))) continue;
-        return { x, y };
+        const stalls = curbStallOffsets(map, x, y);
+        if (stalls.length === 0) continue; // no kerb (a mid-road lane) → never a street park
+        const base = map.idx(x, y) * 4;
+        for (let s = 0; s < stalls.length; s++) {
+          if (taken.has(base + s)) continue;
+          const st = stalls[s]!;
+          // Return the STALL position (tile centre + kerb offset). The caller stores car.x = pos − 0.5,
+          // so the renderer draws it at the kerb (mirrors the lot-stall convention).
+          return { x: x + 0.5 + st.dx, y: y + 0.5 + st.dy, dir: st.dir, slot: s };
+        }
       }
     }
   }
@@ -2451,32 +2474,9 @@ function tryPark(state: AmbientState, c: Car, map: GameMap): boolean {
   const ay = Math.round(c.y);
   // A citizen-car knows the exact plot it drove to; a sim/freight car deposits at the nearest one.
   const building = c.building ?? nearestDemandTile(map, ax, ay);
-  const spot = nearestParkSpot(state, map, ax, ay); // nearby lot → side-street curb → farther lot
+  const spot = nearestParkSpot(state, map, ax, ay); // nearby lot → side-street kerb slot → farther lot
   if (!spot) return false; // nowhere at all (rare) → despawn
-  if (spot.lotIdx !== undefined) {
-    c.lotIdx = spot.lotIdx;
-    c.stallIdx = spot.stallIdx;
-    c.x = spot.x - 0.5; // tile-corner; renderer draws the centre (+0.5) on the stall
-    c.y = spot.y - 0.5;
-    c.curbDir = undefined;
-  } else {
-    c.lotIdx = undefined; // street-parked (drawn at the curb)
-    c.stallIdx = undefined;
-    c.x = spot.x;
-    c.y = spot.y;
-    // Record which side the kerb is on (first non-road neighbour) so the renderer draws the
-    // car pulled over to it, not sitting on the lane centre of a 1-wide street.
-    c.curbDir = undefined;
-    for (let d = 0; d < 4; d++) {
-      const nx = spot.x + DIR_DX[d]!;
-      const ny = spot.y + DIR_DY[d]!;
-      if (!map.inBounds(nx, ny) || !carTraversable(map.built[map.idx(nx, ny)]!)) {
-        c.curbDir = d;
-        break;
-      }
-    }
-  }
-  c.parked = true;
+  applyParkSpot(c, spot); // a lot bay or a kerb slot — drawn ON the stall, never the lane centre
   c.path = undefined;
   c.leg = undefined;
   c.dwell = PARK_MAX_WAIT;
