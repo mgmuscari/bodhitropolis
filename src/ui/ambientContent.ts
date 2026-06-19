@@ -150,10 +150,11 @@ const PED_SPEED = 0.05;
 // crawling bottlenecks — not just the lingering `traffic` field. Each car beyond the first on a tile
 // adds PILEUP_K to the speed-divisor; the multiplier floors at PILEUP_MIN so a jam crawls but never
 // deadlocks. Rational only (no transcendental — this file is on the pure-ui allowlist).
-const PILEUP_K = 0.3; // slowdown weight per extra car sharing the tile
-const PILEUP_MIN = 0.5; // a fully jammed tile still flows at HALF speed — a visible bottleneck, never a
-//                         deadlock and never a flow-starving freeze (cars must keep reaching lots/homes;
-//                         a playtest-feel knob, like OCC_RATE — dial it up by playing).
+const PILEUP_K = 0.7; // slowdown weight per extra car sharing the tile — a STRONG drag (Maddy: pileups
+//                       should bite). Two cars ~0.59×, four ~0.32×, six ~0.22×.
+const PILEUP_MIN = 0.15; // a fully jammed tile crawls at 15% speed — dramatic bunching, but floored
+//                          above 0 so it never deadlocks (cars still filter through; staggered real
+//                          traffic clears, only artificially-stacked cars lockstep). Playtest knob.
 
 /** Speed multiplier (0..1] for `count` cars sharing a tile (count includes the car itself). 1 for a
  *  lone car; falls off as 1/(1 + PILEUP_K·(count−1)); floored at PILEUP_MIN so traffic crawls through

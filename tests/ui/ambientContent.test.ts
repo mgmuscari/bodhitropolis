@@ -1644,8 +1644,11 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     setParkingLots(state, lots);
     ingestTrips(state, Array.from({ length: capacity + 8 }, () => ({ path })), map);
     const rng = ambientFork('cap');
+    // Budget is generous because this test ingests capacity+8 cars onto ONE tile at once — a worst-case
+    // artificial stack that locksteps under the (intentionally strong) traffic-pileup slowdown and so
+    // takes a while to filter to the lot. The assertion below (capacity is respected) is unchanged.
     let maxLotParked = 0;
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < 600; i++) {
       stepAmbient(state, map, rng, 50);
       const lotParked = state.cars.filter((c) => c.parked && c.lotIdx !== undefined).length;
       maxLotParked = Math.max(maxLotParked, lotParked);
@@ -2047,16 +2050,17 @@ describe('failed trips + freeway speed', () => {
     expect(state.buildingHealth.get(map.idx(2, 2))!).toBeLessThan(0); // home docked for the lost trip
   });
 
-  it('congestionSpeedMult: a lone car runs full speed; a packed tile crawls (floored, never 0)', () => {
+  it('congestionSpeedMult: lone car full speed; congestion bites HARD and a jam crawls (floored, >0)', () => {
     expect(congestionSpeedMult(0)).toBe(1); // no neighbours
     expect(congestionSpeedMult(1)).toBe(1); // just itself
-    expect(congestionSpeedMult(2)).toBeLessThan(1); // sharing → slower
+    expect(congestionSpeedMult(2)).toBeLessThan(0.65); // even two cars share-and-slow noticeably
     expect(congestionSpeedMult(3)).toBeLessThan(congestionSpeedMult(2)); // denser → slower still
+    expect(congestionSpeedMult(6)).toBeLessThanOrEqual(0.25); // a real pile-up is a STRONG drag (Maddy)
     expect(congestionSpeedMult(20)).toBeGreaterThan(0); // a jam crawls, it never deadlocks (floored)
-    expect(congestionSpeedMult(20)).toBeLessThan(congestionSpeedMult(2));
+    expect(congestionSpeedMult(20)).toBeLessThan(congestionSpeedMult(3));
   });
 
-  it('traffic pileup: cars packed on one tile advance slower than a lone car (emergent jam)', () => {
+  it('traffic pileup: a packed tile crawls — the lone car travels FAR more than the jammed pack', () => {
     const make = (n: number) => {
       const map = new GameMap(40, 8);
       for (let x = 0; x < 40; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadStreet;
@@ -2066,9 +2070,10 @@ describe('failed trips + freeway speed', () => {
       for (let k = 0; k < n; k++) state.cars.push({ x: 2, y: 4, dir: 1, tx: 3, ty: 4, path: [...path], leg: 2 });
       const rng = ambientFork(`pileup${n}`);
       for (let i = 0; i < 25; i++) stepAmbient(state, map, rng, 50);
-      return state.cars.length > 0 ? Math.max(...state.cars.map((c) => c.x)) : 40;
+      const lead = state.cars.length > 0 ? Math.max(...state.cars.map((c) => c.x)) : 40;
+      return lead - 2; // distance travelled from the start tile
     };
-    expect(make(1)).toBeGreaterThan(make(6)); // the lone car outruns the jammed pack
+    expect(make(1)).toBeGreaterThan(make(6) * 2.5); // the jam is a STRONG drag, not a token slowdown
   });
 
   it('cars travel faster on a freeway than on a street', () => {

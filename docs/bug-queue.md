@@ -133,6 +133,13 @@ layer (non-deterministic).
 
 ## Open
 
+- 🔴 **Rapid spawn/despawn churn at (75,106) once its lot fills (industry nearby?)** (Maddy 2026-06-19,
+  playtest of `playtest/overnight-batch`) — citizens/cars rapidly spawn then despawn at (75,106) when
+  the nearby parking lot starts to fill. Maddy suspects nearby industry. Likely the parking-seek loop
+  (`routeToParking`/`nearestParkSpot`/`MAX_PARK_SEEKS`) or the reachability/itinerary gate thrashing
+  when the destination lot is full — possibly aggravated by the new traffic-pileup slowdown (cars crawl
+  near the full lot). Investigate the arrival-with-full-lot path + whether the trip drops/re-spawns
+  instead of curb-parking. Live-verify on the running server (don't reload Maddy's tab). Not started.
 - ✅ **Ghost town: population spiralled to empty** (PR pending) — occupancy declined monotonically to
   ~0 (no populated equilibrium). Root cause (diagnosed live): building-HEALTH dominated the occupancy
   signal (≈half the homes negative, ~none positive in the decayed car-city → bad trips → negative
