@@ -398,6 +398,12 @@ const GROUND_SEEP = 1.5; // an industrial/plant NEIGHBOUR seeps into adjacent gr
 const GROUND_LITTER = 3; // demand-path litter/wear leaches in, scaled by the tile's wear
 const GROUND_DECAY = 0.8; // lingers — contaminated land is slow to recover (but reparable)
 
+// Abandoned cars: an arrested citizen is removed from the game, so their car is left a DERELICT —
+// dumped on an empty tile (not driven home), where it slowly RUSTS into ground pollution and then
+// disappears, leaving a contaminated patch the player must heal (the toxic legacy of the apparatus).
+const ABANDONED_DEGRADE_TIME = 2400; // substeps a wreck sits before it has fully rusted away (~2 min)
+const ABANDONED_GROUND_POLL = 0.35; // ground pollution it leaks per substep (outpaces GROUND_DECAY)
+
 /** Road decay: redlined roads crumble (the city won't maintain the disinvested districts), while
  *  roads in a CARED-FOR neighborhood (land value at/above ROAD_CARED_LV) recover. Crumbling
  *  scales with the road tile's redline grade, so greenlined roads stay sound. Live/non-hashed. */
@@ -544,6 +550,10 @@ export interface Mover {
    *  'driving' phase) and retires it when its round ends. So it never vanishes while its owner is
    *  away on foot, and is never the same entity as the rider. */
   owned?: boolean;
+  /** (Car) An ABANDONED derelict — its citizen was arrested (removed from the game), so it sits on an
+   *  empty tile rusting into ground pollution, then despawns. Exempt from the off-network despawn (it
+   *  legitimately sits off the road) and from the owner-managed/parked-dwell branches. */
+  abandoned?: boolean;
   /** (Ped, DRIVE leg) the available parking spot its owned car drives to, before the owner walks the
    *  last mile to the real destination. */
   parkAt?: { x: number; y: number };
@@ -1153,7 +1163,8 @@ function nextPedStep(map: GameMap, x: number, y: number, fromDir: number, rng: R
 
 /** A car is gone once the tile under it is no longer traversable — a road or parking
  *  lot (e.g. bulldozed/converted, or driven off the far side of the lot it cut through). */
-function carOffNetwork(map: GameMap, c: Car): boolean {
+export function carOffNetwork(map: GameMap, c: Car): boolean {
+  if (c.abandoned) return false; // a derelict legitimately sits off the road on an empty tile
   const x = Math.round(c.x);
   const y = Math.round(c.y);
   if (!map.inBounds(x, y)) return true;
@@ -1775,6 +1786,60 @@ export function sendOwnedCarHome(state: AmbientState, map: GameMap, p: Ped, home
     const i = state.cars.indexOf(car); // nowhere to park near home → remove rather than strand it
     if (i >= 0) state.cars.splice(i, 1);
   }
+}
+
+/** The nearest EMPTY tile (open land, unbuilt, non-water — {@link isWearable}) to (x, y) within
+ *  `maxR`, by Chebyshev ring; null if none in reach. Where a derelict gets dumped. */
+function nearestEmptyTile(map: GameMap, x: number, y: number, maxR = 10): { x: number; y: number } | null {
+  for (let r = 0; r <= maxR; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        if (isWearable(map, x + dx, y + dy)) return { x: x + dx, y: y + dy };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * ABANDON an arrested citizen's owned car: the citizen is removed from the game, so the car is left a
+ * DERELICT on a nearby EMPTY tile (Maddy: "their cars should become abandoned in an empty tile
+ * somewhere") — NOT driven home (no one to drive it). It then rusts into ground pollution and
+ * despawns ({@link degradeAbandonedCar}). Falls back to abandoning it in place if no empty tile is in
+ * reach. Releases the ped→car link; no-op if the ped owns no car. No rng (live layer).
+ */
+export function abandonOwnedCar(state: AmbientState, map: GameMap, p: Ped): void {
+  if (p.carId === undefined) return;
+  const car = findCar(state, p.carId);
+  p.carId = undefined;
+  if (!car || !car.owned) return;
+  const spot = nearestEmptyTile(map, Math.round(car.x), Math.round(car.y));
+  if (spot) {
+    car.x = spot.x;
+    car.y = spot.y;
+    car.tx = spot.x;
+    car.ty = spot.y;
+  }
+  car.lotIdx = undefined;
+  car.stallIdx = undefined;
+  car.curbDir = undefined;
+  car.recent = undefined;
+  car.path = undefined;
+  car.leg = undefined;
+  car.owned = false;
+  car.parked = true;
+  car.abandoned = true; // a derelict — degrades into ground pollution then rusts away
+  car.dwell = ABANDONED_DEGRADE_TIME;
+}
+
+/** Advance one abandoned derelict: leak ground pollution into its tile (the wreck rusting into the
+ *  land — a lingering, reparable contaminated patch) and tick its degrade clock. Returns false when
+ *  it has fully rusted away (the caller despawns it; the contamination it laid remains). */
+export function degradeAbandonedCar(state: AmbientState, map: GameMap, c: Car): boolean {
+  layField(state.groundPollution, map.idx(Math.round(c.x), Math.round(c.y)), ABANDONED_GROUND_POLL, GROUND_POLL_MAX);
+  c.dwell = (c.dwell ?? 0) - 1;
+  return c.dwell > 0;
 }
 
 /** Set up a DRIVE leg toward `dest`: the citizen walks to its owned car ('to-vehicle'), drives it to
@@ -2691,8 +2756,10 @@ export function stepArrests(state: AmbientState, map: GameMap, rng: Rng, safe?: 
       const cur = state.occupancy.get(taken.homeTile);
       if (cur !== undefined) state.occupancy.set(taken.homeTile, Math.max(0, cur - ARREST_DRAIN));
       depositHealth(state, taken.homeTile, -ARREST_TRAUMA); // the trauma craters the household's wellbeing
-      sendOwnedCarHome(state, map, taken, taken.homeTile); // its car returns home, not orphaned mid-street
     }
+    // The taken citizen is removed from the game, so their car is ABANDONED where they were seized —
+    // a derelict dumped on an empty tile that rusts into ground pollution (not driven home).
+    abandonOwnedCar(state, map, taken);
     // Stain the spot — the police-violence record (the anti-crime-map) builds where arrests fall.
     layField(state.policeViolence, map.idx(Math.round(taken.x), Math.round(taken.y)), POLICE_VIOLENCE_LAY, POLICE_VIOLENCE_MAX);
     state.peds.splice(victim, 1); // taken off the street, for nothing
@@ -2734,6 +2801,9 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   //    and, on arrival, PARKS (a lot stall, or a street curb if none) — it no longer vanishes
   //    at the destination. A path-less car (a test fixture) falls back to the grid wander.
   state.cars = state.cars.filter((c) => {
+    // An ABANDONED derelict (its citizen was arrested) sits on its empty tile rusting into ground
+    // pollution, then despawns — the toxic legacy left behind, not driven anywhere.
+    if (c.abandoned) return degradeAbandonedCar(state, map, c);
     // An OWNED citizen-car is managed entirely by its owner ped (it walks to it, drives it, parks
     // it, retires it). The filter never moves, dwells, or despawns it — so it never vanishes while
     // its owner is away on foot. (Demoted to a plain parked car when the owner's round ends.)
