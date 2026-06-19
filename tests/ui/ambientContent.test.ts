@@ -2314,6 +2314,32 @@ describe('citizen daily itinerary (home → work → shop → lifestyle → home
     for (let i = 0; i < 30; i++) stepAmbient(state, map, rng, 50);
     expect(state.peds.every((p) => p.itinerary === undefined)).toBe(true); // only ambient wanderers, no citizens
   });
+
+  it('a citizen that gives up GOES HOME (despawns) — it does not become a park-loitering wanderer', () => {
+    // Maddy: "citizens not commuting home; peds roam parks/rewilded, may never go home." A failed trip
+    // routed the citizen through respawnAtHome, which repositioned it next to home but cleared its
+    // itinerary/phase/walkTo and KEPT it — so it fell to the ambient-wander branch and loitered on the
+    // green substrate forever. A give-up must end like a success: the citizen is home (despawned).
+    const map = new GameMap(16, 16);
+    map.built[map.idx(2, 8)] = BuiltKind.HouseSingle; // home, on the WEST side
+    for (let y = 0; y < 16; y++) map.water[map.idx(9, y)] = Water.River; // a full water wall: no foot route east<->west
+    // a park blob near home so a wandering ped would STAY on ped substrate (never despawn) — the bug
+    for (let y = 6; y <= 10; y++) for (let x = 3; x <= 6; x++) map.built[map.idx(x, y)] = BuiltKind.Park;
+    const state = createAmbientState();
+    const citizen = {
+      x: 13, y: 8, dir: 3, tx: 13, ty: 8,
+      walkTo: { x: 2, y: 8 }, phase: 'to-home' as const, // east of the wall, can never walk home
+      homeTile: map.idx(2, 8), fuel: 1e9, mode: TravelMode.Walk,
+    };
+    state.peds.push(citizen);
+    const rng = ambientFork('giveup-home');
+    // The give-up fires on the first step (walkPath home fails immediately). A clean "go home" despawns
+    // it at once; the bug instead repositions + keeps it, so it loiters on the park substrate for many
+    // steps. Track THIS citizen by reference (the park also spawns ambient wanderers — peds.length is noisy).
+    for (let i = 0; i < 5; i++) stepAmbient(state, map, rng, 50);
+    expect(state.peds.includes(citizen)).toBe(false); // gave up → went home → despawned promptly (not loitering)
+    expect(state.buildingHealth.get(map.idx(2, 8))!).toBeLessThan(0); // home felt the failed trip
+  });
 });
 
 describe('multimodal travel (mode sets a citizen’s route + speed — Maddy /goal)', () => {

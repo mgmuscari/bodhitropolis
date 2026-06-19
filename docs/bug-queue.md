@@ -202,13 +202,19 @@ layer (non-deterministic).
   bike/transit on the greedy `nextStepToward`, so cyclists still dithered/looped in local minima at
   barriers. Fix: `usesCommittedPath(mode)` = Walk||Bike → bike legs now follow committed routes (bike
   rides the same walkable set; pedCost already favors bike paths). Transit/Drive keep their own movement.
-- 🔴 **Citizens not commuting home; peds roam parks/rewilded, may never go home; cars despawn when
-  activity done** (Maddy 2026-06-19) — after finishing a stop a citizen isn't reliably returning HOME;
-  peds appear to mill around park/rewilded areas. Possible cause: fuel exhaustion, itinerary end-of-
-  round sequencing (the home leg after the last stop), or amenity-cheap pedCost luring routes through
-  greens. Investigate `advanceItinerary` end-of-round → home leg + owned-car retrieval
-  (`setDriveLeg`/`sendOwnedCarHome`) + fuel refuel at stops. Needs a careful live run — and the MCP
-  browser is MADDY'S real Chrome, so don't reload it while she's playing. Not started.
+- ✅ **Citizens not commuting home; peds roam parks/rewilded, may never go home** (Maddy 2026-06-19;
+  PR pending) — ROOT CAUSE (read live + traced): a citizen whose trip FAILS (boxed in / no foot route
+  / fuel out heading home / snapped off-substrate) runs `respawnAtHome`, which repositions it beside
+  home but **clears its itinerary/phase/walkTo and KEEPS it** (intentionally — the household persists;
+  two tests assert length===1 + beside-home). With no phase/walkTo it then fell to the catch-all
+  WANDER branch (`nextPedStep`, which favours green/park substrate) → it loitered in the parks/rewilded
+  indefinitely instead of going home. Fix: the catch-all now routes an IDLE ped that HAS a home → home
+  (phase `to-home`; at the door it goes inside = despawns into the household), while a HOMELESS ped
+  (ambient street life, no `homeTile`) still wanders. Surgical — `respawnAtHome` is untouched, so the
+  reposition-and-keep tests still hold; the change only redirects the very next step. RED gate: a
+  give-up citizen on a park-substrate neighbourhood is gone within a few steps (was a persistent
+  loiterer). Live-verify in the morning (don't reload Maddy's Chrome overnight). Owned-car-on-finish is
+  already handled (`sendOwnedCarHome`/`retireOwnedCar`).
 - ✅ **Satellite/bridged exurbs are car-ISOLATED — residents can't commute** (audit 2026-06-19; PR
   pending) — `eraSatellites` links exurbs to the core by a 1-wide freeway. A 1-wide highway IS freely
   drivable, but where the connector CROSSES (or runs alongside) the core's 3-wide era3 expressways,
