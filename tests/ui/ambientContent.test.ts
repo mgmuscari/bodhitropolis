@@ -33,6 +33,7 @@ import {
   birdSpawnAt,
   nextRoadStep,
   congestionSpeedMult,
+  congestionCount,
   walkPath,
   stopReachable,
   usesCommittedPath,
@@ -2049,6 +2050,16 @@ describe('failed trips + freeway speed', () => {
     const p = state.peds[0]!;
     expect(Math.abs(Math.round(p.x) - 2) + Math.abs(Math.round(p.y) - 2)).toBeLessThanOrEqual(1); // back beside home
     expect(state.buildingHealth.get(map.idx(2, 2))!).toBeLessThan(0); // home docked for the lost trip
+  });
+
+  it('congestionCount: same-dir + orthogonal cars pile up; OPPOSITE-direction cars pass freely (Maddy)', () => {
+    // dir order [N,E,S,W] = 0,1,2,3. Cars heading the OPPOSITE way are just passing — they must not
+    // count toward a car's congestion (oncoming traffic on a two-way road doesn't make a jam).
+    expect(congestionCount([0, 3, 0, 2], 1)).toBe(3); // an EAST car ignores the 2 WEST → its queue of 3
+    expect(congestionCount([0, 3, 0, 2], 3)).toBe(2); // a WEST car ignores the 3 EAST → its 2
+    expect(congestionCount([0, 1, 0, 1], 1)).toBe(1); // pure opposite pair: each sees only itself (full speed)
+    expect(congestionCount([0, 1, 0, 1], 3)).toBe(1);
+    expect(congestionCount([1, 1, 0, 0], 1)).toBe(2); // ORTHOGONAL (a crossing) DOES pile up: north + self
   });
 
   it('congestionSpeedMult: lone car full speed; congestion bites HARD and a jam crawls (floored, >0)', () => {

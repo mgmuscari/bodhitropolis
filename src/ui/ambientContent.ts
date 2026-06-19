@@ -165,6 +165,17 @@ export function congestionSpeedMult(count: number): number {
   return mult < PILEUP_MIN ? PILEUP_MIN : mult;
 }
 
+/** How many cars on a tile actually pile up against a car heading `dir`, given the tile's per-direction
+ *  car histogram `dirCounts` ([N,E,S,W]). Cars heading the OPPOSITE way are just PASSING (oncoming
+ *  traffic on a two-way road) — they don't make a jam — so they're excluded; same-direction and
+ *  orthogonal cars (a queue or a crossing) DO count (Maddy). The car itself is included (same-dir).
+ *  Pure. */
+export function congestionCount(dirCounts: readonly number[], dir: number): number {
+  let total = 0;
+  for (const n of dirCounts) total += n;
+  return total - (dirCounts[(dir + 2) % 4] ?? 0); // drop the opposite-heading cars
+}
+
 /** Chebyshev radius searched around a parked car for the building its pedestrian walks
  *  to/from. Lots/curbs sit next to the demand they serve, so this stays small. */
 const LASTMILE_RADIUS = 4;
@@ -2932,17 +2943,24 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   spawnFlocks(state, map, rng);
   spawnCruisers(state, map, rng); // top the patrol fleet up from the precincts
 
-  // Per-tile count of MOVING cars (a snapshot at substep start), for the pileup slowdown: a car on a
-  // crowded tile creeps (congestion made physical). Counts free + owned-being-driven cars; parked and
-  // abandoned cars sit off to the side and don't jam the lane. Both car movers below read this.
-  const carDensity = new Map<number, number>();
+  // Per-tile, per-DIRECTION histogram of MOVING cars (a snapshot at substep start), for the pileup
+  // slowdown: a car on a crowded tile creeps (congestion made physical). Counts free + owned-being-
+  // driven cars; parked and abandoned cars sit off to the side and don't jam. Direction-aware so a car
+  // is only slowed by same-direction / orthogonal traffic — oncoming (opposite) cars are just passing
+  // (Maddy). Both car movers below read this, passing the moving car's heading.
+  const carDirHist = new Map<number, [number, number, number, number]>();
   for (const c of state.cars) {
     if (c.parked || c.abandoned) continue;
     const i = map.idx(Math.round(c.x), Math.round(c.y));
-    carDensity.set(i, (carDensity.get(i) ?? 0) + 1);
+    let h = carDirHist.get(i);
+    if (!h) carDirHist.set(i, (h = [0, 0, 0, 0]));
+    const d = c.dir & 3; // 0..3
+    h[d] = h[d]! + 1;
   }
-  const speedAt = (base: number, x: number, y: number): number =>
-    base * congestionSpeedMult(carDensity.get(map.idx(x, y)) ?? 1);
+  const speedAt = (base: number, x: number, y: number, dir: number): number => {
+    const h = carDirHist.get(map.idx(x, y));
+    return h ? base * congestionSpeedMult(congestionCount(h, dir)) : base;
+  };
 
   // 3. Move the cars. A PARKED car waits for its pedestrian (its bound ped zeroes `dwell` on
   //    return; the countdown is just a safety release). A moving trip-car follows its path
@@ -2964,7 +2982,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     const cx = Math.round(c.x);
     const cy = Math.round(c.y);
     const onFreeway = map.built[map.idx(cx, cy)] === BuiltKind.RoadHighway;
-    const sp = speedAt(onFreeway ? CAR_SPEED * 2 : CAR_SPEED, cx, cy);
+    const sp = speedAt(onFreeway ? CAR_SPEED * 2 : CAR_SPEED, cx, cy, c.dir);
     if (c.path !== undefined) {
       const alive = advanceMover(c, sp, map, (x, y) => pathStep(map, c, x, y));
       return alive ? true : tryPark(state, c, map);
@@ -3062,7 +3080,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       const cary = Math.round(car.y);
       const onFreeway = map.built[map.idx(carx, cary)] === BuiltKind.RoadHighway;
       // Freeways move traffic 2×; a crowded tile slows it (the same pileup field the car filter uses).
-      const sp = speedAt(onFreeway ? CAR_SPEED * 2 : CAR_SPEED, carx, cary);
+      const sp = speedAt(onFreeway ? CAR_SPEED * 2 : CAR_SPEED, carx, cary, car.dir);
       const moving = advanceMover(car, sp, map, (x, y) => pathStep(map, car, x, y));
       layTraffic(state, map, Math.round(car.x), Math.round(car.y)); // the car IS the traffic
       layPollution(state, map, Math.round(car.x), Math.round(car.y), onFreeway); // ...and the smog
