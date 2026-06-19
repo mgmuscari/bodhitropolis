@@ -40,7 +40,9 @@ Revival = make a pocket worth living in (greens + calm → land value → occupa
    built tile conducts), per-component capacity-vs-demand with brownout (`src/growth/power.ts`, live
    derived field). Hard-gate: unpowered → no growth + slow decay, reversible (composes with revival).
    Dirty plants (Coal/Gas) emit smog → land value → occupancy → decay; renewables clean. Always-on red
-   "unpowered" pips + inspect power status. Power OVERLAY (U) added (PR pending). OPEN: balance tuning. (Legacy power seeding
+   "unpowered" pips + inspect power status. Power OVERLAY (U) added (PR pending). Balance tuning is a
+   PLAYTEST-FEEL knob, not an open bug — verified live the grid is non-pathological (city stays alive,
+   cars/peds circulate); dial the magnitudes by playing. (Legacy power seeding
    so the start isn't 100% dark is DONE by the redlining arc R1 below.) (Also fixed in #64: multi-tile glyph z-order — drawn in a 2nd pass.)
 
 ## REDLINING SYSTEM (arc, 2026-06-17) — produced-by-policy inequity
@@ -125,7 +127,9 @@ layer (non-deterministic).
   homes emptying near the worst decay) — metastable, reversible by healing. Non-hashed; the seeded
   building stock is untouched (buildings appearing/disappearing = the deferred deterministic-growth
   seam). **Arc complete: traffic → pollution → land value → population are all agent-emergent.**
-  Tuning (OCC_RATE / OCC_LV_NEUTRAL / OCC_OUT_FRACTION) is provisional — dial during playtest.
+  Tuning (OCC_RATE / OCC_LV_NEUTRAL / OCC_OUT_FRACTION) is a PLAYTEST-FEEL knob, not an open bug —
+  verified live the loop is metastable (a controlled ~19%/25s decline, the intended decline spiral,
+  reversible by healing; NOT the old monotonic spiral-to-zero, which is fixed). Dial by playing.
 
 ## Open
 
