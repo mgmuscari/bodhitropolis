@@ -32,6 +32,7 @@ import {
   isPedSubstrate,
   birdSpawnAt,
   nextRoadStep,
+  congestionSpeedMult,
   walkPath,
   stopReachable,
   usesCommittedPath,
@@ -2044,6 +2045,30 @@ describe('failed trips + freeway speed', () => {
     const p = state.peds[0]!;
     expect(Math.abs(Math.round(p.x) - 2) + Math.abs(Math.round(p.y) - 2)).toBeLessThanOrEqual(1); // back beside home
     expect(state.buildingHealth.get(map.idx(2, 2))!).toBeLessThan(0); // home docked for the lost trip
+  });
+
+  it('congestionSpeedMult: a lone car runs full speed; a packed tile crawls (floored, never 0)', () => {
+    expect(congestionSpeedMult(0)).toBe(1); // no neighbours
+    expect(congestionSpeedMult(1)).toBe(1); // just itself
+    expect(congestionSpeedMult(2)).toBeLessThan(1); // sharing → slower
+    expect(congestionSpeedMult(3)).toBeLessThan(congestionSpeedMult(2)); // denser → slower still
+    expect(congestionSpeedMult(20)).toBeGreaterThan(0); // a jam crawls, it never deadlocks (floored)
+    expect(congestionSpeedMult(20)).toBeLessThan(congestionSpeedMult(2));
+  });
+
+  it('traffic pileup: cars packed on one tile advance slower than a lone car (emergent jam)', () => {
+    const make = (n: number) => {
+      const map = new GameMap(40, 8);
+      for (let x = 0; x < 40; x++) map.built[map.idx(x, 4)] = BuiltKind.RoadStreet;
+      const path = [];
+      for (let x = 2; x <= 36; x++) path.push(map.idx(x, 4));
+      const state = createAmbientState();
+      for (let k = 0; k < n; k++) state.cars.push({ x: 2, y: 4, dir: 1, tx: 3, ty: 4, path: [...path], leg: 2 });
+      const rng = ambientFork(`pileup${n}`);
+      for (let i = 0; i < 25; i++) stepAmbient(state, map, rng, 50);
+      return state.cars.length > 0 ? Math.max(...state.cars.map((c) => c.x)) : 40;
+    };
+    expect(make(1)).toBeGreaterThan(make(6)); // the lone car outruns the jammed pack
   });
 
   it('cars travel faster on a freeway than on a street', () => {

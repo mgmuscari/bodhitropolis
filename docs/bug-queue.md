@@ -263,13 +263,16 @@ layer (non-deterministic).
   until it has rusted away (`ABANDONED_DEGRADE_TIME` ~2 min), then despawns — leaving the contaminated
   patch (lingering, reparable). Pure; determinism untouched. Live-verified: a citizen's car was
   abandoned onto an empty tile and its ground pollution rose to 255 (max) before the wreck rusted away.
-- 🔵 **DEFERRED feature: traffic pileups (cars sharing a tile slow down)** (Maddy 2026-06-19) — when
-  multiple driving cars occupy the same tile they should SLOW DOWN, producing emergent traffic
-  pileups/jams (the agent-driven congestion made physical, not just the live `traffic` field). Today
-  cars advance at CAR_SPEED (2× on freeways) independent of how many share a tile. Design: a per-tile
-  car-occupancy count → speed penalty (denser tile = slower), so cars bunch and crawl through
-  bottlenecks. Live layer; composes with the existing agent-driven traffic field + A\* congestion
-  routing. Not started.
+- ✅ **Traffic pileups (cars sharing a tile slow down)** (Maddy 2026-06-19; PR pending) — congestion
+  made PHYSICAL: a per-substep snapshot counts MOVING cars per tile (`carDensity`; free + owned-being-
+  driven, parked/abandoned excluded), and `congestionSpeedMult(count)` scales every car's speed on that
+  tile — `1/(1 + PILEUP_K·(count−1))`, floored at `PILEUP_MIN`. Applied at BOTH car movers (the free/
+  trip-car filter and the citizen-driven `driving` branch) via a shared `speedAt(base,x,y)`. Cars bunch
+  and crawl through bottlenecks; the existing live `traffic` field + A\* congestion routing already make
+  the rest of the loop respond. **Tuning is deliberately GENTLE** (`K=0.3`, floor `0.5` = worst jam at
+  half speed) so it never deadlocks or starves the flow that must keep cars reaching lots/homes — a
+  playtest-feel knob (like OCC_RATE), dial up by playing. Pure `congestionSpeedMult` unit-tested +
+  a behavioral test (a lone car outruns a 6-car pack). Live layer, non-hashed.
 
 ### Pedestrian pathing (Maddy 2026-06-19)
 
