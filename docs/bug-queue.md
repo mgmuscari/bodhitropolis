@@ -212,7 +212,14 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
   `era3RampSpacing` (8) tiles where the grid flanks it — an on/off + at-grade crossing (Maddy: ramps =
   a street overlaid on a freeway). Live A/B (default seed, 150s): without ramps it doubled the decline
   (−48% vs main −26%); **with ramps it's −22% — connectivity fully restored**. 1226 tests green.
-  🔮 FUTURE: the planted no-traffic median (road-diet upgrade); ramps generalize to overpasses.
+  - ✅ **Planted no-traffic median** (PR pending) — `BuiltKind.PlantedMedian` (11): a road-DIET
+    upgrade (gated by the `road-diets` capability) converting a 3-wide highway's interior `through`
+    lane into a planted, no-traffic green median. Removes a traffic lane (calmer corridor) + a green
+    amenity (lifts land value); cars never drive on/across it (green barrier). `freewayLane` counts the
+    median in the road's width band so the flanking carriageways stay one-way; engine-pure
+    `isInteriorRoadLane` gates `convert-11` to interior lanes only; reversible. Live-verified: medians
+    inert (0 traffic), carriageways still flow (92 cars), renders as a green center strip.
+  🔮 FUTURE: ramps generalize to overpasses.
 - ✅ **Avenues block cross traffic at intersections (the "streetcar" bug)** (PR pending) — the blocker
   was the tram tile: a `Streetcar` (transit) tile isn't `carTraversable`, so the A* router couldn't
   take a cross street through it. Fix: a LEVEL-CROSSING rule in `canDrive` — a car may CROSS an
