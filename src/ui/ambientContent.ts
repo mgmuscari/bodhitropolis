@@ -3170,10 +3170,19 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       // advanceMover stopped: arrived (within a tile of the target) or boxed in.
       const arrived = Math.abs(Math.round(p.x) - tgtx) + Math.abs(Math.round(p.y) - tgty) <= 1;
       if (!arrived) {
-        // pathing went nowhere (e.g. boxed in, or dead-ended at a freeway) — the citizen gives up.
-        // A homed citizen respawns at home (the household persists) and home loses wellbeing for the
-        // lost trip; a bound/homeless ped despawns (a bound car releases on its safety timeout).
-        return respawnAtHome(state, p, map);
+        // A citizen that DROVE to its destination but can't complete the last-mile on FOOT — the
+        // building is walled off by other non-walkable kinds (a job hemmed in by industry/buildings,
+        // like (79,106) on the default seed: walkPath never reaches it) — has still ARRIVED: it reached
+        // the place by car and ENTERS (Maddy: a building is walkable when you're visiting it). Without
+        // this it gives up + respawns home, and a fresh commuter repeats it forever → rapid spawn/
+        // despawn (the (75,106) churn). Falls through to the 'to-building' handler → goes inside. Only
+        // a DRIVEN (carId) to-building leg; a homeless/boxed walker with no car still gives up below.
+        if (!(p.carId !== undefined && p.phase === 'to-building' && p.building)) {
+          // pathing went nowhere (boxed in, dead-ended at a freeway) — the citizen gives up. A homed
+          // citizen respawns at home (the household persists) and home loses wellbeing; a bound/homeless
+          // ped despawns (a bound car releases on its safety timeout).
+          return respawnAtHome(state, p, map);
+        }
       }
       if (p.phase === 'to-vehicle') {
         // Reached its OWNED car → plan a COMMITTED least-cost route to a free parking spot near the

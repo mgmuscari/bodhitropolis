@@ -133,13 +133,19 @@ layer (non-deterministic).
 
 ## Open
 
-- 🔴 **Rapid spawn/despawn churn at (75,106) once its lot fills (industry nearby?)** (Maddy 2026-06-19,
-  playtest of `playtest/overnight-batch`) — citizens/cars rapidly spawn then despawn at (75,106) when
-  the nearby parking lot starts to fill. Maddy suspects nearby industry. Likely the parking-seek loop
-  (`routeToParking`/`nearestParkSpot`/`MAX_PARK_SEEKS`) or the reachability/itinerary gate thrashing
-  when the destination lot is full — possibly aggravated by the new traffic-pileup slowdown (cars crawl
-  near the full lot). Investigate the arrival-with-full-lot path + whether the trip drops/re-spawns
-  instead of curb-parking. Live-verify on the running server (don't reload Maddy's tab). Not started.
+- ✅ **Rapid spawn/despawn churn at (75,106) — walled-off job, impossible last-mile** (Maddy 2026-06-19;
+  PR pending) — DIAGNOSED headlessly on the real seed (603 give-up teleports / 4000 steps). NOT a
+  parking or fuel issue (cars found spots; give-ups had FULL fuel). Root cause: a job hemmed in by
+  industry/buildings — e.g. (79,106), every orthogonal neighbour industry/building — has NO walkable
+  foot approach, so `walkPath` to it is NULL. Citizens could DRIVE+park near it but the last-mile WALK
+  was impossible → instant give-up → `respawnAtHome` (teleport away = the "despawn") → a fresh commuter
+  drove straight back (the "spawn") → tight loop. The reachability gate missed it: its roadPath/parking
+  branch passes (driving + parking exist) without checking the foot last-mile. Fix (Maddy's principle —
+  "a building is walkable WHEN the citizen is visiting it"): a DRIVEN citizen (carId) whose last-mile
+  foot leg can't reach its to-building target ENTERS the building it drove to (visit completes) instead
+  of giving up. Live-equivalent headless: **603 → 11** give-up teleports (the 11 = ordinary background).
+  RED test: a citizen driven to a walled-off plot goes `inside`, doesn't respawn. (A car-LESS walker to
+  a truly-unreachable plot still gives up — rare; the gate could also be tightened for Walk mode later.)
 - ✅ **Ghost town: population spiralled to empty** (PR pending) — occupancy declined monotonically to
   ~0 (no populated equilibrium). Root cause (diagnosed live): building-HEALTH dominated the occupancy
   signal (≈half the homes negative, ~none positive in the decayed car-city → bad trips → negative

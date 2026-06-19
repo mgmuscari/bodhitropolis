@@ -1418,6 +1418,7 @@ describe('land value steers citizen destination choice', () => {
     expect(nearestOfCategory(map, 8, 5, StopCategory.Shop)).toEqual({ x: 10, y: 5 }); // no LV → nearest
   });
 
+
   it('does NOT bias destinations upper-left on ties (Maddy: row-major trip-generation bias)', () => {
     // For each searcher centre, two EQUIDISTANT same-category plots — one NW, one SE (Manhattan d=2
     // each, uniform land value → a true score tie). The old row-major strict-`<` picker ALWAYS chose
@@ -2074,6 +2075,32 @@ describe('failed trips + freeway speed', () => {
       return lead - 2; // distance travelled from the start tile
     };
     expect(make(1)).toBeGreaterThan(make(6) * 2.5); // the jam is a STRONG drag, not a token slowdown
+  });
+
+  it('a citizen that DROVE to a walled-off building enters it (no give-up/respawn churn)', () => {
+    // (75,106) churn (Maddy): a job hemmed in by industry/buildings has no walkable foot approach, so
+    // walkPath to it is NULL. A citizen who DROVE there parks nearby and must still ARRIVE — it enters
+    // the building it visited — rather than give up + respawn in a tight loop (rapid spawn/despawn).
+    const map = new GameMap(16, 12);
+    map.built[map.idx(5, 5)] = BuiltKind.RoadStreet; // where it parked (walkable)
+    map.built[map.idx(8, 5)] = BuiltKind.Industrial; // the destination job...
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      map.built[map.idx(8 + dx, 5 + dy)] = BuiltKind.Industrial; // ...walled off → no foot approach
+    }
+    map.built[map.idx(0, 0)] = BuiltKind.HouseSingle; // home
+    const state = createAmbientState();
+    state.cars.push({ x: 5, y: 5, dir: 1, tx: 5, ty: 5, parked: true, owned: true, id: 1 });
+    const ped = {
+      x: 5, y: 5, dir: 1, tx: 5, ty: 5,
+      walkTo: { x: 8, y: 5 }, phase: 'to-building' as const, building: { x: 8, y: 5 },
+      homeTile: map.idx(0, 0), carId: 1, mode: TravelMode.Walk, fuel: 2000,
+    };
+    state.peds.push(ped);
+    const rng = ambientFork('walled-visit');
+    stepAmbient(state, map, rng, 50);
+    expect(state.peds.includes(ped)).toBe(true); // did NOT respawn/teleport away
+    expect(ped.phase).toBe('inside'); // it arrived by car and entered the building
+    expect(Math.round(ped.x)).toBe(5); // still at where it parked (it didn't get teleported home)
   });
 
   it('cars travel faster on a freeway than on a street', () => {
