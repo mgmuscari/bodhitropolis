@@ -18,6 +18,32 @@ carries deliberate weight (anti-Moses / environmental-justice framing; "decay" n
 must serve that, not the original's neutral-developer fantasy. See CLAUDE.md
 Known Gotchas (2026-06-17 terminology, 2026-06-18 art/assets).
 
+## 0.5 Tilesets — the generated art is an OPTIONAL skin (Maddy, 2026-06-19)
+
+**The procedural look is a first-class, permanently-supported default — not a placeholder.**
+Maddy: "the default look and feel right now is actually super cute and we should continue to
+support it. skinning the game with graphics should be optional."
+
+So the model is **tilesets**, not replacement:
+
+- **`procedural`** — the current 100% Canvas2D look (`buildAtlas`/`paintForKey`). The DEFAULT,
+  always available, never removed. The reference experience.
+- **`pixel-art` (and future tilesets)** — the ComfyUI-generated identity art (§2), loaded over the
+  procedural base. One *named* tileset among potentially several.
+
+Requirements this imposes on the pipeline + renderer:
+
+- The atlas asset-load path (§4) is a **skin layer over the procedural atlas**, selected by a tileset
+  id. `procedural` loads nothing (pure painters). A named tileset loads its committed PNGs and falls
+  back to the procedural painter per-key when an asset is missing — so a *partial* tileset still runs.
+- **Tileset selection is a user setting** → it lives in the Settings Menu (`docs/design/settings-menu.md`),
+  persisted (localStorage), default `procedural`.
+- The systemic/tiling layer (terrain dither, road/rail masks) stays procedural in EVERY tileset (§2);
+  a tileset only re-skins the identity layer. (A future tileset *could* override more, but the split
+  holds by default.)
+- Determinism is unaffected — tilesets are a pure render-time presentation choice over the same
+  deterministic world (committed PNGs, no live generation).
+
 ## 1. What the live renderer actually is
 
 The live game (`src/`, the actively-played Vite/TS web build — **not** the legacy
@@ -55,11 +81,13 @@ Diffusion cannot produce seamless, connection-mask-aware, 16×16 tiles. So:
 
 ## 4. Integration
 
-New asset-load path in the renderer: building keys load a committed PNG into the
-atlas (`atlas[key]`) instead of being painted by `paintForKey()`, with **fallback to
-the procedural painter** when an asset is missing. Everything downstream
-(`ctx.drawImage`) is already source-agnostic. Landing dir: a Vite-served static dir
-(create `public/` or equivalent).
+New asset-load path in the renderer, structured as a **tileset layer** (§0.5): for the active
+tileset, building keys load a committed PNG into the atlas (`atlas[key]`) instead of being painted
+by `paintForKey()`, with **fallback to the procedural painter** when an asset is missing (so a
+partial tileset and the `procedural` default both work). Everything downstream (`ctx.drawImage`) is
+already source-agnostic. Landing dir: a Vite-served static dir per tileset (create
+`public/tilesets/<id>/` or equivalent). The active tileset id comes from the settings store
+(default `procedural` = load nothing).
 
 ## 5. Open decisions (to pin with Maddy)
 
@@ -77,4 +105,5 @@ the procedural painter** when an asset is missing. Everything downstream
 - [ ] Confirm available pixel-art models / LoRAs on the remote.
 - [ ] Pin scope + style + footprint resolution (§5).
 - [ ] Build the generation workflow; generate the first kind as a vertical slice.
-- [ ] Add the atlas asset-load path + procedural fallback.
+- [ ] Add the atlas asset-load path + procedural fallback, as a **tileset layer** (§0.5).
+- [ ] Wire tileset selection into the Settings Menu (`docs/design/settings-menu.md`); default `procedural`.
