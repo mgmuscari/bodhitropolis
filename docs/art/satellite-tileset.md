@@ -1,0 +1,134 @@
+# Satellite tileset — generation plan
+
+The first generated **tileset** (an optional skin over the procedural atlas — see
+`asset-generation.md` §0.5; procedural stays the permanent default). Art direction set by
+Maddy, 2026-06-19.
+
+## 1. Art direction
+
+> "Inspired by Google Maps. A top-down, patchwork view that almost resembles satellite
+> photography. For legibility, a slightly stylized / cartoonish style — black outlines, etc.
+> Somewhere around SimCity 2000, but **not isometric — top-down**. Architectural cues based on
+> **Oakland, California**."
+
+Concretely:
+
+- **Top-down orthographic** (true plan view, zero perspective / no isometric skew). The camera
+  looks straight down; buildings are roofs + footprints, roads are ribbons, terrain is texture.
+- **Patchwork / "satellite photo" gestalt** — the whole map should read like a stylized aerial:
+  parcels abut, colors vary plot-to-plot, the grain is photographic-but-simplified.
+- **Cartoonish legibility** — clean shapes, **black (or near-black) outlines** around buildings
+  and edges, readable at a 16 px tile and at 1–4× zoom.
+- **SimCity 2000-era richness** of color/detail, minus the isometric projection.
+- **Oakland cues** — Victorian/craftsman bungalows, stucco apartment boxes, flatland industrial,
+  the port, hill greenery. (Thematically loaded: this is an anti-Moses, environmental-justice
+  game — the art serves "decay / repair / rewild", never the neutral-developer fantasy. See
+  CLAUDE.md 2026-06-17.)
+
+## 2. The asset taxonomy (drives generation strategy)
+
+Maddy's three categories, mapped to the renderer seam:
+
+| Category | What | Generation | Renderer addressing |
+|---|---|---|---|
+| **Tesselable** | terrain (grass/forest/meadow/bare/water…), roads | one tile that **tiles seamlessly** (4-way) | terrain `${kind}-${band}` (band fan-out via `terrainKeys`); roads `road-{k}-{mask}` |
+| **Multi-tile plots** | apartments (2×2), projects (2×3), power plants, civic, big footprints | generate **ONE larger pixel-art image** with seam continuity, then **slice into 16×16 cells** | `footprintCellKey(kind,w,h,col,row,tier)` — `b-{kind}-{w}x{h}-c{col}-r{row}-{tier}` (renderer tries this first, falls back to the pos/tier key) |
+| **Variety** | residential (single houses, small apartments) | **5–10 distinct versions** per kind | ⚠️ needs a variant-pick seam (see §6 — not built yet) |
+
+Everything a tileset omits **falls back to the procedural painter** per key, so a partial bake is
+always shippable. The manifest (`SATELLITE_ASSETS` in `src/ui/tileset.ts`) lists ONLY committed
+files; it grows as art lands.
+
+## 3. Technical contract (non-negotiable for the renderer)
+
+- **16×16 px per tile** (`BASE_TILE`). Tesselable tiles are 16×16; a multi-tile plot is generated
+  large, then sliced to a grid of 16×16 cells. The loader normalizes any source to 16×16 on
+  decode, but author at 16×16 to avoid downscale softness.
+- **sRGB 8-bit PNG**, transparent alpha where a building doesn't fill its footprint cell.
+- **Committed**, not generated live (determinism holds — a tileset is a pure render-time choice).
+- Land under `public/tilesets/satellite/` (Vite serves `public/` at the site root →
+  `/tilesets/satellite/<file>.png`). Add each committed file to `SATELLITE_ASSETS` with the exact
+  atlas keys it fills (`terrainKeys(...)`, `buildingKeys(...)`, or a `footprintCellKey` list).
+- **Seam continuity**: tesselable tiles must tile 4-way (top edge ≡ bottom, left ≡ right). Sliced
+  plots must be cut on exact 16 px boundaries so adjacent cells line up.
+
+## 4. Rendering efficiency (Maddy's constraint, 2026-06-19)
+
+> "Be careful about rendering efficiency — bouncing the base layer down to one texture, that kind
+> of optimization."
+
+The single-cached-base-texture optimization is preserved and is the load-bearing one. The model:
+
+- The renderer bakes terrain + built + overlay into ONE offscreen base canvas **once per
+  invalidation** (`drawBase`), then **1:1 identity-blits** that single texture each frame
+  (`composite`). A tileset changes only *what is baked in*, not the bake/blit structure — so the
+  **per-frame cost is identical** to procedural (one blit + the ambient sprites).
+- **16×16 contract** keeps the base texture at the same resolution → blit cost unchanged. No
+  larger source textures sampled per frame.
+- The **procedural atlas is painted once and cached** process-wide; a tileset swap is a shallow
+  `Map` clone + `O(overrides)` set (NOT an all-keys repaint) + one base invalidation.
+- Tileset PNGs are **decoded once into a canvas at load** (uniform fast `drawImage` source, no
+  first-frame decode hitch).
+- A tileset swap triggers exactly **one** base rebuild; thereafter it's the same cached blit.
+
+Future scaling headroom (only if needed): pack the atlas into one sprite sheet (matters for a WebGL
+path, not Canvas2D — the base bake already collapses per-tile cost to once-per-invalidation).
+
+## 5. ComfyUI pipeline
+
+Remote ComfyUI (MPS, healthy, big VRAM headroom). Proven fast pixel-art path (2026-06-17 logs):
+
+- **Model**: `z_image_turbo_bf16` (Z-Image turbo, Lumina2 arch) + LoRA
+  `pixel_art_style_z_image_turbo.safetensors` @ ~0.85–1.0, ~8 steps → **~2–3 s/image**.
+- **Downscale**: `PixelOE` node (pixel-quantize; `pixel_size` ≤ 32) → crisp pixel art, then resize
+  to the target tile/footprint size.
+- Alt model: SDXL base + `pixel-art-xl` LoRA (slower, also available).
+
+**Prompt recipe** (style suffix, every asset): `top-down orthographic view, flat overhead, no
+perspective, satellite map tile, slightly cartoonish, bold black outline, clean flat shading,
+16-bit era city-builder, Oakland California` + a negative of `isometric, 3/4 view, perspective,
+drop shadow, blurry`.
+
+**Runnable workflow**: the saved ComfyUI workflow **`z_image_pixelart_tile.json`** is exactly this
+recipe (Z-Image turbo + `pixel_art_style` LoRA + `SeamlessTile` + dual `PixelOE` → a 1024 chunky
+preview *and* a true 32×32 tile). To generate: open it in the ComfyUI UI, edit node 7 (positive
+prompt) with a recipe below, set `SeamlessTile.tiling` = `enable` for tesselable terrain/roads or
+`disable` for buildings, run. (Note 2026-06-19: the MCP `enqueue_workflow` direct-POST path was
+returning non-OK for *any* arbitrary graph — standard or custom — while `generate_image` and the
+saved-workflow UI run both worked; so drive generation from the ComfyUI UI until that path is
+healthy. `pixel_size` ≤ 32, so the true tile is 32×32 → the loader normalizes to 16×16 on decode.)
+
+Per-category subject prompts:
+- **Terrain (grass)**: "seamless tileable grass / lawn texture, parks green, …"
+- **Terrain (water)**: "seamless tileable water, bay blue-green, gentle ripples, …"
+- **Residential (Oakland)**: "single Victorian / craftsman bungalow, gabled roof seen from above,
+  small yard, picket fence, …" (× 5–10 seeds for variety)
+- **Apartments**: "stucco apartment block roof, flat roof with vents, … 2×2 footprint"
+- **Industrial / port**: "warehouse roof, container yard, …"
+
+## 6. Open work / decisions (for Maddy)
+
+1. **Variety-pick seam (not yet built)** — multi-version residential needs the renderer to pick
+   variant N per parcel deterministically (a `tieHash`-style hash of the parcel anchor → variant
+   index), keyed e.g. `b-{kind}-{pos}-{tier}-v{n}`. Orthogonal to the segmented-cell path; add it
+   when the first residential variant set lands. Until then a single residential image per kind
+   works via `buildingKeys`.
+2. **Palette** — match the existing `PALETTE` / `BUILDING_STYLES` (warm dharmapunk) or depart for a
+   truer "satellite" look? (Hers to set.)
+3. **First slice** — recommend terrain (the patchwork ground) + Oakland residential (highest
+   identity payoff) to prove the end-to-end pipeline, then expand by `BuiltKind`.
+4. **Footprint resolutions** — confirm per-kind footprint sizes for the segmented plots (apartments
+   2×2, projects 2×3, power plants larger) so the big-image slices map to real parcels.
+
+## 7. Status
+
+- [x] Renderer **tileset seam** — atlas overrides, per-key fallback, hot-swap, segmented cell keys.
+- [x] Async **loader** (404→skip, decode-once-to-canvas).
+- [x] **Settings** dropdown wired (live hot-swap).
+- [x] Pure **registry/manifest** (`tileset.ts`) + key fan-out helpers.
+- [~] Style **probes** — recipe + saved workflow ready (`z_image_pixelart_tile.json`); generation
+  deferred (MCP `enqueue_workflow` POST path down 2026-06-19 — run from the ComfyUI UI). Probes land
+  under `docs/art/probes/satellite/` for review.
+- [ ] Pin style/palette/first-slice (§6) with Maddy.
+- [ ] Bake the first slice → commit PNGs → populate `SATELLITE_ASSETS`.
+- [ ] Variety-pick seam (§6.1) when residential variants land.
