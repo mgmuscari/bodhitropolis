@@ -11,7 +11,7 @@ import { createCivicState } from '../../src/civic/state';
 import { createTechState } from '../../src/tech/state';
 import { TECH_TREE } from '../../src/tech/tree';
 import { simTick, type SimDeps } from '../../src/civic/compose';
-import { parkingLots, parkingStalls } from '../../src/ui/parkingContent';
+import { parkingLots, parkingStalls, STALLS_PER_AXIS } from '../../src/ui/parkingContent';
 import { layField, decayField } from '../../src/citizens/field';
 import { StopCategory } from '../../src/citizens/itinerary';
 import { TravelMode } from '../../src/citizens/modes';
@@ -659,8 +659,9 @@ describe('big parking lots fill nearest-tile-first (Maddy: blocks hold one car p
       parkOwnedCarSomewhere(state, m, car);
       parked.push({ lotIdx: car.lotIdx, stallIdx: car.stallIdx });
     }
-    expect(parked.every((c) => c.lotIdx !== undefined)).toBe(true); // all in the lot, none curbed
-    expect(new Set(parked.map((c) => c.stallIdx)).size).toBe(20); // 20 distinct stalls (fills the block)
+    expect(parked.every((c) => c.lotIdx !== undefined)).toBe(true); // all in lots, none curbed
+    // 20 distinct STALLS across the per-tile lots (lotIdx,stallIdx pairs) — fills the block, not one each.
+    expect(new Set(parked.map((c) => `${c.lotIdx},${c.stallIdx}`)).size).toBe(20);
   });
 
   it('a car reaches a big lot from its EDGE even when the lot CENTRE is out of park range', () => {
@@ -1718,25 +1719,29 @@ describe('cars park in lots (the lot is storage for the moving cars)', () => {
     expect(state.peds.every((p) => p.walkTo !== undefined)).toBe(true); // last-mile walkers
   });
 
-  it('respects lot capacity: never stores more LOT cars than the lot has stalls', () => {
+  it('respects lot capacity: never stores more cars in a lot TILE than it has stalls', () => {
     const { map, path } = roadWithLot();
-    const lots = lotInfo(map);
-    const capacity = lots[0]!.stalls.length; // per-tile grid → scales with lot size
     const state = createAmbientState();
-    setParkingLots(state, lots);
-    ingestTrips(state, Array.from({ length: capacity + 8 }, () => ({ path })), map);
+    setParkingLots(state, lotInfo(map));
+    ingestTrips(state, Array.from({ length: 17 }, () => ({ path })), map); // more cars than one tile holds
     const rng = ambientFork('cap');
-    // Budget is generous because this test ingests capacity+8 cars onto ONE tile at once — a worst-case
-    // artificial stack that locksteps under the (intentionally strong) traffic-pileup slowdown and so
-    // takes a while to filter to the lot. The assertion below (capacity is respected) is unchanged.
-    let maxLotParked = 0;
+    // Budget is generous: 17 cars ingested onto ONE tile at once lockstep under the strong traffic
+    // pileup and take a while to filter to the lots. Each per-tile lot must hold at most its 3x3 stalls.
+    let maxPerLot = 0;
+    let anyLot = false;
     for (let i = 0; i < 600; i++) {
       stepAmbient(state, map, rng, 50);
-      const lotParked = state.cars.filter((c) => c.parked && c.lotIdx !== undefined).length;
-      maxLotParked = Math.max(maxLotParked, lotParked);
+      const perLot = new Map<number, number>();
+      for (const c of state.cars) {
+        if (c.parked && c.lotIdx !== undefined) {
+          perLot.set(c.lotIdx, (perLot.get(c.lotIdx) ?? 0) + 1);
+          anyLot = true;
+        }
+      }
+      for (const n of perLot.values()) maxPerLot = Math.max(maxPerLot, n);
     }
-    expect(maxLotParked).toBeGreaterThan(0);
-    expect(maxLotParked).toBeLessThanOrEqual(capacity); // one car per stall; extras street-park
+    expect(anyLot).toBe(true);
+    expect(maxPerLot).toBeLessThanOrEqual(STALLS_PER_AXIS * STALLS_PER_AXIS); // <= 9 per 1x1 lot tile
   });
 
   it('binds a pedestrian to the parked car that walks to the destination building', () => {
