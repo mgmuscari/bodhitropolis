@@ -209,6 +209,21 @@ layer (non-deterministic).
   greens. Investigate `advanceItinerary` end-of-round → home leg + owned-car retrieval
   (`setDriveLeg`/`sendOwnedCarHome`) + fuel refuel at stops. Needs a careful live run — and the MCP
   browser is MADDY'S real Chrome, so don't reload it while she's playing. Not started.
+- 🔴 **Satellite/bridged exurbs are car-ISOLATED — residents can't commute** (audit 2026-06-19; root
+  cause behind the NE spawn-despawn fix) — `eraSatellites` connects exurbs to the core by a FREEWAY,
+  but freeways are limited-access (`canDrive` lets cars on only at ramps/ends) and the satellite/bridge
+  connector freeways get NO ramps (`placeCorridorRamps` runs for era3 corridors only). So the exurb's
+  local streets can't get ONTO the connector → its residents can reach no off-mass stop by car (and
+  none on foot across water). The reachability gate (#116) stops the churn by keeping them home, but
+  they never travel — dead districts. Fix: drop `RoadRamp` cross-sections where a satellite/bridge
+  freeway is flanked by the exurb grid (reuse `placeCorridorRamps` for satellite routes), OR connect
+  the exurb with a surface arterial. Worldgen (hashed), N=120-gated. Would also let #116's residents commute.
+- 🔵 **DEFERRED feature: restoration-progress / city-health readout** (audit 2026-06-19; from "is my
+  renewal helping?") — the player can't easily tell whether their restorative work is moving the city.
+  A HUD / overlay panel surveying the live metrics over time (mean land value, total occupancy, mean
+  building health, ecology richness, total smog/ground/water pollution — with an up/down trend arrow)
+  so revival is legible. All the fields already exist in `AmbientState`; this is a pure readout (no sim
+  change). Live layer. Not started.
 
 ### Pedestrian / vehicle agents (Maddy 2026-06-19)
 
