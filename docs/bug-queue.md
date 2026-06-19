@@ -244,9 +244,13 @@ at-grade avenues. Diagnosed but DEFERRED — a focused redesign, not a patch.
   they extend the live service-coverage field (coverage overlay retitled "Civic services"), render
   (CL/LB/SK glyphs + distinct styles), and are player-buildable (repair the redlined zones). Live-
   verified: 3 of each placed at mean grade 66 (greenlined); unit-tested (greener than precincts).
-- 🔵 **DEFERRED feature: prevailing wind carries smog** (Maddy 2026-06-18) — air pollution
-  (`ambient.pollution`) should drift downwind on a prevailing wind, not just diffuse/linger in place,
-  so smog plumes streak from their sources. Live layer.
+- ✅ **Prevailing wind carries smog** (PR pending) — air pollution now DRIFTS one tile downwind along
+  a seeded per-world prevailing wind (`prevailingWind`: 8-dir integer unit vector from the ambient
+  rng, never the sim streams) each WIND_CADENCE pass via `driftPollution` (conservative transfer;
+  off-map smog leaves the system), so plumes streak from their sources instead of diffusing in place.
+  Live layer, non-hashed; no transcendental Math (stays on the pure-ui allowlist). Live-verified: a
+  steady source yields a clean downwind plume (250→189 over 6 tiles), zero upwind leakage; wind
+  varies by seed.
 - 🔵 **DEFERRED feature: block-by-block organic growth** (Maddy 2026-06-18) — worldgen should grow the
   city BLOCK BY BLOCK outward from seeds — the central districts AND the ENDS of transport lines
   (bridge landings, freeway ends/ramps) — so settlement accretes organically along/from infrastructure
