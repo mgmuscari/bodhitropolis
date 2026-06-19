@@ -739,7 +739,9 @@ export class Renderer {
           // (depends on neighbour kinds), drawn OVER the road like the power poles, not an atlas key.
           // Structural/mechanical, so always on (procedural + any tileset).
           if (isT) {
-            const div = roadDividerMask(map, tx, ty);
+            // minRun 3: only barrier a SUSTAINED freeway/frontage stretch (>2 tiles). A 1-tile
+            // freeway↔street contact is a crossing / onramp, not a frontage — no barrier there.
+            const div = roadDividerMask(map, tx, ty, 3);
             if (div !== 0) {
               const bw = Math.max(2, Math.round(ts * 0.16));
               const concrete = '#d8d2c4';

@@ -699,14 +699,8 @@ export function isLimitedAccessBoundary(a: number, b: number): boolean {
   return (a === BuiltKind.RoadHighway) !== (b === BuiltKind.RoadHighway);
 }
 
-/**
- * Divider mask for the road tile at (x, y): bit N=1/E=2/S=4/W=8 is set on each 4-neighbour edge
- * that is a {@link isLimitedAccessBoundary} (freeway ↔ surface road). 0 on a non-road tile or where
- * no edge is a freeway boundary. The dual-purpose companion of {@link transportMask}: that one says
- * which edges MERGE (same category); this says which edges are SEPARATED by a barrier. Render-only
- * (reads the hashed `built` layer, never writes) so the worldgen hash is untouched.
- */
-export function roadDividerMask(map: GameMap, x: number, y: number): number {
+/** Raw divider mask: every freeway↔surface-road edge, no run-length filter (see roadDividerMask). */
+function rawRoadDividerMask(map: GameMap, x: number, y: number): number {
   const self = map.getBuilt(x, y);
   if (transportCategory(self) !== 1) return 0;
   let mask = 0;
@@ -717,6 +711,51 @@ export function roadDividerMask(map: GameMap, x: number, y: number): number {
     if (isLimitedAccessBoundary(self, map.getBuilt(nx, ny))) mask |= bit;
   }
   return mask;
+}
+
+// The axis a divider boundary RUNS along, per edge bit: a vertical boundary (E/W) continues along Y,
+// a horizontal one (N/S) along X. Used to measure how long the freeway/frontage boundary persists.
+const DIVIDER_RUN_AXIS: ReadonlyArray<readonly [number, number, number]> = [
+  [1, 1, 0], // N: horizontal boundary → run along X
+  [2, 0, 1], // E: vertical boundary → run along Y
+  [4, 1, 0], // S
+  [8, 0, 1], // W
+];
+
+/** Contiguous length (incl. self) of the divider `bit` boundary through (x, y) along (sx, sy). */
+function dividerRun(map: GameMap, x: number, y: number, bit: number, sx: number, sy: number): number {
+  let len = 1;
+  for (let s = 1; ; s++) {
+    const nx = x + sx * s;
+    const ny = y + sy * s;
+    if (map.inBounds(nx, ny) && (rawRoadDividerMask(map, nx, ny) & bit) !== 0) len++;
+    else break;
+  }
+  for (let s = 1; ; s++) {
+    const nx = x - sx * s;
+    const ny = y - sy * s;
+    if (map.inBounds(nx, ny) && (rawRoadDividerMask(map, nx, ny) & bit) !== 0) len++;
+    else break;
+  }
+  return len;
+}
+
+/**
+ * Divider mask for the road tile at (x, y): bit N=1/E=2/S=4/W=8 set on each 4-neighbour edge that is
+ * a {@link isLimitedAccessBoundary} (freeway ↔ surface road) AND part of a boundary that runs at
+ * least `minRun` tiles. The run filter is the point (Maddy 2026-06-19): a 1-tile freeway/street
+ * contact is a CROSSING (an onramp), not a parallel frontage, so it gets NO barrier — only a
+ * sustained ≥`minRun` stretch does. `minRun = 1` (default) is the unfiltered rule. The dual of
+ * {@link transportMask}: that says which edges MERGE, this says which are SEPARATED. Render-only.
+ */
+export function roadDividerMask(map: GameMap, x: number, y: number, minRun = 1): number {
+  const raw = rawRoadDividerMask(map, x, y);
+  if (minRun <= 1 || raw === 0) return raw;
+  let out = 0;
+  for (const [bit, sx, sy] of DIVIDER_RUN_AXIS) {
+    if ((raw & bit) !== 0 && dividerRun(map, x, y, bit, sx, sy) >= minRun) out |= bit;
+  }
+  return out;
 }
 
 /** The elevated deck (overpass) kind at (x, y), or 0 (none). Reads the second `deck` layer. */

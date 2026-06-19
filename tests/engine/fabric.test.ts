@@ -922,6 +922,39 @@ describe('roadDividerMask', () => {
     map.setBuilt(0, 1, BuiltKind.RoadStreet); // south frontage
     expect(roadDividerMask(map, 0, 0)).toBe(E | S);
   });
+
+  // Run-length filter (minRun): a 1-tile freeway/street contact is a CROSSING (onramp), not a
+  // frontage — it should NOT get a barrier. Only a sustained parallel boundary does.
+  it('with minRun=3, suppresses an isolated 1-tile freeway/street contact (a crossing)', () => {
+    const map = new GameMap(7, 7);
+    // A vertical freeway column, with a single avenue tile touching it on the east at one row.
+    for (let y = 0; y < 7; y++) map.setBuilt(3, y, BuiltKind.RoadHighway);
+    map.setBuilt(4, 3, BuiltKind.RoadAvenue); // lone east contact at y=3
+    expect(roadDividerMask(map, 3, 3, 1)).toBe(E); // raw rule still sees it
+    expect(roadDividerMask(map, 3, 3, 3)).toBe(0); // but a 1-long run is filtered out
+  });
+
+  it('with minRun=3, KEEPS a sustained (≥3-tile) freeway/frontage stretch on every tile of the run', () => {
+    const map = new GameMap(7, 7);
+    for (let y = 0; y < 7; y++) {
+      map.setBuilt(3, y, BuiltKind.RoadHighway); // freeway column
+      map.setBuilt(4, y, BuiltKind.RoadAvenue); // avenue frontage alongside, full height
+    }
+    // Each freeway tile sees the barrier east; each avenue tile sees it west — the whole run.
+    for (let y = 1; y < 6; y++) {
+      expect(roadDividerMask(map, 3, y, 3)).toBe(E);
+      expect(roadDividerMask(map, 4, y, 3)).toBe(W);
+    }
+  });
+
+  it('with minRun=3, a 2-tile stretch is still too short (filtered)', () => {
+    const map = new GameMap(7, 7);
+    for (let y = 0; y < 7; y++) map.setBuilt(3, y, BuiltKind.RoadHighway);
+    map.setBuilt(4, 2, BuiltKind.RoadAvenue); // 2-tile frontage at y=2,3
+    map.setBuilt(4, 3, BuiltKind.RoadAvenue);
+    expect(roadDividerMask(map, 3, 2, 3)).toBe(0);
+    expect(roadDividerMask(map, 3, 3, 3)).toBe(0);
+  });
 });
 
 describe('parcelTouchesRoad', () => {
