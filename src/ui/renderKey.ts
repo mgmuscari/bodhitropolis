@@ -140,6 +140,31 @@ export function footprintCellKey(
 }
 
 /**
+ * The atlas key for variant `v` of a base tile: `${baseKey}#${v}`. Tileset surface textures can
+ * ship as N tone-consistent VARIANTS (e.g. asphalt) so a tile-map picks per-tile and breaks the
+ * "plaid" periodicity of one texture repeated everywhere. Used for both the surface-ingredient keys
+ * (`@surface/road#0`) and the painted road tiles (`road-1-5#2`). The `#` never appears in a base
+ * atlas key, so a variant key round-trips unambiguously. Pure string construction.
+ */
+export function variantKey(baseKey: string, variant: number): string {
+  return `${baseKey}#${variant}`;
+}
+
+/**
+ * Which surface variant tile (x, y) uses, in [0, count) — a direction-NEUTRAL spread hash of the
+ * tile position (adjacent tiles hash far apart, mirroring tieHash), so cycling N variants breaks the
+ * repeated-texture "plaid" without banding or any rng. Deterministic; integer ops only
+ * (allowlist-safe — no transcendental Math). count ≤ 1 ⇒ always 0.
+ */
+export function surfaceVariantIndex(x: number, y: number, count: number): number {
+  if (count <= 1) return 0;
+  let h = Math.imul((x | 0) ^ 0x9e3779b1, 0x85ebca6b);
+  h = Math.imul(h ^ ((y | 0) + 0x27d4eb2f), 0x165667b1);
+  h ^= h >>> 15;
+  return (h >>> 0) % count;
+}
+
+/**
  * The exhaustive, deterministic enumeration of every key {@link builtRenderKey}
  * can return. Order is stable (road kinds × masks, then each transport prefix ×
  * masks, then building kinds × positions × tiers) and free of duplicates. The

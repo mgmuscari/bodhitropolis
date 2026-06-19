@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { builtRenderKey, renderKeyspace, footprintCellKey, type FootprintPos } from '../../src/ui/renderKey';
+import {
+  builtRenderKey,
+  renderKeyspace,
+  footprintCellKey,
+  variantKey,
+  surfaceVariantIndex,
+  type FootprintPos,
+} from '../../src/ui/renderKey';
 import { BuiltKind, isTransportKind } from '../../src/engine/fabric';
 import { ROAD_STYLE_KINDS, BUILDING_STYLE_KINDS, PAINTABLE_PREFIXES } from '../../src/ui/renderer';
 
@@ -203,5 +210,48 @@ describe('footprintCellKey (segmented multi-tile, tileset-only)', () => {
     const space = new Set(renderKeyspace());
     expect(space.has(footprintCellKey(BuiltKind.HouseSingle, 1, 1, 0, 0, 0))).toBe(false);
     expect(space.has(footprintCellKey(BuiltKind.Apartments, 2, 2, 0, 0, 0))).toBe(false);
+  });
+});
+
+describe('variantKey + surfaceVariantIndex (tile-map variant cycling, anti-plaid)', () => {
+  it('variantKey appends #v and never collides with a base key', () => {
+    expect(variantKey('road-1-5', 2)).toBe('road-1-5#2');
+    expect(variantKey('road-1-5-w', 0)).toBe('road-1-5-w#0');
+    expect(variantKey('@surface/road', 3)).toBe('@surface/road#3');
+    expect(variantKey('road-1-5', 0).includes('#')).toBe(true); // '#' absent from base keys
+  });
+
+  it('surfaceVariantIndex is deterministic and always in [0, count)', () => {
+    for (let x = 0; x < 24; x++) {
+      for (let y = 0; y < 24; y++) {
+        const v = surfaceVariantIndex(x, y, 4);
+        expect(v).toBe(surfaceVariantIndex(x, y, 4)); // deterministic
+        expect(v).toBeGreaterThanOrEqual(0);
+        expect(v).toBeLessThan(4);
+      }
+    }
+  });
+
+  it('collapses to 0 when there is 0 or 1 variant (no cycling)', () => {
+    expect(surfaceVariantIndex(3, 7, 1)).toBe(0);
+    expect(surfaceVariantIndex(3, 7, 0)).toBe(0);
+  });
+
+  it('actually cycles — every variant appears, and it is NOT a trivial checkerboard/banding', () => {
+    const counts = [0, 0, 0, 0];
+    let neighborDiffers = 0;
+    let total = 0;
+    for (let x = 0; x < 16; x++) {
+      for (let y = 0; y < 16; y++) {
+        counts[surfaceVariantIndex(x, y, 4)]!++;
+        if (surfaceVariantIndex(x, y, 4) !== surfaceVariantIndex(x + 1, y, 4)) neighborDiffers++;
+        total++;
+      }
+    }
+    for (const c of counts) expect(c).toBeGreaterThan(0); // all 4 used
+    // Not a strict 2-coloring: horizontal neighbors differ a healthy fraction of the time, but not
+    // every single time (which would be a regular stripe) — a spread hash, not a pattern.
+    expect(neighborDiffers).toBeGreaterThan(total * 0.4);
+    expect(neighborDiffers).toBeLessThan(total); // not a perfect stripe
   });
 });

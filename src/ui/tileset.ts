@@ -9,7 +9,7 @@
 //       def.assets and maps each loaded image onto its `keys`.
 // No IO here — fetching/decoding lives in tilesetLoader.ts (which is not allowlisted).
 
-import { builtRenderKey, type FootprintPos } from './renderKey';
+import { builtRenderKey, variantKey, type FootprintPos } from './renderKey';
 
 /** The permanent default tileset id — pure procedural painters, never removed. */
 export const PROCEDURAL = 'procedural';
@@ -88,10 +88,13 @@ export function surfaceKey(role: string): string {
 // art lands. Keep it == files actually present in public/tilesets/satellite/ so selecting it
 // never triggers stray 404s.
 const SATELLITE_ASSETS: readonly TilesetAsset[] = [
-  // Road asphalt SURFACE (a tileable texture): the renderer paints the connection-mask lane
-  // markings over it, so this one texture skins every road kind/mask. The rest of the world falls
-  // back to the procedural painter until more art lands.
-  { file: 'surfaces/asphalt.png', keys: [surfaceKey('road')] },
+  // Road asphalt SURFACE — three tone-consistent variants, cycled per-tile by a position hash so
+  // the texture doesn't tile into a visible "plaid" (Maddy 2026-06-19). The renderer paints the
+  // connection-mask lane markings over them; the rest of the world falls back to the procedural
+  // painter until more art lands.
+  { file: 'surfaces/asphalt-0.png', keys: [variantKey(surfaceKey('road'), 0)] },
+  { file: 'surfaces/asphalt-1.png', keys: [variantKey(surfaceKey('road'), 1)] },
+  { file: 'surfaces/asphalt-2.png', keys: [variantKey(surfaceKey('road'), 2)] },
 ];
 
 export const TILESET_DEFS: readonly TilesetDef[] = [

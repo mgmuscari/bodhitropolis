@@ -55,11 +55,11 @@ describe('tileset registry', () => {
     }
   });
 
-  it('the satellite tileset ships the asphalt road surface (the first committed asset)', () => {
+  it('the satellite tileset ships asphalt road surfaces (≥2 variants, cycled to beat the plaid)', () => {
     const sat = tilesetDef('satellite');
-    const asphalt = sat.assets.find((a) => a.keys.includes(surfaceKey('road')));
-    expect(asphalt).toBeTruthy();
-    expect(asphalt!.file).toMatch(/\.png$/);
+    const asphalt = sat.assets.filter((a) => a.keys.some((k) => k.startsWith(surfaceKey('road'))));
+    expect(asphalt.length).toBeGreaterThanOrEqual(2); // multiple variants for per-tile cycling
+    for (const a of asphalt) expect(a.file).toMatch(/\.png$/);
   });
 });
 

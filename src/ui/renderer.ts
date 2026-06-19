@@ -12,7 +12,14 @@ import { GameMap, Water, LandCover } from '../engine/map';
 import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
-import { builtRenderKey, footprintCellKey, renderKeyspace, type FootprintPos } from './renderKey';
+import {
+  builtRenderKey,
+  footprintCellKey,
+  renderKeyspace,
+  variantKey,
+  surfaceVariantIndex,
+  type FootprintPos,
+} from './renderKey';
 import { surfaceKey } from './tileset';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 import { parcelGlyph } from './glyphContent';
@@ -319,15 +326,11 @@ function paintRoadMarkings(set: SetPixel, kind: number, mask: number, wide: bool
     s(x, y, style.line);
   };
   if (wide) {
-    // Wide-body slab: a continuous asphalt mass for a 2-/3-row corridor. Suppress
-    // the per-edge lane markings AND the isolated stub so adjacent wide tiles read
-    // as one slab rather than parallel striped roads; lay only a faint center seam
-    // toward each connected edge to hint at travel direction (live-pass tunable).
-    const seam = shade(style.base, 10);
-    if (mask & N) for (let y = 0; y < 8; y++) set(7, y, seam);
-    if (mask & S) for (let y = 8; y < BASE_TILE; y++) set(7, y, seam);
-    if (mask & E) for (let x = 8; x < BASE_TILE; x++) set(x, 7, seam);
-    if (mask & W) for (let x = 0; x < 8; x++) set(x, 7, seam);
+    // Wide-body slab: a continuous asphalt mass for a 2-/3-row corridor — NO markings at all.
+    // (Previously a faint center seam was drawn toward each connected edge to hint travel
+    // direction, but on a long wide corridor every tile connects on all four sides, so the
+    // per-tile `+` tiled into a visible grid across the slab — Maddy, 2026-06-19. A clean slab
+    // is the intent anyway; per-corridor lane lines would need the corridor axis, a future pass.)
     return;
   }
   if (mask & N) for (let y = 0; y < 8; y++) for (const cx of cols) mark(set, cx, y);
@@ -481,18 +484,44 @@ function proceduralAtlas(): Map<string, AtlasImage> {
   return atlas;
 }
 
+/**
+ * The road SURFACE textures a tileset supplies, as an ordered variant list. Supports either N
+ * tone-consistent VARIANTS (`@surface/road#0`, `#1`, … — cycled per-tile to break the repeated-
+ * texture "plaid", Maddy 2026-06-19) or a single `@surface/road`. Empty ⇒ procedural asphalt.
+ */
+function collectRoadSurfaces(overrides: ReadonlyMap<string, AtlasImage>): AtlasImage[] {
+  const out: AtlasImage[] = [];
+  for (let v = 0; ; v++) {
+    const img = overrides.get(variantKey(surfaceKey('road'), v));
+    if (!img) break;
+    out.push(img);
+  }
+  if (out.length === 0) {
+    const single = overrides.get(surfaceKey('road'));
+    if (single) out.push(single);
+  }
+  return out;
+}
+
 function buildAtlas(overrides?: ReadonlyMap<string, AtlasImage>): Map<string, AtlasImage> {
   // Shallow clone of the cached procedural atlas (shares the painted tile canvases by reference).
   const atlas = new Map(proceduralAtlas());
   if (!overrides) return atlas;
 
-  // Road SURFACE textures (asphalt): when a tileset supplies one, RE-PAINT the autotiled road tiles
-  // with the procedural lane markings drawn over that texture — one tileable surface skins all 16
-  // mask variants (so autotiling + live road-building keep working). Only when present, only the
-  // road keys — every other key stays the cached procedural canvas.
-  if ([...overrides.keys()].some((k) => k.startsWith(surfaceKey('road')))) {
-    for (const key of atlas.keys()) {
-      if (key.startsWith('road-')) atlas.set(key, paintForKey(key, overrides));
+  // Road SURFACE textures (asphalt): when a tileset supplies one (or several variants), RE-PAINT
+  // the autotiled road tiles with the procedural lane markings drawn over that texture — one
+  // tileable surface skins all 16 mask variants (so autotiling + live road-building keep working).
+  // With >1 variant, each road key also gets per-variant tiles under variantKey() so drawBase can
+  // cycle them per-tile (anti-plaid). Only road keys are touched; every other key stays cached.
+  const roadSurfaces = collectRoadSurfaces(overrides);
+  if (roadSurfaces.length > 0) {
+    const roadKeys = [...atlas.keys()].filter((k) => k.startsWith('road-'));
+    for (const key of roadKeys) {
+      roadSurfaces.forEach((surf, v) => {
+        const tile = paintForKey(key, new Map([[surfaceKey('road'), surf]]));
+        atlas.set(variantKey(key, v), tile);
+        if (v === 0) atlas.set(key, tile); // base key = variant 0 (default / single-variant path)
+      });
     }
   }
 
@@ -554,6 +583,9 @@ export class Renderer {
   // True when a tileset supplied at least one override → enables the segmented-footprint
   // cell-key lookup in drawBase. False (procedural) keeps that path byte-identical + zero-cost.
   private hasTileset = false;
+  // Count of road asphalt-surface variants (0 = procedural roads, 1 = single surface, >1 = cycle
+  // per-tile to break the repeated-texture plaid). Read in drawBase's per-tile road key pick.
+  private roadVariants = 0;
   // Cached base pass (terrain + built + overlay) on an offscreen canvas. Rebuilt
   // ONLY when invalidated (map/camera/overlay change), then blitted 1:1 onto the
   // visible canvas each frame. The hover preview and the ambient sprites live in
@@ -583,6 +615,7 @@ export class Renderer {
     this.baseCtx = this.base.getContext('2d')!;
     this.atlas = buildAtlas(overrides);
     this.hasTileset = (overrides?.size ?? 0) > 0;
+    this.roadVariants = overrides ? collectRoadSurfaces(overrides).length : 0;
   }
 
   /**
@@ -594,6 +627,7 @@ export class Renderer {
   applyTileset(overrides?: ReadonlyMap<string, AtlasImage>): void {
     this.atlas = buildAtlas(overrides);
     this.hasTileset = (overrides?.size ?? 0) > 0;
+    this.roadVariants = overrides ? collectRoadSurfaces(overrides).length : 0;
     this.invalidateBase();
   }
 
@@ -691,6 +725,11 @@ export class Renderer {
             const fp = parcels.get(pid - 1);
             const cellKey = footprintCellKey(built, fp.width, fp.height, tx - fp.x, ty - fp.y, tier);
             if (this.atlas.has(cellKey)) builtKey = cellKey;
+          }
+          // Road asphalt-surface VARIANT pick (anti-plaid): cycle the tone-consistent variants
+          // per-tile via a direction-neutral position hash, so the surface doesn't tile into a grid.
+          if (this.roadVariants > 1 && builtKey.startsWith('road-')) {
+            builtKey = variantKey(builtKey, surfaceVariantIndex(tx, ty, this.roadVariants));
           }
           const builtTile = this.atlas.get(builtKey);
           if (builtTile) ctx.drawImage(builtTile, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
