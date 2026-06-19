@@ -139,9 +139,17 @@ Captured as design docs for later implementation (not built yet). Direction note
   DEFAULT; ComfyUI-generated art is a named, swappable tileset over it (per-key procedural fallback).
   Tileset selection is a user setting. Folded into `docs/art/asset-generation.md` §0.5 (on the
   `feature/comfyui-pixelart-terrain` branch).
-- 🔵 **Settings menu** — configurable map size (regenerates the world) + live caps (PED_CAP, spawn
-  target, car/flock caps) + tileset selection, with Low/Med/High presets per machine; localStorage.
-  `docs/design/settings-menu.md`.
+- ✅ **Settings menu** (PR pending) — built the determinism-split store: a PURE `settings.ts` (schema +
+  Low/Med/High `CAP_PRESETS` + Small/Med/Large/Huge `MAP_SIZES` + tolerant `clampSettings`, on the
+  pure-ui allowlist), an isolated `settingsStore.ts` (localStorage load/save, injectable, clamps on
+  IO), and an interactive `settingsPanel.ts` (',' key). LIVE caps (`PED_CAP`/`CAR_CAP`/`FLOCK_CAP`/
+  citizen-out divisor/spawn-per-substep) migrated from module consts to a mutable `liveCaps` object in
+  ambientContent (`applyLiveCaps`) so a preset/input MOVES them instantly — no regen. MAP SIZE feeds
+  `runPipeline({width,height})` at world creation (apply-on-restart, behind a confirm — reload discards
+  the unsaved city). Defaults reproduce today's 128²/medium game byte-for-byte. Tileset selector is
+  present but procedural-only until the skin system ships. Decided open Qs: same seed + new size =
+  a different (still deterministic) world that regenerates on apply. Fully TDD'd (settings + store +
+  liveCaps); 1345 tests green, prod build clean. `docs/design/settings-menu.md`.
 - 🔵 **Multi-tile plots get built-in parking** — plots ≥2×2 (school/industry/powerplant) reserve one
   `ParkingLot` tile on the edge facing a drivable neighbour; lots enterable from freeways (NJ-style
   `canDrive` exception). The STRUCTURAL fix for the walled-off-job churn (the live "drove-there-enters"
