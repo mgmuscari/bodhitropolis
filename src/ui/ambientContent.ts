@@ -39,7 +39,7 @@ const SUBSTEP_MS = 50;
 // Global per-kind caps (bounded total ~hundreds). Placeholder magnitudes —
 // live-pass tuned; the contract is "cap-bounded step + viewport cull at draw".
 const CAR_CAP = 200;
-const PED_CAP = 160;
+const PED_CAP = 1200; // hard perf ceiling only; the citizen target (occ/3) is the operative cap below it
 const FLOCK_CAP = 32;
 // Police cruisers patrol the redlined districts from their precincts (the visible
 // face of the over-policing the civic layer models). One per precinct, capped.
@@ -282,8 +282,11 @@ const AMENITY_KINDS: ReadonlySet<number> = new Set([
 /** Hard CAP on itinerary citizens out at once (perf): the live spawn target tracks total occupancy
  *  but never exceeds this. Below the ped cap, so there's still room for ambient wanderers, last-mile
  *  walkers, and respawned citizens. CITIZEN_SPAWN_PER_SUBSTEP tops up gently rather than all at once. */
-const CITIZEN_MAX_OUT = 120;
-const CITIZEN_SPAWN_PER_SUBSTEP = 2;
+// The citizen target SCALES with the city: a THIRD of the live residents are out on a round at once
+// (Maddy: "cap should be sum(citizens) / 3"). No flat ceiling — busier cities put proportionally more
+// people on the street; a declining one empties. PED_CAP is the only hard ceiling (perf safety).
+const CITIZEN_OUT_DIVISOR = 3;
+const CITIZEN_SPAWN_PER_SUBSTEP = 4; // top up a bit faster too, so the streets refill promptly
 
 /** AGENT-EMERGENT POPULATION (live, never hashed). Each residential home carries a live OCCUPANCY —
  *  how many people actually live there now — seeded from the deterministic census baseline, then
@@ -304,7 +307,6 @@ const OCC_HEALTH_SCALE = 120; // building-health magnitude mapped before the cap
 const OCC_HEALTH_CAP = 0.15; // max ± the health term can contribute to the signal (a nudge, not a collapse)
 // A city loses people but never fully empties: occupancy floors at this fraction of its seeded baseline.
 const OCC_FLOOR = 0.4;
-const OCC_OUT_FRACTION = 0.5; // fraction of residents out on a round at once (before the cap)
 /** Per-kind growth HEADROOM: how far above its seeded baseline a home's occupancy can climb when it
  *  thrives. A single house barely densifies; apartments / projects / co-ops / communes hold far more. */
 const OCC_HEADROOM: ReadonlyMap<number, number> = new Map([
@@ -349,7 +351,9 @@ const FAILED_TRIP_PENALTY = 10;
  *  check alone misses. On burnout mid-trip it turns back home on a small FUEL_LIMP_HOME reserve,
  *  losing GIVE_UP_PENALTY wellbeing; if even that runs out it respawns at home (FAILED_TRIP_PENALTY).
  *  Live-pass tunable. */
-const FUEL_TANK = 600; // a full tank — covers a typical round trip even without refuelling
+// A full tank — extended +250% (3.5x the old 600) so travelers reach far more of the city before
+// burning out (Maddy): long multi-stop rounds and cross-town trips complete instead of giving up.
+export const FUEL_TANK = 2100;
 const FUEL_LIMP_HOME = 200; // the reserve granted on give-up, just enough to drag itself home
 const FUEL_BURN_BASE = 1; // fuel spent per substep on a paved/built/bare tile
 const FUEL_BURN_LUSH = 0.8; // extra burn at full floraVitality — lush ground is tiring
@@ -2078,12 +2082,12 @@ export function occupancyStep(occ: number, floor: number, capacity: number, sign
   return next < floor ? floor : next > capacity ? capacity : next;
 }
 
-/** How many citizens to keep out on their round, from the live total occupancy: a fraction of the
- *  residents, capped at CITIZEN_MAX_OUT (perf). So a thriving city saturates the cap while a
- *  declining one visibly empties the streets — the population loop made legible. */
+/** How many citizens to keep out on their round, from the live total occupancy: a THIRD of the
+ *  residents (Maddy), scaling with the city — no flat ceiling, so a populous city fills the streets
+ *  and a declining one visibly empties them. The hard perf ceiling is PED_CAP, applied where peds
+ *  actually spawn (spawnCitizens), not here. */
 export function spawnTargetFor(totalOccupancy: number): number {
-  const t = Math.round(totalOccupancy * OCC_OUT_FRACTION);
-  return t > CITIZEN_MAX_OUT ? CITIZEN_MAX_OUT : t;
+  return Math.round(totalOccupancy / CITIZEN_OUT_DIVISOR);
 }
 
 /** The LIVE sample values the inspector appends to its readout — each undefined when the tile
