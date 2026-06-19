@@ -1750,6 +1750,33 @@ function retireOwnedCar(state: AmbientState, p: Ped, map: GameMap): void {
   p.carId = undefined;
 }
 
+/**
+ * Send a departed citizen's OWNED car HOME: warp it to a parking spot near `homeTile` and leave it
+ * parked there (unowned, lingering on its dwell like any put-away car), rather than vanishing it on
+ * the spot where the ped stood. So when a citizen is sent home (gives up / is taken off the street),
+ * its car FOLLOWS it home instead of despawning where it disappeared (Maddy: "if the ped legitimately
+ * gets sent home the car should warp to park near their home too"). Falls back to removing the car
+ * only when home has no reachable parking, so it never strands a frozen wreck mid-map. Releases the
+ * ped→car link. No-op if the ped owns no car. No rng (live layer; determinism untouched).
+ */
+export function sendOwnedCarHome(state: AmbientState, map: GameMap, p: Ped, homeTile: number): void {
+  if (p.carId === undefined) return;
+  const car = findCar(state, p.carId);
+  p.carId = undefined;
+  if (!car || !car.owned) return;
+  const hx = homeTile % map.width;
+  const hy = (homeTile - hx) / map.width;
+  const spot = findParkingNear(state, map, hx, hy);
+  if (spot) {
+    parkOwnedCar(car, map, spot); // warp it home and park
+    car.owned = false; // a put-away car now — clears on its dwell, isn't kept alive as "owned"
+    car.dwell = RETIRED_CAR_LINGER;
+  } else {
+    const i = state.cars.indexOf(car); // nowhere to park near home → remove rather than strand it
+    if (i >= 0) state.cars.splice(i, 1);
+  }
+}
+
 /** Set up a DRIVE leg toward `dest`: the citizen walks to its owned car ('to-vehicle'), drives it to
  *  an available parking spot near `dest` ('driving' → park), then walks the last mile to `dest`
  *  (`finalWalk`). Returns false if it can't get a car (land-locked) so the caller walks instead.
@@ -2411,7 +2438,7 @@ function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
     retireOwnedCar(state, p, map); // even a homeless/bound ped's owned car (if any) must be retired
     return false;
   }
-  retireOwnedCar(state, p, map); // its car is put away (lingers, then leaves) — not orphaned
+  sendOwnedCarHome(state, map, p, p.homeTile); // its car FOLLOWS it home (warps to park near home)
   depositHealth(state, p.homeTile, -FAILED_TRIP_PENALTY);
   const hx = p.homeTile % map.width;
   const hy = (p.homeTile - hx) / map.width;
@@ -2664,6 +2691,7 @@ export function stepArrests(state: AmbientState, map: GameMap, rng: Rng, safe?: 
       const cur = state.occupancy.get(taken.homeTile);
       if (cur !== undefined) state.occupancy.set(taken.homeTile, Math.max(0, cur - ARREST_DRAIN));
       depositHealth(state, taken.homeTile, -ARREST_TRAUMA); // the trauma craters the household's wellbeing
+      sendOwnedCarHome(state, map, taken, taken.homeTile); // its car returns home, not orphaned mid-street
     }
     // Stain the spot — the police-violence record (the anti-crime-map) builds where arrests fall.
     layField(state.policeViolence, map.idx(Math.round(taken.x), Math.round(taken.y)), POLICE_VIOLENCE_LAY, POLICE_VIOLENCE_MAX);
