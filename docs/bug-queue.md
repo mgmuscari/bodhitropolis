@@ -187,9 +187,12 @@ layer (non-deterministic).
   MAX_PARK_SEEKS ("drive to the new spot; if same condition, try again"); `parkOwnedCarSomewhere`/
   `tryPark` claim via it. `findLotStall` gained a radius param. Live: near (57,103) 64→~34 stable (max
   9/tile, no infinite stack); 64/65 curb cars visible at kerbs; 61 FPS.
-- 🔴 **Power should distribute from the source OUTWARD** (Maddy 2026-06-19) — in a brownout (capacity <
-  demand), the plots NEAREST the power source should be powered first (distance-from-plant order),
-  not the current ascending-anchor order. `computePowerGrid` in `src/growth/power.ts`.
+- ✅ **Power distributes from the source OUTWARD** (PR pending) — `computePowerGrid`'s brownout shed
+  consumers in ascending-ANCHOR (tile-index) order, so capacity-short grids powered the top-left plots
+  regardless of the plant's location. Fix: a multi-source BFS from every plant's footprint gives each
+  consumer its network distance to the nearest source; the brownout now powers NEAREST-first (ties by
+  anchor). Pure/deterministic, live-derived. Unit-verified: plant on the right of an industry row →
+  the two NEAREST are powered (not the two lowest-index).
 - 🔵 **DEFERRED feature: civic overlay dimming + higher opacity** (Maddy 2026-06-19) — the civic (C)
   overlay should use the same `dimBase` scrim as the power (U) / coverage (V) overlays + a higher fill
   alpha, for legibility (it currently washes out against terrain). `civicOverlayContent.ts` +

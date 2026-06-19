@@ -1,9 +1,9 @@
 // Power grid: the SC1989-style conduction model. Any built tile conducts, so the
 // grid = the 4-connected components of the built layer. A component with a plant is
 // energized; its consumer parcels (R/C/I/Civic) draw power up to the component's
-// total plant capacity — beyond that the component browns out and the lowest-served
-// consumers go dark. Pure + deterministic in (map, parcels): flood-fill scans tiles
-// in ascending index, brownout sheds consumers in ascending-anchor order. Engine-
+// total plant capacity — beyond that the component browns out and the FARTHEST-from-
+// source consumers go dark first (power flows from the plant outward, a multi-source
+// BFS distance; ties by anchor for determinism). Pure + deterministic in (map, parcels). Engine-
 // layer discipline (the src/growth fail-closed guard): no DOM, no transcendental
 // Math, no ui import. Recomputed live on a cadence (derived from the hashed built
 // layer), like land value — never hashed itself.
@@ -116,9 +116,11 @@ export function computePowerGrid(map: GameMap, parcels: ParcelStore): PowerGrid 
     }
   }
 
-  // 2. Bucket plant capacity + consumer demand by component.
+  // 2. Bucket plant capacity + consumer demand by component; collect plant footprint tiles as the
+  //    BFS sources for the distance-from-source ordering below.
   const capByComp = new Float64Array(nComp);
   const consumersByComp: ConsumerRef[][] = Array.from({ length: nComp }, () => []);
+  const plantTiles: number[] = [];
   let capacity = 0;
   let demand = 0;
   for (const i of parcels.aliveIndices()) {
@@ -130,6 +132,9 @@ export function computePowerGrid(map: GameMap, parcels: ParcelStore): PowerGrid 
     if (out > 0) {
       capByComp[c] = capByComp[c]! + out;
       capacity += out;
+      for (let dy = 0; dy < p.height; dy++) {
+        for (let dx = 0; dx < p.width; dx++) plantTiles.push(map.idx(p.x + dx, p.y + dy));
+      }
       continue;
     }
     const d = powerDemand(p.kind, p.density);
@@ -139,13 +144,43 @@ export function computePowerGrid(map: GameMap, parcels: ParcelStore): PowerGrid 
     }
   }
 
-  // 3. Power consumers per component within its capacity (ascending-anchor brownout).
+  // 2b. Distance from the nearest power source, by network distance through the conducting built
+  //     layer — a multi-source BFS seeded from every plant tile. Powers flow from the source OUTWARD,
+  //     so a brownout sheds the FARTHEST plots first (Maddy: plots nearer the source get power first).
+  const dist = new Int32Array(size).fill(-1);
+  const bfs: number[] = [];
+  for (const t of plantTiles) {
+    if (dist[t] === -1) {
+      dist[t] = 0;
+      bfs.push(t);
+    }
+  }
+  for (let head = 0; head < bfs.length; head++) {
+    const t = bfs[head]!;
+    const x = t % map.width;
+    const y = (t - x) / map.width;
+    const neigh = [
+      x > 0 ? t - 1 : -1,
+      x < map.width - 1 ? t + 1 : -1,
+      y > 0 ? t - map.width : -1,
+      y < map.height - 1 ? t + map.width : -1,
+    ];
+    for (const n of neigh) {
+      if (n >= 0 && built[n] !== 0 && dist[n] === -1) {
+        dist[n] = dist[t]! + 1;
+        bfs.push(n);
+      }
+    }
+  }
+
+  // 3. Power consumers per component within its capacity, NEAREST the source first (ties by anchor for
+  //    determinism). So the grid lights up around its plants and the brownout dims the far edges.
   const poweredAnchors = new Set<number>();
   for (let c = 0; c < nComp; c++) {
     let budget = capByComp[c]!;
     if (budget <= 0) continue; // plantless component → all dark
     const consumers = consumersByComp[c]!;
-    consumers.sort((a, b) => a.anchor - b.anchor);
+    consumers.sort((a, b) => dist[a.anchor]! - dist[b.anchor]! || a.anchor - b.anchor);
     for (const cons of consumers) {
       if (budget >= cons.demand) {
         budget -= cons.demand;
