@@ -502,6 +502,10 @@ export interface Mover {
   path?: readonly number[];
   /** Cursor into `path`: the index of the NEXT tile to commit to. */
   leg?: number;
+  /** For a walking ped following a committed `walkPath`: the tile index of the path's GOAL, so the
+   *  route is recomputed when the destination (`walkTo`) changes (a new itinerary stop / heading
+   *  home) and reused otherwise. Undefined for cars (they recommit via their own leg machinery). */
+  pathGoal?: number;
   /** Straight-line walk target (float world coords) — set for LAST-MILE pedestrians who
    *  walk between a parked car and a nearby building. A ped with `walkTo` lerps straight
    *  toward it (ignoring the road/ped grid, so it can cross a lot or road), despawns on
@@ -1419,6 +1423,66 @@ export function roadPath(
       if (!canDrive(map, cur.x, cur.y, nx, ny)) continue; // directed edges: one-way + limited-access
       const ni = map.idx(nx, ny);
       const ng = baseG + driveTileCost(map, nx, ny, traffic);
+      if (ng < (gScore.get(ni) ?? Infinity)) {
+        gScore.set(ni, ng);
+        came.set(ni, cur.i);
+        open.push({ i: ni, x: nx, y: ny, f: ng + (Math.abs(nx - gx) + Math.abs(ny - gy)) * 0.5 });
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * A* over the WALKABLE set from (sx,sy) toward (gx,gy), ending at the nearest walkable tile within
+ * one of the target (the DOOR — building tiles aren't walkable, peds stop adjacent). The committed
+ * least-cost FOOT route — the pedestrian twin of {@link roadPath} — so a citizen routes AROUND
+ * buildings and freeways instead of dithering in a greedy local minimum at a wall (the bug Maddy
+ * saw: peds piling up + heading home "to nowhere" when a destination sat behind a barrier). Cost via
+ * {@link pedCost} (promenades cheap, stroads/smog dear → the route still prefers the calm/green
+ * city). Returns tile indices start-first, or null if no foot route / the search bound is hit. Pure
+ * (allowlist-safe): array open-list + Maps + abs heuristic, no rng.
+ */
+export function walkPath(
+  map: GameMap,
+  sx: number,
+  sy: number,
+  gx: number,
+  gy: number,
+  wear?: ReadonlyMap<number, number>,
+  traffic?: ReadonlyMap<number, number>,
+  pollution?: ReadonlyMap<number, number>,
+): number[] | null {
+  if (!isWalkable(map, sx, sy)) return null;
+  const start = map.idx(sx, sy);
+  const atDoor = (x: number, y: number): boolean => Math.abs(x - gx) + Math.abs(y - gy) <= 1;
+  if (atDoor(sx, sy)) return [start];
+  const gScore = new Map<number, number>([[start, 0]]);
+  const came = new Map<number, number>();
+  const open: Array<{ i: number; x: number; y: number; f: number }> = [
+    { i: start, x: sx, y: sy, f: Math.abs(sx - gx) + Math.abs(sy - gy) },
+  ];
+  let iters = 0;
+  while (open.length > 0 && iters++ < ROAD_PATH_MAX_ITERS) {
+    let bi = 0; // pop lowest f (linear scan — foot frontiers stay small)
+    for (let k = 1; k < open.length; k++) if (open[k]!.f < open[bi]!.f) bi = k;
+    const cur = open.splice(bi, 1)[0]!;
+    if (atDoor(cur.x, cur.y)) {
+      const path = [cur.i];
+      let p = cur.i;
+      while (came.has(p)) {
+        p = came.get(p)!;
+        path.push(p);
+      }
+      return path.reverse();
+    }
+    const baseG = gScore.get(cur.i)!;
+    for (let d = 0; d < 4; d++) {
+      const nx = cur.x + DIR_DX[d]!;
+      const ny = cur.y + DIR_DY[d]!;
+      if (!isWalkable(map, nx, ny)) continue;
+      const ni = map.idx(nx, ny);
+      const ng = baseG + pedCost(map, nx, ny, wear, traffic, pollution);
       if (ng < (gScore.get(ni) ?? Infinity)) {
         gScore.set(ni, ng);
         came.set(ni, cur.i);
@@ -2384,6 +2448,9 @@ function respawnAtHome(state: AmbientState, p: Ped, map: GameMap): boolean {
   p.carId = undefined;
   p.fuel = undefined;
   p.recent = undefined;
+  p.path = undefined; // the committed foot route is invalid after a reposition
+  p.leg = undefined;
+  p.pathGoal = undefined;
   p.roadSteps = undefined;
   p.wornSteps = undefined;
   p.itinerary = undefined; // a lost citizen's round ends; it rejoins the neighbourhood at home
@@ -2798,10 +2865,49 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       const mode = p.mode ?? TravelMode.Walk;
       const hereKind = map.built[map.idx(Math.round(p.x), Math.round(p.y))]!;
       const speed = PED_SPEED * modeSpeedMult(mode, hereKind);
-      const moving = advanceMover(p, speed, map, (x, y, _fromDir, recent) =>
-        nextStepToward(map, x, y, tgtx, tgty, recent, state.wear, mode, state.traffic, state.pollution),
-      );
+      let moving: boolean;
+      if (mode === TravelMode.Walk) {
+        // Walking legs follow a COMMITTED least-cost foot route (walkPath), so a citizen routes
+        // AROUND buildings/freeways instead of dithering in a greedy local minimum at a wall (the bug
+        // Maddy saw: peds piling up at a lot + drifting home "to nowhere" when the destination sat
+        // behind a barrier). Recompute only when the destination (walkTo) changes; reuse otherwise.
+        const goalIdx = map.idx(tgtx, tgty);
+        if (p.path === undefined || p.pathGoal !== goalIdx) {
+          const route = walkPath(
+            map, Math.round(p.x), Math.round(p.y), tgtx, tgty, state.wear, state.traffic, state.pollution,
+          );
+          if (route && route.length >= 2) {
+            const p0x = route[0]! % map.width;
+            const p0y = (route[0]! - p0x) / map.width;
+            const p1x = route[1]! % map.width;
+            const p1y = (route[1]! - p1x) / map.width;
+            p.x = p0x; // snap onto the route start (the rounded tile it already stands on)
+            p.y = p0y;
+            p.tx = p1x;
+            p.ty = p1y;
+            p.dir = p1x > p0x ? 1 : p1x < p0x ? 3 : p1y > p0y ? 2 : 0;
+            p.path = route;
+            p.leg = 2; // route[0]=start, route[1]=committed next; pathStep targets route[2] onward
+            p.pathGoal = goalIdx;
+          } else {
+            p.path = undefined; // already at the door (len 1) or no foot route → arrival/give-up below
+            p.pathGoal = undefined;
+          }
+        }
+        moving = p.path !== undefined && advanceMover(p, speed, map, (x, y) => pathStep(map, p, x, y));
+      } else {
+        // Bike/transit legs hug their OWN network via the greedy mode-cost step (walkPath's pedCost
+        // doesn't know a tram line; a rider must prefer its rails). Dithering is rare on open lines.
+        moving = advanceMover(p, speed, map, (x, y, _fromDir, recent) =>
+          nextStepToward(map, x, y, tgtx, tgty, recent, state.wear, mode, state.traffic, state.pollution),
+        );
+      }
       if (moving) return true; // still walking this leg
+      // The leg ended (arrived within a tile, or no route) — drop the committed path so the NEXT leg
+      // (a new stop / heading home) recomputes a fresh route.
+      p.path = undefined;
+      p.leg = undefined;
+      p.pathGoal = undefined;
       // advanceMover stopped: arrived (within a tile of the target) or boxed in.
       const arrived = Math.abs(Math.round(p.x) - tgtx) + Math.abs(Math.round(p.y) - tgty) <= 1;
       if (!arrived) {

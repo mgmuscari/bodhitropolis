@@ -32,6 +32,7 @@ import {
   isPedSubstrate,
   birdSpawnAt,
   nextRoadStep,
+  walkPath,
   laneOffset,
   freewayLane,
   pollutionEmit,
@@ -2645,5 +2646,50 @@ describe('promenade overpass lets peds traverse (incl. across a freeway)', () =>
     placeTransport(m, 5, 5, BuiltKind.RoadHighway);
     placeOverpass(m, 5, 5, BuiltKind.ElevatedRail);
     expect(isPedSubstrate(m, 5, 5)).toBe(false);
+  });
+});
+
+describe('walkPath (committed foot routing around barriers — Maddy: peds dithering at a wall)', () => {
+  it('routes AROUND a freeway wall to the door, where a greedy step dead-ends', () => {
+    const m = new GameMap(12, 12);
+    for (let y = 0; y <= 8; y++) m.built[m.idx(5, y)] = BuiltKind.RoadHighway; // a wall; gap at y>=9
+    m.built[m.idx(7, 4)] = BuiltKind.HouseSingle; // the destination (not walkable; door at 6,4)
+    const path = walkPath(m, 3, 4, 7, 4);
+    expect(path).not.toBeNull();
+    const end = path![path!.length - 1]!;
+    const ex = end % 12;
+    const ey = (end - ex) / 12;
+    expect(Math.abs(ex - 7) + Math.abs(ey - 4)).toBeLessThanOrEqual(1); // ends at the door
+    for (const i of path!) expect(m.built[i]).not.toBe(BuiltKind.RoadHighway); // never on the freeway
+    expect(path!.some((i) => Math.floor(i / 12) >= 9)).toBe(true); // detours through the south gap
+  });
+
+  it('returns null when the destination is fully walled off on foot', () => {
+    const m = new GameMap(9, 9);
+    for (let y = 0; y < 9; y++) m.built[m.idx(4, y)] = BuiltKind.RoadHighway; // full wall, no gap
+    m.built[m.idx(6, 4)] = BuiltKind.HouseSingle;
+    expect(walkPath(m, 1, 4, 6, 4)).toBeNull();
+  });
+
+  it('returns the start alone when already at the door (<=1 from the target)', () => {
+    const m = new GameMap(8, 8);
+    m.built[m.idx(4, 4)] = BuiltKind.HouseSingle;
+    expect(walkPath(m, 4, 5, 4, 4)).toEqual([m.idx(4, 5)]); // adjacent → already arrived
+  });
+
+  it('every step is a 4-adjacent walkable tile (a followable committed route)', () => {
+    const m = new GameMap(12, 12);
+    for (let y = 0; y <= 8; y++) m.built[m.idx(5, y)] = BuiltKind.RoadHighway;
+    m.built[m.idx(7, 4)] = BuiltKind.HouseSingle;
+    const path = walkPath(m, 3, 4, 7, 4)!;
+    for (let k = 1; k < path.length; k++) {
+      const a = path[k - 1]!;
+      const b = path[k]!;
+      const ax = a % 12;
+      const ay = (a - ax) / 12;
+      const bx = b % 12;
+      const by = (b - bx) / 12;
+      expect(Math.abs(ax - bx) + Math.abs(ay - by)).toBe(1); // adjacent
+    }
   });
 });

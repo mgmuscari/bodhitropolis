@@ -159,6 +159,20 @@ layer (non-deterministic).
   any overlay is up: a swatch per ramp endpoint / HOLC band with its label (top-left). Unified across
   eco/civic/redline/police via `OverlayLegend` + per-module `*Legend()`. Live-verified.
 
+### Pedestrian pathing (Maddy 2026-06-19)
+
+- ✅ **Peds parking + heading north to nowhere from (52,101)** (PR pending) — diagnosed live: the
+  greedy `nextStepToward` last-mile router stalls in a LOCAL MINIMUM at a wall — a destination behind
+  buildings/a freeway leaves every non-recent neighbour tied on Manhattan distance, so peds dither in
+  place (full fuel, not moving) until they burn out and drift home north. Cars already follow a
+  committed A\* route (`roadPath`); peds didn't. Fix (one abstraction, mirroring cars): `walkPath` —
+  A\* over the WALKABLE set with `pedCost`, ending at the door (≤1 from target); Walk-mode legs follow
+  the COMMITTED route via `pathStep` (recompute on destination change via `Mover.pathGoal`, clear at
+  leg end / respawn), routing AROUND barriers or giving up cleanly if there's no foot route. Bike/
+  transit legs keep the mode-cost step (pedCost doesn't know a tram line). Pure (no rng) — ambient
+  determinism + N=120 untouched. Live-verified at (52,101): peds stuck at the freeway wall 21→0; peds
+  reaching buildings EAST of the freeway ~0→12; pile-up + northward give-up stream gone.
+
 ### Overlay / eco-layer batch (Maddy 2026-06-18)
 
 - ✅ **Power (U) + Coverage (V) overlays wash out** (PR pending) — they tint only sparse BUILDING
