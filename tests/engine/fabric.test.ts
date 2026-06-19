@@ -20,6 +20,7 @@ import {
   rampMarkingMask,
   freewayMedianAxis,
   freewayAxis,
+  freewayLaneBoundaryMask,
   parcelTouchesRoad,
   demolishParcel,
   demolishTransportAt,
@@ -1052,6 +1053,29 @@ describe('freewayAxis (lengthwise axis for freeway lane lines)', () => {
       h.setBuilt(x, 4, BuiltKind.RoadHighway);
     }
     expect(freewayAxis(h, 3, 2)).toBe('h');
+  });
+});
+
+describe('freewayLaneBoundaryMask (lane line between adjacent freeway tiles)', () => {
+  it('is 0 on a non-freeway and on a single-lane freeway (no parallel lane)', () => {
+    const map = new GameMap(7, 7);
+    map.setBuilt(3, 3, BuiltKind.RoadAvenue);
+    expect(freewayLaneBoundaryMask(map, 3, 3)).toBe(0);
+    const single = new GameMap(7, 7);
+    for (let y = 0; y < 7; y++) single.setBuilt(3, y, BuiltKind.RoadHighway); // 1-wide column
+    expect(freewayLaneBoundaryMask(single, 3, 3)).toBe(0); // no perpendicular lane → no boundary
+  });
+
+  it('marks the perpendicular edges that abut a parallel lane on a 3-wide freeway', () => {
+    const map = new GameMap(7, 7);
+    for (let y = 0; y < 7; y++) {
+      map.setBuilt(2, y, BuiltKind.RoadHighway);
+      map.setBuilt(3, y, BuiltKind.RoadHighway);
+      map.setBuilt(4, y, BuiltKind.RoadHighway);
+    }
+    expect(freewayLaneBoundaryMask(map, 3, 3)).toBe(W | E); // spine: a lane on each side
+    expect(freewayLaneBoundaryMask(map, 2, 3)).toBe(E); // west flank: lane only to the east
+    expect(freewayLaneBoundaryMask(map, 4, 3)).toBe(W);
   });
 });
 

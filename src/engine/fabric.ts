@@ -870,6 +870,29 @@ export function freewayAxis(map: GameMap, x: number, y: number): 'v' | 'h' | nul
   return null;
 }
 
+/**
+ * The lane-boundary mask for a freeway tile: bit N=1/E=2/S=4/W=8 on each edge PERPENDICULAR to travel
+ * that abuts another freeway lane tile — i.e. the boundary between two adjacent lanes, where a lane
+ * line belongs (Maddy 2026-06-19: "inner lanes need a marking between the tiles"). 0 on a non-freeway
+ * or a freeway with no parallel lane. Render-only.
+ */
+export function freewayLaneBoundaryMask(map: GameMap, x: number, y: number): number {
+  const axis = freewayAxis(map, x, y);
+  if (axis === null) return 0;
+  const hwy = (px: number, py: number): boolean =>
+    map.inBounds(px, py) && map.getBuilt(px, py) === BuiltKind.RoadHighway;
+  let mask = 0;
+  if (axis === 'v') {
+    // vertical travel → lane boundaries are the E/W edges
+    if (hwy(x - 1, y)) mask |= W_BIT;
+    if (hwy(x + 1, y)) mask |= E_BIT;
+  } else {
+    if (hwy(x, y - 1)) mask |= N_BIT;
+    if (hwy(x, y + 1)) mask |= S_BIT;
+  }
+  return mask;
+}
+
 /** The elevated deck (overpass) kind at (x, y), or 0 (none). Reads the second `deck` layer. */
 export function overpassAt(map: GameMap, x: number, y: number): number {
   return map.inBounds(x, y) ? map.deck[map.idx(x, y)]! : 0;

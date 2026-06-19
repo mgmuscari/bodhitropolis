@@ -9,7 +9,7 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask, freewayMedianAxis, freewayAxis } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask, freewayMedianAxis, freewayAxis, freewayLaneBoundaryMask } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import {
@@ -779,15 +779,18 @@ export class Renderer {
               if (curb & E) { ctx.fillStyle = walk; ctx.fillRect(dx + ts - sw, dy, sw, ts); ctx.fillStyle = gutter; ctx.fillRect(dx + ts - sw, dy, 1, ts); }
             }
 
-            // Freeway LANE LINE: a dashed gold line ALONG the corridor on each freeway tile, so the
-            // (wide, blank-asphalt) freeway reads as lanes. Drawn before the median, which covers the
-            // spine tile's line; the flank lanes keep theirs.
-            if (built === BuiltKind.RoadHighway) {
+            // Freeway lane markings — ONLY on a WIDE (multi-lane) freeway. A single-lane (1-wide)
+            // highway already carries its double-yellow from the tile painter, so it gets neither a
+            // dashed centerline nor lane dividers (Maddy 2026-06-19). On a wide freeway the tile is
+            // blank asphalt, so we lay: a dashed gold lane line down each lane (covered on the median
+            // spine), plus a dashed line on the BOUNDARY between adjacent lanes ("between the tiles").
+            if (built === BuiltKind.RoadHighway && wide) {
               const fAxis = freewayAxis(map, tx, ty);
               if (fAxis !== null) {
                 ctx.fillStyle = '#cebe6e'; // freeway lane gold
                 const dash = Math.max(1, Math.round(ts * 0.16));
                 const lw = Math.max(1, Math.round(ts * 0.06));
+                // Lane centerline along travel.
                 if (fAxis === 'v') {
                   const lx = Math.floor(dx + ts / 2 - lw / 2);
                   for (let yy = 0; yy < ts; yy += dash * 2) ctx.fillRect(lx, dy + yy, lw, dash);
@@ -795,6 +798,12 @@ export class Renderer {
                   const ly = Math.floor(dy + ts / 2 - lw / 2);
                   for (let xx = 0; xx < ts; xx += dash * 2) ctx.fillRect(dx + xx, ly, dash, lw);
                 }
+                // Lane line on each boundary edge that abuts a parallel lane.
+                const bnd = freewayLaneBoundaryMask(map, tx, ty);
+                if (bnd & W) for (let yy = 0; yy < ts; yy += dash * 2) ctx.fillRect(dx, dy + yy, lw, dash);
+                if (bnd & E) for (let yy = 0; yy < ts; yy += dash * 2) ctx.fillRect(dx + ts - lw, dy + yy, lw, dash);
+                if (bnd & N) for (let xx = 0; xx < ts; xx += dash * 2) ctx.fillRect(dx + xx, dy, dash, lw);
+                if (bnd & S) for (let xx = 0; xx < ts; xx += dash * 2) ctx.fillRect(dx + xx, dy + ts - lw, dash, lw);
               }
             }
 
