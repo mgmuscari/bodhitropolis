@@ -872,6 +872,9 @@ export function freewayLane(map: GameMap, x: number, y: number): FreewayLane | n
  */
 export function isPedSubstrate(map: GameMap, x: number, y: number): boolean {
   if (!map.inBounds(x, y)) return false;
+  // An elevated PROMENADE deck (an overpass) is walkable regardless of what's below — so a promenade
+  // overpass carries pedestrians ACROSS a freeway they could never cross at grade.
+  if (map.deck[map.idx(x, y)] === BuiltKind.Promenade) return true;
   const k = map.built[map.idx(x, y)]!;
   if (k === BuiltKind.QuietStreet || k === BuiltKind.Promenade || k === BuiltKind.Parklet) {
     return true;

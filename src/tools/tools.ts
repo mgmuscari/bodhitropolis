@@ -22,6 +22,11 @@ import {
   demolishParcel,
   demolishTransportAt,
   isInteriorRoadLane,
+  isOverpassKind,
+  canPlaceOverpass,
+  placeOverpass,
+  removeOverpassAt,
+  overpassAt,
 } from '../engine/fabric';
 import { builtKindName } from '../engine/builtNames';
 import { ZoneType, zoneTypeOf } from '../engine/zone';
@@ -290,7 +295,9 @@ function geometryValid(world: ToolWorld, tool: ToolDef, x: number, y: number): P
       ? { valid: true }
       : { valid: false, reason: 'occupied' };
   }
-  // transport build
+  // transport build — an elevated kind (rail/promenade) targeting a road DECKS an overpass over it
+  // (grade-separated); otherwise it places at grade on empty land.
+  if (isOverpassKind(kind) && canPlaceOverpass(map, x, y, kind)) return { valid: true };
   return canPlaceTransport(map, x, y, kind)
     ? { valid: true }
     : { valid: false, reason: 'occupied' };
@@ -372,6 +379,12 @@ export function applyTool(
 
   const { map, parcels } = world;
   if (tool.id === 'bulldoze') {
+    // An overpass deck comes down FIRST (leaving the road below), so one bulldoze removes the
+    // overpass and a second removes the road — you can demolish a deck without losing the street.
+    if (overpassAt(map, x, y) !== 0) {
+      removeOverpassAt(map, x, y);
+      return { ok: true };
+    }
     const pid = map.parcel[map.idx(x, y)]!;
     if (pid !== 0) demolishParcel(map, parcels, pid - 1);
     else demolishTransportAt(map, x, y);
@@ -390,6 +403,8 @@ export function applyTool(
   if (isBuildingKind(kind)) {
     const fp = tool.footprint!;
     placeParcel(map, parcels, { x, y, width: fp.w, height: fp.h, kind });
+  } else if (isOverpassKind(kind) && canPlaceOverpass(map, x, y, kind)) {
+    placeOverpass(map, x, y, kind); // deck an overpass over the road below (grade-separated)
   } else {
     placeTransport(map, x, y, kind);
   }

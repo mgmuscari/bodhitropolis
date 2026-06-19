@@ -46,6 +46,14 @@ export class GameMap {
   readonly landCover: Uint8Array;
   /** Built structures per cell (see BuiltKind in fabric.ts); 0 = empty. */
   readonly built: Uint16Array;
+  /**
+   * ELEVATED transport deck per cell (an overpass over the `built` layer below); 0 = none, else a
+   * BuiltKind (ElevatedRail/Promenade). The per-tile second layer that grade-separates transit from
+   * the road beneath — an elevated rail over a street, a promenade over a freeway — the generalization
+   * of placeBridge (a transport deck over another). Hashed (folded into snapshot); placed only by the
+   * player (worldgen leaves it 0), so same-seed worlds stay byte-identical.
+   */
+  readonly deck: Uint16Array;
   /** Owning parcel per cell: 0 = none, else parcelIndex + 1 (see ParcelStore). */
   readonly parcel: Uint16Array;
   /** Soil health per cell, 0..255 (ecology layer; see src/ecology). */
@@ -79,6 +87,7 @@ export class GameMap {
     this.moisture = new Float32Array(n);
     this.landCover = new Uint8Array(n);
     this.built = new Uint16Array(n);
+    this.deck = new Uint16Array(n);
     this.parcel = new Uint16Array(n);
     this.soilHealth = new Uint8Array(n);
     this.floraVitality = new Uint8Array(n);
@@ -178,6 +187,7 @@ export class GameMap {
     h = fnv1aBytes(h, bytesOf(this.moisture));
     h = fnv1aBytes(h, bytesOf(this.landCover));
     h = fnv1aBytes(h, bytesOf(this.built));
+    h = fnv1aBytes(h, bytesOf(this.deck));
     h = fnv1aBytes(h, bytesOf(this.parcel));
     h = fnv1aBytes(h, bytesOf(this.soilHealth));
     h = fnv1aBytes(h, bytesOf(this.floraVitality));
