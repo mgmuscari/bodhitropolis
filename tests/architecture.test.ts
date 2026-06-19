@@ -109,6 +109,7 @@ const PURE_UI_ALLOWLIST = [
   'src/ui/powerOverlayContent.ts',
   'src/ui/overlayLegend.ts',
   'src/ui/pulseContent.ts',
+  'src/ui/restorationContent.ts',
   'src/ui/repairTools.ts',
   'src/ui/lineTools.ts',
   'src/ui/reconcile.ts',

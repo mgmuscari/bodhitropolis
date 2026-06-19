@@ -230,12 +230,16 @@ layer (non-deterministic).
   byte-identical, ramps are a pure overlay. New RED gate: a `canDrive`-respecting reachability BFS
   (`carReachFrom`) — every satellite drivable from the core across 3 seeds (was 6/12 isolated → 12/12).
   Worldgen (hashed), deterministic. Unblocks #116's exurb residents (they can now commute by car).
-- 🔵 **DEFERRED feature: restoration-progress / city-health readout** (audit 2026-06-19; from "is my
-  renewal helping?") — the player can't easily tell whether their restorative work is moving the city.
-  A HUD / overlay panel surveying the live metrics over time (mean land value, total occupancy, mean
-  building health, ecology richness, total smog/ground/water pollution — with an up/down trend arrow)
-  so revival is legible. All the fields already exist in `AmbientState`; this is a pure readout (no sim
-  change). Live layer. Not started.
+- ✅ **Restoration-progress / city-health readout** (audit 2026-06-19; from "is my renewal helping?";
+  PR pending) — a togglable HUD panel (**G** key) surveying the live metrics with IMPROVEMENT-oriented
+  trend arrows: mean land value, total population, mean building health, ecology richness (flora×fauna
+  via `richnessOf`), and total air/ground/water pollution. The arrow flips for pollution (less = better)
+  so **every ↗ means "your renewal is helping"** regardless of whether the raw number rose or fell. Pure
+  `restorationContent.ts` (`sampleRestoration` aggregates the AmbientState maps + map ecology;
+  `restorationReadout`/`restorationLines` format the trend vs the previous sample) — fully unit-tested,
+  on the pure-ui allowlist. Thin `restorationPanel.ts` DOM shell (mirrors `pulseDock`); main.ts samples
+  on the civic cadence only while shown, flat on open. No sim change. Live-verify the panel/key in the
+  morning.
 
 ### Pedestrian / vehicle agents (Maddy 2026-06-19)
 
