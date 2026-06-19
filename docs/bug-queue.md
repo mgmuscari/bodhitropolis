@@ -159,6 +159,25 @@ layer (non-deterministic).
   any overlay is up: a swatch per ramp endpoint / HOLC band with its label (top-left). Unified across
   eco/civic/redline/police via `OverlayLegend` + per-module `*Legend()`. Live-verified.
 
+### Pedestrian / vehicle agents (Maddy 2026-06-19)
+
+- 🔵 **DEFERRED feature: unhoused residents** (Maddy 2026-06-19) — model residents without housing: a
+  population that has no home plot (or has been displaced — abandonment/demolition/arrest-drain/eviction
+  by decay), living in the live agent layer outside the household census. Surface them as agents +
+  presumably a count/indicator, and tie into the existing systems (occupancy, wellbeing, civic voice,
+  redline/police harm, the revival↔decline loop — housing as the counter-move). Not started; record
+  only. Design Qs for when it's picked up: where they shelter (parks/streets/encampments), how
+  housing/displacement moves people in/out of the unhoused state, and the player's restorative levers
+  (build housing / commons / defund). Live layer (composes with [[live-layer-architecture]]).
+- ✅ **Owned car despawns when its citizen disappears** (PR pending) — a car is the citizen's
+  possession; it should stay parked while the ped is active and FOLLOW it home when sent home, not
+  vanish on the spot. While active it already persisted (the car filter never despawns an owned car);
+  the gap was the departure paths — `respawnAtHome` retired it to a short linger that vanished, and an
+  ARREST orphaned it. Fix: `sendOwnedCarHome` warps a departed citizen's owned car to park near its
+  home (unowned, clears on its dwell), or removes it only if home has no parking. Wired into
+  respawnAtHome + the arrest path. Pure (no rng); determinism untouched. Live-verified: a car 39 tiles
+  from home warped to 4 tiles from home instead of despawning where the ped disappeared.
+
 ### Pedestrian pathing (Maddy 2026-06-19)
 
 - ✅ **Peds parking + heading north to nowhere from (52,101)** (PR pending) — diagnosed live: the
