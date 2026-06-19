@@ -1413,6 +1413,25 @@ describe('land value steers citizen destination choice', () => {
     expect(nearestOfCategory(map, 8, 5, StopCategory.Shop, lv)).toEqual({ x: 16, y: 5 });
     expect(nearestOfCategory(map, 8, 5, StopCategory.Shop)).toEqual({ x: 10, y: 5 }); // no LV → nearest
   });
+
+  it('does NOT bias destinations upper-left on ties (Maddy: row-major trip-generation bias)', () => {
+    // For each searcher centre, two EQUIDISTANT same-category plots — one NW, one SE (Manhattan d=2
+    // each, uniform land value → a true score tie). The old row-major strict-`<` picker ALWAYS chose
+    // the NW (first-scanned) tile; the direction-neutral hash tie-break must scatter — picking SE on
+    // some centres and NW on others.
+    let seChosen = 0;
+    let nwChosen = 0;
+    for (let c = 6; c <= 33; c++) {
+      const m = new GameMap(40, 40);
+      m.built[m.idx(c - 1, c - 1)] = BuiltKind.CommercialStrip; // NW of the searcher
+      m.built[m.idx(c + 1, c + 1)] = BuiltKind.CommercialStrip; // SE of the searcher (equidistant)
+      const pick = nearestOfCategory(m, c, c, StopCategory.Shop);
+      if (pick && pick.x === c + 1) seChosen++;
+      else if (pick && pick.x === c - 1) nwChosen++;
+    }
+    expect(seChosen).toBeGreaterThan(0); // SE is sometimes chosen — NOT always the upper-left one
+    expect(nwChosen).toBeGreaterThan(0); // and NW sometimes too — scattered, not a new fixed bias
+  });
 });
 
 describe('population: building capacity (the seeded ceiling)', () => {
