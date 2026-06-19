@@ -126,6 +126,29 @@ Per-category subject prompts:
 - **Apartments**: "stucco apartment block roof, flat roof with vents, … 2×2 footprint"
 - **Industrial / port**: "warehouse roof, container yard, …"
 
+## 5.5 Road structure — the next pass (Maddy, 2026-06-19)
+
+A bare asphalt surface (even with variant cycling) reads as a "field of asphalt" on wide roads,
+where there should be visible STRUCTURE: **sidewalks, setbacks, gutters, curbs, jersey barriers /
+medians.** The architecturally-right way to add these (not ad-hoc painting) is a **border mask** —
+the *dual* of the connection mask the autotiler already computes:
+
+- **Connection mask** (have): which 4-neighbours ARE the same road → drives lane markings + how the
+  road connects.
+- **Border mask** (add): which 4-neighbours are NON-road (parcel / building / open land) → drives
+  the EDGE treatment: a curb + gutter line + sidewalk strip on each bordering edge. This is where a
+  road meets the city, so it's exactly where sidewalks/gutters belong. Deterministic from the map
+  neighbourhood, same machinery as the connection mask.
+- **Setbacks** are the parcel-side dual: a parcel draws a setback/frontage strip on edges facing a
+  road (a worldgen gap or a render treatment on the building-side border).
+- **Wide-corridor interior**: lane lines along the through-axis + a median/jersey-barrier between
+  opposing carriageways (the un-greened sibling of `PlantedMedian`). Needs the corridor axis, which
+  the wide-road model already knows.
+
+Diffusion supplies the *surface* ingredients (asphalt ✓, a concrete/sidewalk texture, a gutter/curb
+strip); the border-mask painter composites them at the edges — same split as roads (texture from
+diffusion, structure procedural). This replaces "field of asphalt" with legible streetscape.
+
 ## 6. Open work / decisions (for Maddy)
 
 1. **Variety-pick seam (not yet built)** — multi-version residential needs the renderer to pick

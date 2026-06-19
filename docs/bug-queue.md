@@ -21,9 +21,15 @@ black outlines, SC2000-era, top-down (not iso), Oakland architectural cues. Plan
   PixelOE). Probes in `docs/art/probes/satellite/` (v1 + v2 + asphalt). Learnings: edge-to-edge must
   be prompted; "black outline" frames terrain (buildings only); dense-block is the strongest unit.
   - ✅ **Roads (Maddy's call: generate texture, paint lines on top)** — committed asphalt SURFACE
-    (`public/tilesets/satellite/surfaces/asphalt.png`); renderer paints connection-mask markings over
-    it (`@surface/road` ingredient seam). `satellite` now skins roads; rest falls back to procedural.
-  - 🔴 Terrain + buildings (segmented blocks); roads currently one generic asphalt (per-kind later).
+    (3 tone-consistent variants, `public/tilesets/satellite/surfaces/asphalt-{0,1,2}.png`); renderer
+    paints connection-mask markings over them (`@surface/road#n` ingredient seam). `satellite` skins
+    roads; rest falls back to procedural. ✅ variant cycling per-tile (anti-plaid); ✅ dropped the
+    wide-road per-tile seam (it tiled into a grid).
+  - 🔴 **Road STRUCTURE pass** (Maddy: wide roads read as a "field of asphalt") — sidewalks / setbacks
+    / gutters / curbs / jersey-barriers via a **border mask** (the dual of the connection mask: which
+    edges face NON-road → curb+gutter+sidewalk) + wide-corridor median/lane interior. Diffusion makes
+    the surface ingredients (concrete/sidewalk/gutter), painter composites at edges. Plan §5.5.
+  - 🔴 Terrain + buildings (segmented blocks).
   - 🔴 Variety-pick seam (per-parcel hash → variant) when residential variants land. Palette/slice to
     pin with Maddy (plan §6).
 
