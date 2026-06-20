@@ -22,15 +22,27 @@ describe('stopCategoryOf (which daily-itinerary stop a plot serves)', () => {
     expect(stopCategoryOf(BuiltKind.AINode)).toBe(StopCategory.Lifestyle);
   });
 
-  it('returns 0 (not a daily-itinerary destination) for homes, transport, greens, empty', () => {
+  it('maps green/open space to Leisure (parks join the destination loop — Maddy 2026-06-20)', () => {
+    expect(stopCategoryOf(BuiltKind.Park)).toBe(StopCategory.Leisure);
+    expect(stopCategoryOf(BuiltKind.RewildedLand)).toBe(StopCategory.Leisure);
+    expect(stopCategoryOf(BuiltKind.CommunityGarden)).toBe(StopCategory.Leisure);
+    expect(stopCategoryOf(BuiltKind.Parklet)).toBe(StopCategory.Leisure);
+  });
+
+  it('returns 0 (not a daily-itinerary destination) for homes, transport, empty', () => {
     expect(stopCategoryOf(BuiltKind.HouseSingle)).toBe(0); // home, not a visit
     expect(stopCategoryOf(BuiltKind.Apartments)).toBe(0);
     expect(stopCategoryOf(BuiltKind.RoadStreet)).toBe(0);
-    expect(stopCategoryOf(BuiltKind.Promenade)).toBe(0);
+    expect(stopCategoryOf(BuiltKind.Promenade)).toBe(0); // a walkway, not a leisure destination
     expect(stopCategoryOf(BuiltKind.None)).toBe(0);
   });
 
-  it('DAILY_ITINERARY is work → shop → lifestyle, in that order', () => {
-    expect(DAILY_ITINERARY).toEqual([StopCategory.Work, StopCategory.Shop, StopCategory.Lifestyle]);
+  it('DAILY_ITINERARY is work → shop → lifestyle → leisure, in that order', () => {
+    expect(DAILY_ITINERARY).toEqual([
+      StopCategory.Work,
+      StopCategory.Shop,
+      StopCategory.Lifestyle,
+      StopCategory.Leisure,
+    ]);
   });
 });

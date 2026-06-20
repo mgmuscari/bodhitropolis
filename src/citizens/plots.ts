@@ -23,6 +23,13 @@ const PLOT_WELLBEING: ReadonlyMap<number, number> = new Map<number, number>([
   [BuiltKind.MakerSpace, 3],
   [BuiltKind.VerticalFarm, 3],
   [BuiltKind.HealingCommons, 4], // the most restorative destination
+  // Greens are restorative LEISURE destinations: people walk to the park (Maddy 2026-06-20). Visiting
+  // them lifts the wellbeing carried home, so building greens closes the heal loop (parks → visits →
+  // home health → occupancy). Not new-urbanist BUILDINGS, so base wellbeing only (no extra buff).
+  [BuiltKind.Park, 3],
+  [BuiltKind.CommunityGarden, 2],
+  [BuiltKind.RewildedLand, 2],
+  [BuiltKind.Parklet, 2],
 ]);
 
 /** The new-urbanist (tech-tree restorative) plots that hand back a status BUFF on top of

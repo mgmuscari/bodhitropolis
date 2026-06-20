@@ -21,6 +21,15 @@ describe('plotWellbeing (what a visit contributes, by use)', () => {
     expect(plotWellbeing(BuiltKind.None)).toBe(0);
     expect(plotWellbeing(BuiltKind.RoadStreet)).toBe(0);
   });
+
+  it('greens are restorative third places (parks heal — Maddy 2026-06-20)', () => {
+    expect(plotWellbeing(BuiltKind.Park)).toBeGreaterThan(0);
+    expect(plotWellbeing(BuiltKind.CommunityGarden)).toBeGreaterThan(0);
+    expect(plotWellbeing(BuiltKind.RewildedLand)).toBeGreaterThan(0);
+    expect(plotWellbeing(BuiltKind.Parklet)).toBeGreaterThan(0);
+    // a park visit heals, where an industrial one harms
+    expect(plotWellbeing(BuiltKind.Park)).toBeGreaterThan(plotWellbeing(BuiltKind.Industrial));
+  });
 });
 
 describe('new-urbanist buffs (carried home)', () => {
