@@ -1250,11 +1250,17 @@ export class Renderer {
         if (amt < 40) continue; // only real plumes, not faint road haze
         const px = tile % mapW;
         const py = (tile - px) / mapW;
-        const sway = 0.25 + 0.2 * Math.sin(drift * 0.6 + tile);
-        const { sx, sy } = camera.worldToScreen(px + 0.5 + ambient.wind.dx * sway, py + 0.5 + ambient.wind.dy * sway);
+        // The puff STREAMS downwind along the prevailing wind, looping + fading as it travels — so the
+        // smog visibly blows off its source in the wind direction (Maddy: "follow prevailing winds").
+        const phase = (drift * 0.35 + (tile % 13) * 0.11) % 1; // 0..1 loop, per-tile phase offset
+        const distance = phase * 3.0; // tiles carried downwind this cycle
+        const { sx, sy } = camera.worldToScreen(
+          px + 0.5 + ambient.wind.dx * distance,
+          py + 0.5 + ambient.wind.dy * distance,
+        );
         if (!onScreen(sx, sy)) continue;
-        const sz = ts * (1.1 + amt / 200);
-        ctx.globalAlpha = Math.min(0.45, (amt / 255) * 0.6);
+        const sz = ts * (1.0 + amt / 180 + phase * 0.8); // billows as it drifts
+        ctx.globalAlpha = Math.min(0.45, (amt / 255) * 0.6) * (1 - phase); // fades out downwind
         ctx.drawImage(smogSprites[tile % smogSprites.length]!, sx - sz / 2, sy - sz / 2, sz, sz);
       }
       ctx.globalAlpha = 1;

@@ -75,3 +75,46 @@ describe('loadTilesetAssets (the core)', () => {
     expect(overrides.size).toBe(0);
   });
 });
+
+import { applyTerrainGrade } from '../../src/ui/tilesetLoader';
+
+// Render-time terrain GRADE: darken + desaturate the satellite terrain tiles so they read like a
+// satellite photo, not a cartoon (Maddy 2026-06-20). Pure RGBA transform — alpha untouched.
+describe('applyTerrainGrade: darken + desaturate', () => {
+  const px = (r: number, g: number, b: number, a = 255) => new Uint8ClampedArray([r, g, b, a]);
+
+  it('is identity at sat=1, bright=1', () => {
+    const d = px(200, 100, 50);
+    applyTerrainGrade(d, 1, 1);
+    expect([...d]).toEqual([200, 100, 50, 255]);
+  });
+
+  it('full desaturate (sat=0) collapses to luminance', () => {
+    const d = px(200, 100, 50);
+    applyTerrainGrade(d, 0, 1);
+    const lum = Math.round(0.299 * 200 + 0.587 * 100 + 0.114 * 50); // 124
+    expect([...d]).toEqual([lum, lum, lum, 255]);
+  });
+
+  it('brightness scales channels', () => {
+    const d = px(200, 100, 50);
+    applyTerrainGrade(d, 1, 0.5);
+    expect([...d]).toEqual([100, 50, 25, 255]);
+  });
+
+  it('preserves alpha and processes every pixel', () => {
+    const d = new Uint8ClampedArray([200, 100, 50, 120, 10, 20, 30, 255]);
+    applyTerrainGrade(d, 1, 0.5);
+    expect(d[3]).toBe(120); // alpha 1 untouched
+    expect(d[7]).toBe(255); // alpha 2 untouched
+    expect([d[4], d[5], d[6]]).toEqual([5, 10, 15]);
+  });
+});
+
+describe('applyTerrainGrade: green pull (de-cyan water)', () => {
+  it('gMul scales only the green channel', () => {
+    const d = new Uint8ClampedArray([100, 200, 150, 255]);
+    applyTerrainGrade(d, 1, 1, 0.5); // sat/bright identity, half green
+    expect([d[0], d[1], d[2], d[3]]).toEqual([100, 100, 150, 255]);
+  });
+});
