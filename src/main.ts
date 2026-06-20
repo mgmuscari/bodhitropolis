@@ -20,6 +20,7 @@ import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer, exportProceduralTiles } from './ui/renderer';
+import { mountSatelliteDemo } from './ui/satelliteShader';
 import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, setPlantEmitters, seedDecay, liveInspectLine, applyLiveCaps } from './ui/ambientContent';
 import { loadSettings, saveSettings } from './ui/settingsStore';
 import { mountSettingsPanel } from './ui/settingsPanel';
@@ -80,6 +81,16 @@ export function main(): void {
   if (!canvas) throw new Error('missing #game canvas');
 
   const params = new URLSearchParams(window.location.search);
+
+  // Dev route: ?shaderdemo mounts the hybrid satellite procedural pass on a synthetic world and
+  // returns — it never boots the live game, so it's safe to open in a scratch browser without
+  // touching an in-progress playtest. See docs/art/satellite-shader.md.
+  if (params.has('shaderdemo')) {
+    const handle = mountSatelliteDemo(canvas, { size: 64 });
+    (window as unknown as { __satDemo?: unknown }).__satDemo = handle;
+    return;
+  }
+
   const seed = params.get('seed') ?? DEFAULT_SEED;
 
   // Settings: live caps apply NOW (perf ceilings the agent layer reads); the world size feeds
