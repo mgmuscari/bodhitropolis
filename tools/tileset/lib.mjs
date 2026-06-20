@@ -137,10 +137,11 @@ const PIXEL_PREFIX = 'Pixel art style. ';
 // A multi-cell parking lot must tile seamlessly and sit on asphalt (Maddy 2026-06-19: "parking lots
 // should always overlay on asphalt… they should tile better… [no] yellow border"). So they render
 // like terrain — controlnet, SeamlessTile enable, opaque (no alpha) — not like a building object.
-export const SURFACE_KINDS = new Set([22]); // ParkingLot
+export const SURFACE_KINDS = new Set([22, 11]); // ParkingLot, PlantedMedian (edge-to-edge, not a building)
 
 const SURFACE_SUBJECT = {
   22: 'a seamless asphalt parking lot, neat white parking stall stripes, a few parked cars',
+  11: 'a lush planted median strip of colorful wildflowers, meadow grasses and low groundcover',
 };
 const SURFACE_SUFFIX =
   'seamless tileable texture, fills the frame edge to edge, no border, no frame, no yellow lines, ' +

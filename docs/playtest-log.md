@@ -91,3 +91,10 @@ Sim/agents:
 - (feat) **Rails need TRAINS** (ambient trains running on rail).
 - [ ] **People walk around green plots with no destination** — is leisure; Q from Maddy: are these
   actors or ambient? (Decide: give leisure walkers a destination/dwell, or is it the ambient stroller pool.)
+
+## 2026-06-20 — batch 6 (deferred)
+
+- [ ] **(DEFER) Water lake tiles don't slosh — use per-tile AFFINE TRANSFORMS.** Maddy asked for affine
+  transforms (oscillating skew/translate per water tile) to SIMULATE sloshing, not just the pattern
+  overlay scroll. Backlog: apply an oscillating affine (skew + small translate, wind-aligned, normal
+  angular drift) to the stochastic water base tiles themselves. Come back to it.

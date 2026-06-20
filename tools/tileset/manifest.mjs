@@ -18,9 +18,6 @@ for (const sub of SUBDIRS) {
   const dir = join(ROOT, sub);
   if (!existsSync(dir)) continue;
   for (const f of readdirSync(dir).filter((f) => f.endsWith('.png')).sort()) {
-    // PlantedMedian (kind 11) must render as the PROCEDURAL green strip (it forms a connected line) —
-    // NOT a baked building tile. Skip its baked cells so the tileset doesn't override the painter.
-    if (/^b-11-/.test(f)) continue;
     // A `-v{n}` suffix is a building VARIANT — map it to the variantKey form `{base}#{n}` the
     // renderer picks per parcel (generate-variants.mjs). Plain files map to their key 1:1.
     const stem = f.replace(/\.png$/, '');
