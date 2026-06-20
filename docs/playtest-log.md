@@ -42,3 +42,19 @@ Running capture of Maddy's playtest reports so they're absorbed without thrashin
   hotkeys when a modifier (meta/ctrl) is held.
 - [x] **Drag-to-pan doesn't always release** after lifting finger/mouse — map keeps panning with cursor.
   pointerup/pointercancel not reliably clearing the drag state (pointer capture?).
+
+## 2026-06-20 — batch 3
+
+- [~] **Wavy grass / canopy gone** — removed with the row-major loop; restoring via the non-row-major
+  technique (tileable wind-streak sheen scrolled over a cached grass mask, wind-aligned, subtle).
+- [ ] **Multitile commercial blocks render as repeated single tiles.** Commercial (19/20) grown/large
+  blocks aren't using a W×H multitile bake. Investigate: do C parcels grow to multi-tile footprints?
+  If so they need multitile cells (like civic/plants); if they're adjacent 1×1s, the building-variant
+  pick should differ them. Check footprint sizes + the cellKey path.
+
+- [ ] **Blue step van sprite is a SIDE view, rotated 90° while driving** — kills vibes. The van bake
+  isn't top-down. Re-bake top-down; if diffusion won't reliably give top-down vans, the validator below
+  is the real fix. (Buses likely same risk.)
+- (feat) **Bake VALIDATORS via LMStudio vision (gemma)** — https://lmstudio.tailea7e08.ts.net/v1/models —
+  check each baked tile/sprite for correct geometry (e.g. "is this top-down?", "is the building intact
+  not floodfilled?") and flag/reject failures. Would've caught the side-van, the floodfilled clinic/cars.

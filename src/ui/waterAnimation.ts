@@ -60,6 +60,35 @@ export function mutateWaterFrame(
 const WATER_BASE: readonly [number, number, number] = [30, 60, 82];
 
 /**
+ * A tileable soft light-streak texture (pale warm highlights on transparency) — the renderer scrolls
+ * it with the prevailing wind over grass/forest at low alpha for a subtle wavy-grass / canopy sheen
+ * (the wind catching the blades). Integer wave numbers → seamless tiling. Browser IO; null headless.
+ */
+export function makeGrassSheen(size: number): CanvasImageSource | null {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const id = ctx.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      // crossing streaks; only the crests (s>0) show as light wind gusts, troughs are transparent
+      const s =
+        Math.sin(((x * 2 + y * 1) / size) * TAU) + 0.6 * Math.sin(((x * 1 - y * 3) / size) * TAU);
+      id.data[i] = 232;
+      id.data[i + 1] = 244;
+      id.data[i + 2] = 206; // pale warm green-white
+      id.data[i + 3] = Math.max(0, s) * 100; // soft alpha, only on crests
+    }
+  }
+  ctx.putImageData(id, 0, 0);
+  return canvas;
+}
+
+/**
  * Bake `frameCount` sloshy water frames by mutating the BAKED water tile (hybrid: the baked texture
  * carries the identity, the warp/foam adds the slosh). The renderer cycles these in a low-alpha
  * overlay over the baked base, so the surface undulates. Falls back to {@link WATER_BASE} if no baked
