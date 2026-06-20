@@ -70,3 +70,24 @@ Running capture of Maddy's playtest reports so they're absorbed without thrashin
 - [ ] **Yellow/orange (taxi/van) drives BACKWARDS** — sprite faces the wrong way for travel. The
   vehicle/ped/cyclist validator must also check FACING: the vehicle's FRONT should be at the TOP of the
   sprite (the renderer rotates assuming north-facing). Reject/normalize sprites whose front is elsewhere.
+
+## 2026-06-20 — batch 5 (big playtest report)
+
+Renderer/look:
+- [x] **Smog draws UNDER agents — should be top layer.** Z-order: smog plumes above cars/peds.
+- [x] **Curb-parked cars are orthogonal to the curb — should be PARALLEL** (parallel parking).
+- [x] **Normalize asphalt tiles to the same average value** (the surface variants differ in brightness).
+- [x] **Road type multiplier on asphalt value** — streets lighter than avenues lighter than freeways.
+- [x] **Cars need a ±% speed offset** to declump traffic (per-car jitter).
+- [x] **Water (scaled/rotated tiles): oscillating sinusoidal translation along the wind vector** + angular
+  drift drawn from a normal distribution (richer slosh than the current linear scroll).
+- [x] **"Cloud shadows"** — an invisible cloud layer following prevailing wind casts moving soft shadows
+  over ALL ground tiles + ambient props (NOT the effects/overlay layers).
+- [ ] **Rail crossings should show graphically** (where rail crosses road).
+- [x] **Planted median (11): has a building in it + doesn't form a nice line** — should read as a clean
+  green median strip, no building.
+Sim/agents:
+- [ ] **Travelers can path THROUGH dividers/medians — should be blocked.** DIAGNOSED: carTraversable() explicitly includes PlantedMedian (ambientContent ~1104) → cars drive on it; ped pathing likely same. Fix needs care (road routing must still work around the barrier on median-containing corridors) + freeway jersey-divider no-cross.
+- (feat) **Rails need TRAINS** (ambient trains running on rail).
+- [ ] **People walk around green plots with no destination** — is leisure; Q from Maddy: are these
+  actors or ambient? (Decide: give leisure walkers a destination/dwell, or is it the ambient stroller pool.)
