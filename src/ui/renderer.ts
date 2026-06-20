@@ -26,8 +26,9 @@ import { tileCategory, tileTiling, exportTileName, type TileCategory } from './t
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 import { parcelGlyph } from './glyphContent';
 import { isPowerConsumer } from '../growth/power';
-import { laneOffset, pedCurbOffset } from './ambientContent';
+import { laneOffset, pedCurbOffset, dirVector } from './ambientContent';
 import type { AmbientState } from './ambientContent';
+import type { AmbientSprites } from './ambientSprites';
 import { OVERLAY_DIM } from './overlayLegend';
 
 /** Precomputed CSS for the sparse-overlay scrim (see OverlaySource.dimBase). */
@@ -648,6 +649,9 @@ export class Renderer {
   private roadVariants = 0;
   // building variant count (base + baked #1..#n), cycled per parcel under a tileset to break repeats.
   private buildingVariants = 0;
+  // Ambient sprite catalog (cars/flora/smog/props), loaded async; null until set. Under a tileset,
+  // cars draw as tiny rotated car sprites ("micro machines") and smog plumes drift over polluted tiles.
+  private ambientSprites: AmbientSprites | null = null;
   // Cached base pass (terrain + built + overlay) on an offscreen canvas. Rebuilt
   // ONLY when invalidated (map/camera/overlay change), then blitted 1:1 onto the
   // visible canvas each frame. The hover preview and the ambient sprites live in
@@ -693,6 +697,12 @@ export class Renderer {
     this.roadVariants = overrides ? collectRoadSurfaces(overrides).length : 0;
     this.buildingVariants = overrides ? collectBuildingVariants(overrides) : 0;
     this.invalidateBase();
+  }
+
+  /** Publish the ambient sprite catalog (cars/flora/smog/props). Drawn per-frame in drawSprites;
+   *  no base invalidation needed (sprites aren't baked into the cached base). */
+  setAmbientSprites(sprites: AmbientSprites): void {
+    this.ambientSprites = sprites;
   }
 
   /** Set (or clear) the hover/drag preview tiles drawn as translucent tints. */
@@ -1186,8 +1196,10 @@ export class Renderer {
     // sides of a road; a PARKED car sits centred on its stall. Same trip-car, same colour.
     const carSize = Math.max(2, ts * 0.34);
     const parkedSize = Math.max(2, ts * 0.3);
+    // Under a tileset, cars are tiny rotated car SPRITES ("micro machines"); procedural keeps the
+    // tone-coded squares. Sprite is drawn a touch larger than the square so the little body reads.
+    const carSprites = this.hasTileset ? this.ambientSprites?.cars : undefined;
     for (const c of ambient.cars) {
-      ctx.fillStyle = CAR_COLORS[(c.tint ?? 0) % CAR_COLORS.length]!;
       // A PARKED car (lot bay or kerb slot) carries its exact stall position in c.x/c.y, so it draws
       // ON the stall (+0.5) — never warped to the lane centre. A MOVING car rides its lane (laneOffset,
       // right of heading) so opposing traffic separates. Parked cars use the smaller size.
@@ -1195,7 +1207,38 @@ export class Renderer {
       const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
       if (!onScreen(sx, sy)) continue;
       const size = c.parked ? parkedSize : carSize;
-      ctx.fillRect(Math.floor(sx - size / 2), Math.floor(sy - size / 2), size, size);
+      if (carSprites && carSprites.length > 0) {
+        const img = carSprites[(c.tint ?? 0) % carSprites.length]!;
+        const hv = dirVector(c.dir);
+        const angle = Math.atan2(hv.dx, -hv.dy); // sprite faces north; rotate CW to the heading
+        const ss = size * 1.7;
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(angle);
+        ctx.drawImage(img, -ss / 2, -ss / 2, ss, ss);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = CAR_COLORS[(c.tint ?? 0) % CAR_COLORS.length]!;
+        ctx.fillRect(Math.floor(sx - size / 2), Math.floor(sy - size / 2), size, size);
+      }
+    }
+    // Smog plumes: draw the translucent smog sprites over polluted tiles, drifting downwind — the
+    // dirty-plant / traffic pollution made visible (under a tileset; the field still drives land value).
+    const smogSprites = this.hasTileset ? this.ambientSprites?.smog : undefined;
+    if (smogSprites && smogSprites.length > 0) {
+      const drift = performance.now() / 1000;
+      for (const [tile, amt] of ambient.pollution) {
+        if (amt < 40) continue; // only real plumes, not faint road haze
+        const px = tile % mapW;
+        const py = (tile - px) / mapW;
+        const sway = 0.25 + 0.2 * Math.sin(drift * 0.6 + tile);
+        const { sx, sy } = camera.worldToScreen(px + 0.5 + ambient.wind.dx * sway, py + 0.5 + ambient.wind.dy * sway);
+        if (!onScreen(sx, sy)) continue;
+        const sz = ts * (1.1 + amt / 200);
+        ctx.globalAlpha = Math.min(0.45, (amt / 255) * 0.6);
+        ctx.drawImage(smogSprites[tile % smogSprites.length]!, sx - sz / 2, sy - sz / 2, sz, sz);
+      }
+      ctx.globalAlpha = 1;
     }
 
     // Police Violence map (toggled, P): a blood-red stain on every tile where the state has done

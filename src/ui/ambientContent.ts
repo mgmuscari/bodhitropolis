@@ -520,6 +520,12 @@ export function laneOffset(dir: number): { dx: number; dy: number } {
   return { dx: -DIR_DY[dir]! * LANE, dy: DIR_DX[dir]! * LANE };
 }
 
+/** The integer heading unit vector for a direction index (0=N,1=E,2=S,3=W) — lets the renderer
+ *  rotate a car sprite to its travel heading (the atan2 lives renderer-side; this stays allowlist-safe). */
+export function dirVector(dir: number): { dx: number; dy: number } {
+  return { dx: DIR_DX[dir] ?? 0, dy: DIR_DY[dir] ?? 0 };
+}
+
 /** How far a street-parked car is drawn toward its curb (the adjacent non-road tile). Larger
  *  than LANE so the car clears the lane centre and hugs the kerb instead of sitting in the
  *  middle of the road — but < 0.5 so it stays within its own tile. */

@@ -25,6 +25,7 @@ import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, setPlan
 import { loadSettings, saveSettings } from './ui/settingsStore';
 import { mountSettingsPanel } from './ui/settingsPanel';
 import { loadTileset } from './ui/tilesetLoader';
+import { loadAmbientSprites } from './ui/ambientSprites';
 import { PROCEDURAL } from './ui/tileset';
 import { mountHelpPanel } from './ui/helpPanel';
 import { clampSettings, type LiveCaps, type WorldSettings } from './ui/settings';
@@ -142,6 +143,10 @@ export function main(): void {
 
   const renderer = new Renderer(canvas);
   renderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
+
+  // Ambient sprites (cars/flora/smog/props): load once, drawn under a tileset (micro-machine cars,
+  // smog plumes). Resilient — a missing sprite just isn't drawn; never blocks the render loop.
+  void loadAmbientSprites().then((sprites) => renderer.setAmbientSprites(sprites));
 
   // Tileset skin: the procedural look paints instantly (above); a non-procedural skin loads its
   // committed PNGs async and hot-swaps in when ready (applyTileset invalidates the cached base →
