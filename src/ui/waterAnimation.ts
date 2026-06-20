@@ -27,16 +27,16 @@ export function mutateWaterFrame(
       const w =
         Math.sin(((x * 1 + y * 2) / size) * TAU + phase) +
         0.7 * Math.sin(((x * 2 - y * 1) / size) * TAU - 2 * phase);
-      const bright = 1 + w * 0.06;
+      const bright = 1 + w * 0.15; // strong, visible swell — this IS the water surface, not an overlay
       let r = base[i]! * bright;
       let g = base[i + 1]! * bright;
       let b = base[i + 2]! * bright;
       // Whitecaps: FIXED foam sites (spatial speckle, no frameIdx) that LIGHT UP smoothly as the
       // moving wave crest sweeps over them — a twinkle that fades in/out with the wave, NOT a per-frame
       // random flicker (the previous flash bug). Foam tracks `w`, which loops, so the loop stays clean.
-      const crest = w - 1.0;
+      const crest = w - 0.85;
       if (crest > 0 && (x * 7 + y * 13) % 5 === 0) {
-        const foam = Math.min(1, crest * 1.6) * 0.55;
+        const foam = Math.min(1, crest * 1.5) * 0.6;
         r += (255 - r) * foam;
         g += (255 - g) * foam;
         b += (255 - b) * foam;
@@ -50,24 +50,24 @@ export function mutateWaterFrame(
   return out;
 }
 
+/** A good deep satellite-water base colour (muted blue-teal) — the frames are generated FROM this, so
+ *  the bad baked ocean/river tiles are never used (they read cyan / striped). Tunable. */
+const WATER_BASE: readonly [number, number, number] = [30, 60, 82];
+
 /**
- * Bake `frameCount` animated water frames from a base water tile. Returns [] in a headless context or
- * with no base (the renderer then falls back to the static graded water tile). Browser IO.
+ * Bake `frameCount` animated water frames procedurally from {@link WATER_BASE} (NOT the baked tile,
+ * which is no good). Frame 0 is the renderer's static water tile; the set is the flipbook for the
+ * (low-alpha) animated twinkle. Returns [] headless. Browser IO.
  */
-export function makeWaterFrames(
-  base: CanvasImageSource | null,
-  frameCount: number,
-  size: number,
-): CanvasImageSource[] {
-  if (!base || typeof document === 'undefined') return [];
-  const src = document.createElement('canvas');
-  src.width = size;
-  src.height = size;
-  const sctx = src.getContext('2d');
-  if (!sctx) return [];
-  sctx.imageSmoothingEnabled = false;
-  sctx.drawImage(base, 0, 0, size, size);
-  const baseData = sctx.getImageData(0, 0, size, size).data;
+export function makeWaterFrames(frameCount: number, size: number): CanvasImageSource[] {
+  if (typeof document === 'undefined') return [];
+  const baseData = new Uint8ClampedArray(size * size * 4);
+  for (let i = 0; i < baseData.length; i += 4) {
+    baseData[i] = WATER_BASE[0];
+    baseData[i + 1] = WATER_BASE[1];
+    baseData[i + 2] = WATER_BASE[2];
+    baseData[i + 3] = 255;
+  }
 
   const frames: CanvasImageSource[] = [];
   for (let f = 0; f < frameCount; f++) {

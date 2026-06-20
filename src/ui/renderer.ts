@@ -83,9 +83,9 @@ const POLE_WIRE_REACH = 4;
 // glyph is stamped per footprint, centered, with a dark halo for contrast.
 const GLYPH_MIN_TS = 16;
 
-// Animated-water flipbook: more frames + a higher cycle rate read as smooth motion, not a flash.
+// Procedural water frames: frame 0 is the good static water tile baked into the base; the rest are
+// the flipbook for the (future, non-row-major) animated twinkle.
 const WATER_FRAMES = 16;
-const WATER_FPS = 15;
 
 // Kinds that get a sparse flora-canopy accent under a tileset (the vegetated greens).
 const GREEN_FLORA_KINDS: ReadonlySet<number> = new Set([
@@ -698,9 +698,14 @@ export class Renderer {
     this.hasTileset = (overrides?.size ?? 0) > 0;
     this.roadVariants = overrides ? collectRoadSurfaces(overrides).length : 0;
     this.buildingVariants = overrides ? collectBuildingVariants(overrides) : 0;
-    this.waterFrames = this.hasTileset
-      ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
-      : [];
+    this.waterFrames = this.hasTileset ? makeWaterFrames(WATER_FRAMES, BASE_TILE) : [];
+    // Replace every water tile (ocean/lake/river) in the cached base with the GOOD procedural water
+    // (frame 0) — the baked water tiles read cyan / striped (rivers), so they're never drawn. Static +
+    // cached (drawBase), so no per-frame, no row-major antipattern; the bad tile is gone entirely.
+    if (this.waterFrames.length > 0) {
+      const w0 = this.waterFrames[0]!;
+      for (const k of [...this.atlas.keys()]) if (/^(ocean|lake|river)-/.test(k)) this.atlas.set(k, w0);
+    }
   }
 
   /**
@@ -714,9 +719,14 @@ export class Renderer {
     this.hasTileset = (overrides?.size ?? 0) > 0;
     this.roadVariants = overrides ? collectRoadSurfaces(overrides).length : 0;
     this.buildingVariants = overrides ? collectBuildingVariants(overrides) : 0;
-    this.waterFrames = this.hasTileset
-      ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
-      : [];
+    this.waterFrames = this.hasTileset ? makeWaterFrames(WATER_FRAMES, BASE_TILE) : [];
+    // Replace every water tile (ocean/lake/river) in the cached base with the GOOD procedural water
+    // (frame 0) — the baked water tiles read cyan / striped (rivers), so they're never drawn. Static +
+    // cached (drawBase), so no per-frame, no row-major antipattern; the bad tile is gone entirely.
+    if (this.waterFrames.length > 0) {
+      const w0 = this.waterFrames[0]!;
+      for (const k of [...this.atlas.keys()]) if (/^(ocean|lake|river)-/.test(k)) this.atlas.set(k, w0);
+    }
     this.invalidateBase();
   }
 
@@ -1139,44 +1149,11 @@ export class Renderer {
 
     const mapW = world.map.width;
 
-    // Animated ground/water layer (under a tileset): a travelling sun-glint over water and a wind
-    // sheen rippling across grass/meadow, so bodies of water MOVE and the ground has wavy grass in
-    // the live game (Maddy: water "begging for animation", "wavy grass on ground"). The full
-    // continuous treatment is the shader path; this is the cheap Canvas2D layer — one viewport-culled
-    // loop over OPEN tiles, gated on a readable zoom (ts≥8) with a per-tile phase so only a moving
-    // crest lights up (a travelling wave, not a flat sheen).
-    if (this.hasTileset && ts >= 8) {
-      const map = world.map;
-      const range = camera.visibleTileRange();
-      const t = performance.now() / 1000;
-      for (let ty = range.y0; ty <= range.y1; ty++) {
-        for (let tx = range.x0; tx <= range.x1; tx++) {
-          const i = map.idx(tx, ty);
-          if (map.built[i] !== 0) continue; // only open ground / water
-          if (map.water[i] !== 0) {
-            // Animated water: draw the current flipbook frame (waves + whitecaps). The frame tiles
-            // seamlessly, so every water cell drawing the SAME frame reads as one continuous sea.
-            if (this.waterFrames.length === 0) continue;
-            const { sx, sy } = camera.worldToScreen(tx, ty);
-            const fi = Math.floor(t * WATER_FPS) % this.waterFrames.length;
-            ctx.drawImage(this.waterFrames[fi]!, Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
-          } else {
-            const lc = map.landCover[i]!;
-            if (lc !== 1 && lc !== 2) continue; // meadow(1) / grass(2) only — the vegetated bands
-            // Wind sheen rolls along the PREVAILING WIND (a crest travelling downwind), so grass waves
-            // match the wind that drives the smog (Maddy bug). proj = tile position along the wind axis.
-            const proj = tx * ambient.wind.dx + ty * ambient.wind.dy;
-            const ph = Math.sin(proj * 0.8 - t * 1.4);
-            if (ph < 0.4) continue;
-            const { sx, sy } = camera.worldToScreen(tx, ty);
-            ctx.fillStyle = '#d6e6ac';
-            ctx.globalAlpha = 0.07 * ph;
-            ctx.fillRect(Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
-          }
-        }
-      }
-      ctx.globalAlpha = 1;
-    }
+    // NOTE: animated water/grass overlays were a per-tile row-major per-frame draw — an antipattern
+    // that didn't complete in a frame (animation only showed in a top bar). Removed. Water is now a
+    // GOOD static tile baked into the cached base (above); the animated twinkle + wavy grass return via
+    // a non-row-major strategy (tileable pattern clipped to a cached water/grass mask, or the shader).
+    // Logged in docs/playtest-log.md.
 
     // Desire-path WEAR: pedestrians beat wild-green ground into brown dirt + litter. Drawn
     // first (ground level), browning the tile by wear and dropping trash specks as it deepens.

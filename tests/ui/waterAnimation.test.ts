@@ -46,8 +46,12 @@ describe('mutateWaterFrame', () => {
     expect(maxR).toBeGreaterThan(30 + 45); // foam pushes RGB toward white, well above base R=30
   });
 
-  it('loops seamlessly in time — frame `count` equals frame 0', () => {
+  it('loops seamlessly in time — frame `count` ≈ frame 0 within rounding (1/255)', () => {
     const base = tealTile(SIZE);
-    expect([...mutateWaterFrame(base, 8, 8, SIZE)]).toEqual([...mutateWaterFrame(base, 0, 8, SIZE)]);
+    const a = mutateWaterFrame(base, 8, 8, SIZE);
+    const b = mutateWaterFrame(base, 0, 8, SIZE);
+    // sin(x+2π) differs from sin(x) by a float epsilon, so allow ±1/255 (imperceptible); the loop
+    // is otherwise seamless. (The renderer cycles 0..count-1 and never draws frame `count` anyway.)
+    for (let i = 0; i < a.length; i++) expect(Math.abs(a[i]! - b[i]!)).toBeLessThanOrEqual(1);
   });
 });

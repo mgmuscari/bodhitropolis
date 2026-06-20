@@ -124,21 +124,9 @@ export async function loadTilesetAssets(
     }),
   );
 
-  // River tiles bake with a directional flow stripe that staircases badly on diagonals (Maddy: "they
-  // look like ass" without the shader). Alias each river-{band} to the flat ocean water texture of the
-  // same band so a river reads as a water band, not stripes — and it then gets the animated-water pass.
-  const oceanByBand = new Map<string, CanvasImageSource>();
-  for (const [key, src] of overrides) {
-    const m = /^ocean-(\d+)$/.exec(key);
-    if (m) oceanByBand.set(m[1]!, src);
-  }
-  if (oceanByBand.size > 0) {
-    const anyOcean = oceanByBand.values().next().value!;
-    for (const key of [...overrides.keys()]) {
-      const m = /^river-(\d+)$/.exec(key);
-      if (m) overrides.set(key, oceanByBand.get(m[1]!) ?? anyOcean);
-    }
-  }
+  // NOTE: river tiles (and all water) are replaced by the renderer with a GOOD procedural water tile
+  // (waterAnimation.makeWaterFrames), so the bad baked water/river textures are never drawn — no alias
+  // needed here. (The grade above on ocean/lake is now moot but harmless; left for the non-tileset path.)
   return overrides;
 }
 

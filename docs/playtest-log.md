@@ -1,0 +1,37 @@
+# Playtest log (satellite tileset / live dynamics)
+
+Running capture of Maddy's playtest reports so they're absorbed without thrashing. Newest at top.
+`[ ]` open · `[~]` in progress · `[x]` done · `(feat)` = feature request (log, don't build until prioritized).
+
+## 2026-06-20 — satellite look pass
+
+- [~] **Water system redesign.** The baked water tiles are bad (esp. rivers); the de-cyan grade + subtle
+  flipbook overlay reads as "bad base showing through, twinkle pops every ~2s." Target: GOOD static water
+  tile as the base (kills the bad tile — "killed with fire"), plus a **subtle 10–20% alpha** animated
+  twinkle that is present **100% of the time**, drawn with a **non-row-major** strategy.
+- [ ] **ANTIPATTERN: per-tile row-major drawing every frame.** The water overlay fills top→bottom row-major
+  and doesn't complete in a frame → animation only shows in a horizontal bar at the top. Recurring project
+  problem. Needs a better strategy (tileable pattern + cached water clip, O(1) draws/frame).
+- [ ] **White/silver cars floodfilled → "camouflage cars"** (white→alpha ate the body). Recolor white/silver
+  car prompts (non-white) and re-bake. Same class as the clinic white-roof bug.
+- [x] River tile `(31,95)` "kill with fire" — it's the bad baked water tile; folded into the water redesign.
+- [x] Smog "flash every 2s" → triangle fade-in/out envelope (no pop at loop reset).
+- [x] Water foam flicker → fixed foam sites lit smoothly by the moving crest (twinkle, not per-frame random).
+- [x] Grass waves direction → now follow `ambient.wind`.
+- [x] Precinct = 4 repeated tiles → added 31 to multitile FOOTPRINTS + re-baked (one 2×2).
+- [x] Clinic washed out (white roof floodfilled) → re-baked with slate-grey roof + red cross.
+- [x] Water too cyan → deep satellite teal (stronger separate water grade).
+- [x] Smog should ride prevailing wind → streams downwind.
+
+### Feature requests (logged — build when prioritized)
+
+- (feat) **Pedestrians + cyclists as sprites** (like the cars, which look GREAT). Sprites BAKED
+  (`public/sprites/ambient/peds`, `/cyclists`); wiring into the ped draw loop is NOT done — awaiting priority.
+- (feat) **Shader as a settings toggle, rendered UNDER the menu bars** (phase 5) so the shader path can be
+  A/B'd live. The CPU dynamics stay as the permanent no-WebGL default.
+
+### Process notes (Maddy)
+
+- Absorb playtest reports by appending here and continuing — don't context-switch on every message.
+- Feature requests: LOG, don't immediately build.
+- Never navigate/reload Maddy's real browser; verify on the isolated container + the 4173 frozen preview.
