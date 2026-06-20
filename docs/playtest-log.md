@@ -29,8 +29,9 @@ Running capture of Maddy's playtest reports so they're absorbed without thrashin
 
 ### Feature requests (logged — build when prioritized)
 
-- [x] **Pedestrians + cyclists as sprites** (`59831488`) — baked walk/cyclist sprites, rotated to heading + gait-animated. Sprites BAKED
-  (`public/sprites/ambient/peds`, `/cyclists`); wiring into the ped draw loop is NOT done — awaiting priority.
+- [x] **Pedestrians + cyclists as sprites** (`59831488`) — baked walk/cyclist sprites
+  (`public/sprites/ambient/peds`, `/cyclists`) wired into the ped draw loop: rotated to heading +
+  gait-animated under a tileset; procedural keeps mode dots.
 - (feat) **Shader as a settings toggle, rendered UNDER the menu bars** (phase 5) so the shader path can be
   A/B'd live. The CPU dynamics stay as the permanent no-WebGL default.
 
@@ -71,9 +72,9 @@ Running capture of Maddy's playtest reports so they're absorbed without thrashin
 
 - [x] **Civic center renders single-tile** — FIXED (worldgen 3×3 not baked; non-square multitile baker + civic 3×3 plot) (kind 23 is a 2×2, IS baked as multitile b-23-2x2 + in
   manifest). Investigate: bake cells compose to one building, or renderer not using cellKey for it?
-- [ ] **Yellow/orange (taxi/van) drives BACKWARDS** — sprite faces the wrong way for travel. The
-  vehicle/ped/cyclist validator must also check FACING: the vehicle's FRONT should be at the TOP of the
-  sprite (the renderer rotates assuming north-facing). Reject/normalize sprites whose front is elsewhere.
+- [x] **Yellow/orange (taxi/van) drives BACKWARDS** — FIXED (`0c3ad03e`,`7e6accfa`): added facesForward
+  vision check (front must point up); bake gates cars/cyclists on facing; scanned + re-baked the 6
+  backwards sprites (5 valid, bus best-effort).
 
 ## 2026-06-20 — batch 5 (big playtest report)
 
@@ -92,7 +93,7 @@ Renderer/look:
   green median strip, no building.
 Sim/agents:
 - [x] **Travelers can path THROUGH dividers/medians — blocked** (`9e0e7946`). Cars were already blocked via canDrive; the gap was peds — isWalkable now excludes PlantedMedian so they route around the barrier.
-- (feat) **Rails need TRAINS** (ambient trains running on rail).
+- [x] **Rails need TRAINS** (`1fd216ef`) — live Train agent rides the rail as a snake of cells, shuttles at dead-ends; red loco + silver cars.
 - [x] **People walk around green plots with no destination** — DONE (`80b56fdb`,`a6e42ddc`): retired the
   ambient stroller pool; every agent paths to a real destination; greens are a Leisure stop in the daily
   round (reachability-gated, restorative). → THE BACKLOG §2.

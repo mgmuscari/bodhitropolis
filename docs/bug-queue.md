@@ -23,10 +23,11 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   peds — `isWalkable` let them cut across the planted median (not a zoned plot). Now excluded from the
   walkable set, so travelers route around the barrier. Freeway through-lane crossing already limited-
   access via `canDrive`.
-- 🔴 **Taxi/van drives BACKWARDS** — sprite faces wrong way for travel. Add a *facing* check to the
-  ambient validator (vehicle FRONT must be at the TOP; renderer rotates assuming north-facing);
-  reject/normalize + re-bake offenders. Most cars re-baked top-down already, but facing is unverified.
-  (Bake-tool change — needs the LMStudio vision server up to re-bake.)
+- ✅ **Taxi/van drives BACKWARDS — facing validator + re-bake** (`0c3ad03e`, `7e6accfa`). Added
+  `facesForward` (LMStudio vision: front must point up); the bake now gates directional sprites
+  (cars/cyclists) on facing AND top-down. Scanned the baked set → 6 of 10 failed (sedan/taxi/bus/
+  boxtruck + both cyclists); re-baked facing-gated (5 valid, bus best-effort — a long top-down bus is
+  geometrically ambiguous). The 4 already-correct cars kept.
 - ✅ **Rail crossings render** (`af4df58f`) — `railCrossingMask` (pure, fabric.ts) marks the road-
   approach edges of an at-grade rail/tram tile; renderer paves an asphalt band across the track under
   the rails + white stop lines on each approach edge. Procedural + tileset; elevated rail excluded.
@@ -40,9 +41,11 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   walkers, and cruisers.
 
 ### 3 — Live look / animation polish
-- 🔴 **Lake water doesn't slosh — per-tile AFFINE transforms.** Apply an oscillating affine (skew +
-  small translate, wind-aligned, normal angular drift) per water tile to *simulate* sloshing — richer
-  than the current pattern-scroll overlay. (Was tagged "defer"; now normal backlog.)
+- ✅ **Lake water sloshes — per-tile AFFINE transforms** (`8c02c6ea`). Each visible water tile is
+  redrawn per-frame with its static stochastic rotate/scale PLUS an oscillating wind-aligned
+  translation + shear (`waterSloshAt`, pure + unit-tested, slow angular drift, neighbours out of
+  phase so waves travel), clipped once to the cached water mask (bounded, no land bleed). Foam
+  flipbook rides on top for twinkle. (Amplitudes are tunable playtest-feel knobs.)
 - 🟡 **Building variety** — 2 variants/1×1 kind shipped; want 5–10 per kind.
 - 🟡 **Broader bake validation** — `validate.mjs` (LMStudio gemma vision) gates top-down geometry; extend
   to gate "building intact, not floodfilled" + the facing check (§1) + run over the WHOLE baked set, not
@@ -54,7 +57,10 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
 - ✅ **Peds + cyclists wiring** (`59831488`) — baked walk(4-frame)/cyclist(2-frame) sprites wired into
   the (now injectable, unit-tested) ambient loader + the ped draw loop: under a tileset they render as
   tiny sprites rotated to heading + gait-animated, phase-offset per ped; procedural keeps mode dots.
-- 🔵 **Trains on rails** — ambient trains running on rail.
+- ✅ **Trains on rails** (`1fd216ef`) — a live Train agent rides the rail network as a snake of cells
+  (head advances tile-to-tile via `nextRailStep`, U-turn at dead-ends → shuttles; cars trace the
+  track); one per 26 rail tiles (cap 6), despawns if the line vanishes. Red locomotive + silver cars
+  oriented along the track. Heavy rail (`Rail`) only — elevated rail/trams are a follow-up.
 - 🔵 **Multi-tile plots get built-in parking** — ≥2×2 plots reserve a `ParkingLot` edge tile facing a
   drivable neighbour; the STRUCTURAL fix for walled-off-job churn. `docs/design/multitile-parking.md`.
 - 🔵 **Smog diffusion + rain→runoff** — isotropic smog diffusion + occasional rain relocating smog→ground
