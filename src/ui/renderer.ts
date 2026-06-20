@@ -82,6 +82,14 @@ const POLE_WIRE_REACH = 4;
 // glyph is stamped per footprint, centered, with a dark halo for contrast.
 const GLYPH_MIN_TS = 16;
 
+// Kinds that get a sparse flora-canopy accent under a tileset (the vegetated greens).
+const GREEN_FLORA_KINDS: ReadonlySet<number> = new Set([
+  BuiltKind.Parklet,
+  BuiltKind.CommunityGarden,
+  BuiltKind.Park,
+  BuiltKind.RewildedLand,
+]);
+
 // Dharmapunk-warm terrain palette: [base, accent] per tile kind. The accent is
 // dithered in for subtle texture (deep/shallow water, gold-green meadows).
 const PALETTE: Record<string, readonly [RGB, RGB]> = {
@@ -703,6 +711,7 @@ export class Renderer {
    *  no base invalidation needed (sprites aren't baked into the cached base). */
   setAmbientSprites(sprites: AmbientSprites): void {
     this.ambientSprites = sprites;
+    this.invalidateBase(); // flora canopies are baked into the cached base — repaint once loaded
   }
 
   /** Set (or clear) the hover/drag preview tiles drawn as translucent tints. */
@@ -843,6 +852,16 @@ export class Renderer {
           }
           const builtTile = this.atlas.get(builtKey);
           if (builtTile) ctx.drawImage(builtTile, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
+
+          // Flora canopies: a sparse tree/shrub sprite over the green-amenity kinds (parks, gardens,
+          // rewilded land) under a tileset — Google-Maps-style canopy dots. Baked into the cached base
+          // (static, hash-gated to ~⅗ of tiles so it reads as accents, not a solid mat).
+          const flora = this.hasTileset ? this.ambientSprites?.flora : undefined;
+          if (flora && flora.length > 0 && GREEN_FLORA_KINDS.has(built) && surfaceVariantIndex(tx, ty, 5) < 3) {
+            const img = flora[surfaceVariantIndex(tx * 7, ty * 13, flora.length)]!;
+            const fs = ts * 0.82;
+            ctx.drawImage(img, dx + (ts - fs) / 2, dy + (ts - fs) / 2, fs, fs);
+          }
 
           // Limited-access DIVIDER: a concrete barrier on each edge where a freeway abuts a surface
           // road (a frontage avenue) — you physically can't cross there, only at a ramp. Per-tile
