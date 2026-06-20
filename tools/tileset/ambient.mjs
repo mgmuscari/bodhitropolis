@@ -91,7 +91,7 @@ const CATALOG = {
   ],
   // Junk: discarded mattresses + household debris on worn/empty ground (the neglect made visible).
   junk: [
-    ['mattress', 'a discarded dirty mattress'],
+    ['mattress', 'a discarded stained blue-and-grey mattress'], // not white — light tones floodfill to alpha
     ['junk-pile', 'a pile of discarded household junk and black trash bags'],
     ['old-couch', 'a discarded worn brown sofa couch'],
     ['debris', 'a heap of broken wood planks and debris'],
