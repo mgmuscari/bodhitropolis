@@ -989,13 +989,16 @@ export class Renderer {
         if (glyph) {
           const gx = m.dx + (m.w * ts) / 2;
           const gy = m.dy + (m.h * ts) / 2;
-          ctx.font = `bold ${Math.max(8, Math.floor(ts * 0.55))}px "Courier New", ui-monospace, monospace`;
+          // Under a tileset the baked roofs convey type, so the legibility glyphs go small + faint
+          // to stop them from masking the satellite art; the procedural path keeps the bold label.
+          const skin = this.hasTileset;
+          ctx.font = `bold ${Math.max(skin ? 7 : 8, Math.floor(ts * (skin ? 0.34 : 0.55)))}px "Courier New", ui-monospace, monospace`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.lineWidth = Math.max(2, ts * 0.12);
-          ctx.strokeStyle = 'rgba(12, 10, 18, 0.85)';
+          ctx.lineWidth = Math.max(skin ? 1.5 : 2, ts * (skin ? 0.08 : 0.12));
+          ctx.strokeStyle = `rgba(12, 10, 18, ${skin ? 0.5 : 0.85})`;
           ctx.strokeText(glyph, gx, gy);
-          ctx.fillStyle = 'rgba(240, 236, 214, 0.92)';
+          ctx.fillStyle = `rgba(240, 236, 214, ${skin ? 0.62 : 0.92})`;
           ctx.fillText(glyph, gx, gy);
         }
       }
