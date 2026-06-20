@@ -88,7 +88,7 @@ const GLYPH_MIN_TS = 16;
 // flipbook cycled in the low-alpha overlay (the surface undulates) while it scrolls with the wind.
 const WATER_FRAMES = 16;
 const WATER_FPS = 12;
-const WATER_SLOSH_FPS = 7; // shear-cycle advance rate for the precomputed per-tile slosh flipbook
+const WATER_SLOSH_FPS = 5; // shear-cycle advance rate for the precomputed per-tile slosh flipbook
 const ASPHALT_GROUND_COLOR = '#3a3833'; // paved-over redlined open ground
 const ASPHALT_GROUND_ALPHA = 0.72; // strength at full redline grade (faded by depaveAsphalt near greens)
 const GARBAGE_WEAR = 150; // wear at/above which a worn empty tile shows discarded junk
@@ -1268,7 +1268,11 @@ export class Renderer {
     // murdered FPS over hundreds of water tiles (Maddy: "precompute we can do to animate it better").
     // The shear-frame advances along the prevailing wind, so the waves TRAVEL downwind. Clipped once
     // to the cached water mask (no per-tile clip → no shoreline bleed). Low-alpha foam rides on top.
-    if (this.hasTileset && this.waterSlosh.size > 0 && ts >= 4) {
+    // Skip the per-tile slosh when fully zoomed OUT (zoom 1): at zoom 1 the WHOLE map's water tiles are
+    // on screen, so hundreds–thousands of per-tile blits/frame tank FPS — and the slosh is sub-pixel
+    // there anyway. The static (cached) base water shows instead; slosh kicks in at zoom ≥ 2 where the
+    // visible tile count is bounded (Maddy: water animation tanks perf zoomed out).
+    if (this.hasTileset && this.waterSlosh.size > 0 && camera.zoom >= 2) {
       const path = this.tileMask(world, camera, 'water', (m, i) => m.water[i] !== 0);
       if (path) {
         const t = performance.now() / 1000;
@@ -1360,19 +1364,26 @@ export class Renderer {
       ctx.fillRect(Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
       ctx.globalAlpha = 1;
       // Heavily demand-pathed empty ground accumulates JUNK (discarded mattresses/couches/debris) and,
-      // at the worst-worn, an ENCAMPMENT tent — the neglect + displacement made visible (Maddy). Under
-      // a tileset these are sprites; the procedural look keeps the trash specks. Pick is a stable
-      // per-tile hash (no frame flicker); drawn at ground level, so agents pass over them.
+      // at the worst-worn, an ENCAMPMENT tent — the neglect + displacement made visible (Maddy). The
+      // sprites are SCALED DOWN and SCATTERED at a stable per-tile jitter (not dead-centre) so they read
+      // naturally (Maddy). Sprite branch gated to zoom ≥ 2 (at zoom 1 they're sub-pixel + too many to
+      // blit); the brown wear tint + procedural specks cover the rest. Stable picks → no frame flicker.
       const tents = this.hasTileset ? this.ambientSprites?.encampments : undefined;
       const junk = this.hasTileset ? this.ambientSprites?.junk : undefined;
-      if (tents && tents.length > 0 && wear >= ENCAMPMENT_WEAR) {
-        const img = tents[surfaceVariantIndex(wx, wy, tents.length)]!;
-        const es = ts * 0.92;
-        ctx.drawImage(img, sx + (ts - es) / 2, sy + (ts - es) / 2, es, es);
-      } else if (junk && junk.length > 0 && wear >= GARBAGE_WEAR) {
-        const img = junk[surfaceVariantIndex(wx, wy, junk.length)]!;
-        const js = ts * 0.7;
-        ctx.drawImage(img, sx + (ts - js) / 2, sy + (ts - js) / 2, js, js);
+      const tileHash = Math.imul(((wx * 73856093) ^ (wy * 19349663)) >>> 0, 0x9e3779b1) >>> 0;
+      if (camera.zoom >= 2 && tents && tents.length > 0 && wear >= ENCAMPMENT_WEAR) {
+        const img = tents[(tileHash >>> 16) % tents.length]!;
+        const es = ts * 0.55; // scaled down — a tent, not a tile-filling blob
+        ctx.drawImage(img, sx + ((tileHash & 0xff) / 255) * (ts - es), sy + (((tileHash >>> 8) & 0xff) / 255) * (ts - es), es, es);
+      } else if (camera.zoom >= 2 && junk && junk.length > 0 && wear >= GARBAGE_WEAR) {
+        // scatter 1–2 small junk pieces across the tile (more as the path deepens), each jittered
+        const pieces = wear >= (GARBAGE_WEAR + ENCAMPMENT_WEAR) / 2 ? 2 : 1;
+        for (let pc = 0; pc < pieces; pc++) {
+          const hh = Math.imul((tileHash ^ Math.imul(pc + 1, 0x85ebca6b)) >>> 0, 0xc2b2ae35) >>> 0;
+          const img = junk[(hh >>> 16) % junk.length]!;
+          const js = ts * (0.32 + ((hh & 0x7) / 7) * 0.12); // 0.32..0.44, varied small
+          ctx.drawImage(img, sx + ((hh & 0xff) / 255) * (ts - js), sy + (((hh >>> 8) & 0xff) / 255) * (ts - js), js, js);
+        }
       } else if (!this.hasTileset && wear > 120) {
         ctx.fillStyle = '#2e2a22'; // procedural: trash specks, more as the path deepens
         const specks: ReadonlyArray<readonly [number, number]> = [
@@ -1565,12 +1576,12 @@ export class Renderer {
     // dots, cyclists yellow, tram riders cyan, rail riders violet. (Drivers are CARS — drawn above
     // from ambient.cars — and their last-mile walk is a warm dot.) On a STREET a ped hugs the kerb
     // (sidewalk); crossing open ground (a demand path) it stays centred.
-    // Under a tileset, walkers + cyclists are tiny rotated SPRITES (like the cars) — a 4-frame walk
-    // cycle / 2-frame pedal, rotated to heading, phase-offset per ped so they're not in lockstep.
-    // Procedural (or missing sprites) keeps the tone-coded mode dots.
+    // Under a tileset, walkers + cyclists are tiny rotated SPRITES (like the cars), rotated to heading.
+    // The sprite is FIXED per ped (a stable hash of its identity) — NOT cycled through the frames: the
+    // frames are different-coloured PEOPLE, not gait frames, so cycling them flashed "rainbow road"
+    // (Maddy). Procedural (or missing sprites) keeps the tone-coded mode dots.
     const pedSprites = this.hasTileset ? this.ambientSprites?.peds : undefined;
     const cyclistSprites = this.hasTileset ? this.ambientSprites?.cyclists : undefined;
-    const walkPhase = Math.floor(performance.now() / 160); // ~6 fps gait
     const pedSize = Math.max(1, ts * 0.16);
     for (const p of ambient.peds) {
       if (p.phase === 'inside' || p.phase === 'driving') continue; // inside a building, or riding its car
@@ -1586,8 +1597,9 @@ export class Renderer {
       const isBike = (p.mode ?? TravelMode.Walk) === TravelMode.Bike;
       const set = isBike ? cyclistSprites : pedSprites;
       if (set && set.length > 0) {
-        const phase = walkPhase + Math.round(p.x * 2 + p.y * 3); // per-ped gait offset
-        const img = set[((phase % set.length) + set.length) % set.length]!;
+        // a STABLE per-ped pick (its household/car id) → one consistent person, never cycling
+        const seed = (p.homeTile ?? p.carId ?? Math.round(p.x) * 131 + Math.round(p.y)) >>> 0;
+        const img = set[(Math.imul(seed, 2654435761) >>> 0) % set.length]!;
         const hv = dirVector(p.dir);
         const angle = Math.atan2(hv.dx, -hv.dy); // sprite faces north; rotate CW to heading (like cars)
         const ss = ts * (isBike ? 0.46 : 0.4);
