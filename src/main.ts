@@ -682,6 +682,9 @@ export function main(): void {
   // opening overlay is up); both delegate to cycleOverlay — the same body the dock
   // buttons call.
   window.addEventListener('keydown', (event) => {
+    // Let browser/OS shortcuts through — overlay hotkeys (e.g. 'r' for redline) must NOT hijack
+    // Cmd/Ctrl+R (reload), Cmd+S, etc. (Maddy playtest).
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
     const kind = compositeKeyFor(event.key, overlayActive);
     if (kind === null) return;
     event.preventDefault();

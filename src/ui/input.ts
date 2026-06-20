@@ -109,8 +109,25 @@ export function attachInput(canvas: HTMLCanvasElement, camera: Camera, handlers:
     suppressPan = false;
   });
 
+  // Safety net: a window-level release clears the drag even if the canvas pointerup is missed (capture
+  // not granted + released off-canvas). Fires AFTER the canvas handler for captured pointers, so it's a
+  // no-op in the normal case and never applies a tool on its own.
+  const endDrag = (): void => {
+    dragging = false;
+    suppressPan = false;
+  };
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
+
   canvas.addEventListener('pointermove', (e) => {
     if (dragging) {
+      // If a move arrives with NO button held, the pointerup was missed (capture failed + released
+      // off-canvas) — stop the drag instead of panning forever with the cursor (Maddy playtest bug).
+      if (e.buttons === 0) {
+        dragging = false;
+        suppressPan = false;
+        return;
+      }
       if (suppressPan) return; // line-tool paint drag: no pan
       // Capture-stable pan: delta from the last clientX/Y (NOT e.movementX/Y, which
       // is unreliable under capture in WebKit). camera.pan takes screen-pixel deltas.
@@ -156,6 +173,7 @@ export function attachInput(canvas: HTMLCanvasElement, camera: Camera, handlers:
   );
 
   window.addEventListener('keydown', (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return; // don't shadow browser/OS shortcuts
     switch (e.key) {
       case 'ArrowLeft':
         camera.pan(ARROW_PAN_PX, 0);

@@ -35,3 +35,10 @@ Running capture of Maddy's playtest reports so they're absorbed without thrashin
 - Absorb playtest reports by appending here and continuing — don't context-switch on every message.
 - Feature requests: LOG, don't immediately build.
 - Never navigate/reload Maddy's real browser; verify on the isolated container + the 4173 frozen preview.
+
+## 2026-06-20 — input bugs (batch 2)
+
+- [x] **'r' (redline map) hijacks Cmd/Ctrl+R** (browser reload). Keydown handler must ignore the overlay
+  hotkeys when a modifier (meta/ctrl) is held.
+- [x] **Drag-to-pan doesn't always release** after lifting finger/mouse — map keeps panning with cursor.
+  pointerup/pointercancel not reliably clearing the drag state (pointer capture?).
