@@ -91,11 +91,11 @@ Renderer/look:
 - [x] **Planted median (11): has a building in it + doesn't form a nice line** — should read as a clean
   green median strip, no building.
 Sim/agents:
-- [ ] **Travelers can path THROUGH dividers/medians — should be blocked.** DIAGNOSED: carTraversable() explicitly includes PlantedMedian (ambientContent ~1104) → cars drive on it; ped pathing likely same. Fix needs care (road routing must still work around the barrier on median-containing corridors) + freeway jersey-divider no-cross.
+- [x] **Travelers can path THROUGH dividers/medians — blocked** (`9e0e7946`). Cars were already blocked via canDrive; the gap was peds — isWalkable now excludes PlantedMedian so they route around the barrier.
 - (feat) **Rails need TRAINS** (ambient trains running on rail).
-- [→] **People walk around green plots with no destination** — DECIDED (Maddy 2026-06-20): no ambient
-  stroller pool anymore; EVERY agent paths to a real destination, and green/leisure tiles join the agent
-  destination loop. → THE BACKLOG §2.
+- [x] **People walk around green plots with no destination** — DONE (`80b56fdb`,`a6e42ddc`): retired the
+  ambient stroller pool; every agent paths to a real destination; greens are a Leisure stop in the daily
+  round (reachability-gated, restorative). → THE BACKLOG §2.
 
 ## 2026-06-20 — batch 6 (deferred)
 

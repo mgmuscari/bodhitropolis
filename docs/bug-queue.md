@@ -18,21 +18,24 @@ The dated sections below this one are the **archive** (✅ done + diagnoses kept
 of each group. Branch `playtest/overnight-batch` (sequential, one branch).
 
 ### 1 — Live-game bugs (playtest loop, do first)
-- 🔴 **Travelers path THROUGH dividers/medians — must be blocked** (sim). `carTraversable()` includes
-  `PlantedMedian` (ambientContent ~1104) → cars drive on it; peds likely same. Fix must keep road
-  routing *around* the barrier on median corridors + freeway jersey-divider no-cross. (Couples to the
-  destination-loop work in §2.)
+- ✅ **Travelers path THROUGH dividers/medians — blocked** (`9e0e7946`). Cars were already blocked
+  (`canDrive`/`carPassable` exclude the median via its lane-role + `isRoadKind(11)=false`); the gap was
+  peds — `isWalkable` let them cut across the planted median (not a zoned plot). Now excluded from the
+  walkable set, so travelers route around the barrier. Freeway through-lane crossing already limited-
+  access via `canDrive`.
 - 🔴 **Taxi/van drives BACKWARDS** — sprite faces wrong way for travel. Add a *facing* check to the
   ambient validator (vehicle FRONT must be at the TOP; renderer rotates assuming north-facing);
   reject/normalize + re-bake offenders. Most cars re-baked top-down already, but facing is unverified.
+  (Bake-tool change — needs the LMStudio vision server up to re-bake.)
 - 🔴 **Rail crossings should render** where rail crosses road (renderer).
 
-### 2 — Agent destination model (DECIDED — Maddy 2026-06-20)
-- 🔴 **No ambient stroller pool — EVERY agent paths to a real destination.** Retire the catch-all
-  wander/ambient-stroller branch entirely; bring **green/leisure tiles into the agent destination loop**
-  as first-class trip targets (parks/greens/rewilded become "leisure" destinations with a dwell), so
-  "people walking green plots with no destination" become real trips, not loiterers. This subsumes the
-  old leisure-walker question. Couples with §1 divider-blocking (destinations must be reachability-gated).
+### 2 — Agent destination model (DECIDED — Maddy 2026-06-20) — ✅ DONE
+- ✅ **No ambient stroller pool — EVERY agent paths to a real destination** (`80b56fdb`, `a6e42ddc`).
+  Retired the catch-all wander branch + `spawnPeds`; a destination-less ped despawns. Added a **Leisure
+  stop category** (parks/gardens/rewilded/parklets) to the daily round, reachability-gated, so green
+  tiles draw REAL trips, not loiterers. Greens now lift wellbeing carried home (parks heal → occupancy),
+  closing the heal loop. Foot agents are now only citizens (home→work→shop→lifestyle→leisure), last-mile
+  walkers, and cruisers.
 
 ### 3 — Live look / animation polish
 - 🔴 **Lake water doesn't slosh — per-tile AFFINE transforms.** Apply an oscillating affine (skew +
