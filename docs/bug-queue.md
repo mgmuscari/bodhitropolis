@@ -63,8 +63,11 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   oriented along the track. Heavy rail (`Rail`) only — elevated rail/trams are a follow-up.
 - 🔵 **Multi-tile plots get built-in parking** — ≥2×2 plots reserve a `ParkingLot` edge tile facing a
   drivable neighbour; the STRUCTURAL fix for walled-off-job churn. `docs/design/multitile-parking.md`.
-- 🔵 **Smog diffusion + rain→runoff** — isotropic smog diffusion + occasional rain relocating smog→ground
-  →water (dilution <1, pollution relocates not vanishes). `docs/design/pollution-weather.md`.
+- ✅ **Smog diffusion + rain→runoff** (`10742864`) — `diffusePollution` (isotropic conservative spread,
+  run with the wind drift so a plume streaks AND fattens) + `applyRain` (a RAIN_CADENCE storm washes
+  smog→ground, then ground→adjacent-water/downhill, diluted per hop → harm relocates toward the low
+  redlined banks, doesn't vanish). Live, non-hashed, deterministic; unit-tested. Cadence/dilution +
+  a rain visual are tunable follow-ups. `docs/design/pollution-weather.md`.
 - 🟡 **Unhoused agents — shelter + days** — first-cut COUNT shipped; deeper mechanics await: visible
   sheltering agents (encampments), per-event displacement, shelter kinds. `docs/design/unhoused-residents.md`.
 
