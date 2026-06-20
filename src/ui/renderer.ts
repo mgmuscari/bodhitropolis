@@ -18,6 +18,7 @@ import {
   renderKeyspace,
   variantKey,
   surfaceVariantIndex,
+  terrainTileTransform,
   type FootprintPos,
 } from './renderKey';
 import { surfaceKey } from './tileset';
@@ -746,8 +747,22 @@ export class Renderer {
         const dx = Math.floor(sx);
         const dy = Math.floor(sy);
 
-        const terrain = this.atlas.get(`${kindOf(map, i)}-${bandOf(map.elevation[i]!)}`)!;
-        ctx.drawImage(terrain, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
+        const tkind = kindOf(map, i);
+        const terrain = this.atlas.get(`${tkind}-${bandOf(map.elevation[i]!)}`)!;
+        // Under a tileset, rotate/mirror ISOTROPIC terrain per-tile (a deterministic dihedral hash)
+        // to break the baked tile's repeated-texture plaid. River is directional — leave it untouched.
+        // The procedural path (hasTileset false) keeps the plain 1:1 blit, byte-identical.
+        if (this.hasTileset && tkind !== 'river') {
+          const t = terrainTileTransform(tx, ty);
+          ctx.save();
+          ctx.translate(dx + ts / 2, dy + ts / 2);
+          if (t.rot) ctx.rotate((t.rot * Math.PI) / 2);
+          if (t.flip) ctx.scale(-1, 1);
+          ctx.drawImage(terrain, 0, 0, BASE_TILE, BASE_TILE, -ts / 2, -ts / 2, ts, ts);
+          ctx.restore();
+        } else {
+          ctx.drawImage(terrain, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
+        }
 
         const built = map.built[i]!;
         if (built !== 0) {

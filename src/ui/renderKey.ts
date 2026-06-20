@@ -164,6 +164,27 @@ export function surfaceVariantIndex(x: number, y: number, count: number): number
   return (h >>> 0) % count;
 }
 
+/** A dihedral (square-symmetry) tile transform: `rot` quarter-turns in [0,4) plus a mirror. */
+export interface DihedralTransform {
+  rot: number;
+  flip: boolean;
+}
+
+/**
+ * The dihedral transform tile (x, y) uses to break the repeated-texture "plaid" of a baked,
+ * ISOTROPIC terrain tile (grass/meadow/bare/forest/water — NOT river, which is directional). A
+ * direction-neutral spread hash (mirroring {@link surfaceVariantIndex}, so adjacent tiles land far
+ * apart) yields all 8 states: 2 bits rotation + 1 bit mirror. Deterministic, integer ops only
+ * (allowlist-safe). The renderer applies it only under an active tileset, so the procedural path
+ * stays byte-identical.
+ */
+export function terrainTileTransform(x: number, y: number): DihedralTransform {
+  let h = Math.imul((x | 0) ^ 0x9e3779b1, 0x85ebca6b);
+  h = Math.imul(h ^ ((y | 0) + 0x27d4eb2f), 0xc2b2ae35);
+  h ^= h >>> 13;
+  return { rot: (h >>> 0) & 3, flip: ((h >>> 3) & 1) === 1 };
+}
+
 /**
  * The exhaustive, deterministic enumeration of every key {@link builtRenderKey}
  * can return. Order is stable (road kinds × masks, then each transport prefix ×

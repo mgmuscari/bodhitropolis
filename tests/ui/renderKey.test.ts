@@ -5,6 +5,7 @@ import {
   footprintCellKey,
   variantKey,
   surfaceVariantIndex,
+  terrainTileTransform,
   type FootprintPos,
 } from '../../src/ui/renderKey';
 import { BuiltKind, isTransportKind } from '../../src/engine/fabric';
@@ -253,5 +254,48 @@ describe('variantKey + surfaceVariantIndex (tile-map variant cycling, anti-plaid
     // every single time (which would be a regular stripe) — a spread hash, not a pattern.
     expect(neighborDiffers).toBeGreaterThan(total * 0.4);
     expect(neighborDiffers).toBeLessThan(total); // not a perfect stripe
+  });
+});
+
+describe('terrainTileTransform: dihedral anti-plaid for isotropic terrain', () => {
+  it('returns a quarter-turn rot in [0,4) and a boolean flip', () => {
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        const t = terrainTileTransform(x, y);
+        expect(t.rot).toBeGreaterThanOrEqual(0);
+        expect(t.rot).toBeLessThan(4);
+        expect(Number.isInteger(t.rot)).toBe(true);
+        expect(typeof t.flip).toBe('boolean');
+      }
+    }
+  });
+
+  it('is deterministic per tile', () => {
+    expect(terrainTileTransform(12, 34)).toEqual(terrainTileTransform(12, 34));
+  });
+
+  it('exercises all 8 dihedral states across a region (real variety)', () => {
+    const seen = new Set<string>();
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        const t = terrainTileTransform(x, y);
+        seen.add(`${t.rot}${t.flip ? 'F' : ''}`);
+      }
+    }
+    expect(seen.size).toBe(8); // 4 rotations × 2 flips all appear
+  });
+
+  it('is direction-neutral: adjacent tiles rarely match (no banded plaid)', () => {
+    let matches = 0;
+    const N = 32;
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N - 1; x++) {
+        const a = terrainTileTransform(x, y);
+        const b = terrainTileTransform(x + 1, y);
+        if (a.rot === b.rot && a.flip === b.flip) matches++;
+      }
+    }
+    // 8 states → ~1/8 of horizontal neighbours collide by chance; assert well under uniform plaid.
+    expect(matches).toBeLessThan((N * (N - 1)) / 4);
   });
 });
