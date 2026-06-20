@@ -158,6 +158,15 @@ const SAMPLES_PER_SUBSTEP = 8;
 const CAR_SPEED = 0.12;
 const PED_SPEED = 0.05;
 
+// Trains (Maddy feature: rails need trains). An ambient agent that rides the RAIL network as a snake
+// of cells — the head advances tile to tile, each arrival shifts a new tile onto the head and drops
+// the tail, so the cars follow the exact track (including its curves). It shuttles: at a dead-end the
+// rail step returns the U-turn, so the train runs back the other way. Live layer, never hashed.
+const TRAIN_SPEED = 0.16; // tiles/substep — a touch faster than a car
+const TRAIN_LEN = 4; // cars per train (head + 3)
+const TRAIN_CAP = 6; // hard ceiling on concurrent trains
+const TRAIN_RAIL_PER = 26; // one train per this many rail tiles (so a longer network runs more)
+
 // Traffic pileups (Maddy): cars sharing a tile SLOW DOWN, so congestion becomes physical — bunching,
 // crawling bottlenecks — not just the lingering `traffic` field. Each car beyond the first on a tile
 // adds PILEUP_K to the speed-divisor; the multiplier floors at PILEUP_MIN so a jam crawls but never
@@ -673,6 +682,19 @@ export interface Flock {
   birds: Bird[];
 }
 
+/** An ambient TRAIN riding the rail network as a snake of cells (Maddy: rails need trains). `cells`
+ *  are tile indices, HEAD FIRST; the head also has a fractional position (hx, hy) for smooth motion
+ *  toward its committed next tile (tx, ty) along `dir`. On reaching a tile a new head tile is pushed
+ *  and the tail dropped, so the cars trace the exact track. Live layer, never hashed. */
+export interface Train {
+  cells: number[];
+  hx: number;
+  hy: number;
+  tx: number;
+  ty: number;
+  dir: number;
+}
+
 /** A parking lot the ambient layer can store cars in: its centre, its bounding box (for the
  *  nearest-TILE search — a car parks in a big lot from the edge it arrives at, not only when near
  *  the far-off centre), and its stall centres (float world coords, capacity = stalls.length).
@@ -713,6 +735,8 @@ export interface AmbientState {
    *  inflicts harm, not where residents are blamed. Renderer-side, never hashed. */
   policeViolence: Map<number, number>;
   birds: Flock[];
+  /** Ambient trains riding the rail network (Maddy: rails need trains). Live, never hashed. */
+  trains: Train[];
   /** Leftover sub-substep time carried between stepAmbient calls. */
   accMs: number;
   /** The parking lots that STORE the moving cars: a trip-car parks in the nearest one on
@@ -798,6 +822,7 @@ export function createAmbientState(rng?: Rng): AmbientState {
     policeTick: 0,
     policeViolence: new Map(),
     birds: [],
+    trains: [],
     accMs: 0,
     buildingHealth: new Map(),
     wear: new Map(),
@@ -1256,6 +1281,20 @@ export function nextRoadStep(
   // straight-biased pick — but over canDrive edges, so a `through` car stays on-axis and a car can
   // only cross/turn onto a freeway where it's an interchange/end (limited access).
   return pickStep(map, x, y, fromDir, rng, (nx, ny) => canDrive(map, x, y, nx, ny), CAR_STRAIGHT_WEIGHT, recent);
+}
+
+/** A tile a TRAIN can ride: an at-grade heavy-rail tile (Rail). (Elevated rail / trams are a
+ *  follow-up — heavy rail is the train network.) */
+function railTraversable(map: GameMap, x: number, y: number): boolean {
+  return map.inBounds(x, y) && map.built[map.idx(x, y)] === BuiltKind.Rail;
+}
+
+/** The train motion seam: from rail tile (x, y), the chosen connected rail neighbour direction
+ *  (0..3). Strongly straight-biased (a train glides through junctions) over rail edges; NO recent
+ *  list, so at a dead-end `pickStep` returns the U-turn and the train SHUTTLES back. -1 only if the
+ *  tile has no rail neighbour at all (an isolated stub) → the caller despawns. Deterministic. */
+export function nextRailStep(map: GameMap, x: number, y: number, fromDir: number, rng: Rng): number {
+  return pickStep(map, x, y, fromDir, rng, (nx, ny) => railTraversable(map, nx, ny), CAR_STRAIGHT_WEIGHT);
 }
 
 // --- Despawn predicates --------------------------------------------------
@@ -2979,6 +3018,70 @@ export function pedDespawns(map: GameMap, p: Ped): boolean {
   return p.phase !== 'driving' && p.walkTo === undefined && pedOffNetwork(map, p);
 }
 
+/** Top the train fleet up toward one per {@link TRAIN_RAIL_PER} rail tiles (capped). When below
+ *  target, scans for rail tiles that have a rail neighbour (so the train can move) and seeds one
+ *  there — all cells stacked on the start tile, stretching out as it rides. The scan runs only while
+ *  under target (trains persist + shuttle), so it's idle once the network is populated. */
+export function spawnTrains(state: AmbientState, map: GameMap, rng: Rng): void {
+  let railCount = 0;
+  const starts: number[] = [];
+  for (let y = 0; y < map.height; y++) {
+    for (let x = 0; x < map.width; x++) {
+      if (!railTraversable(map, x, y)) continue;
+      railCount++;
+      // a viable start has at least one rail neighbour to roll onto
+      for (let d = 0; d < 4; d++) {
+        if (railTraversable(map, x + DIR_DX[d]!, y + DIR_DY[d]!)) {
+          starts.push(map.idx(x, y));
+          break;
+        }
+      }
+    }
+  }
+  const target = Math.min(TRAIN_CAP, Math.floor(railCount / TRAIN_RAIL_PER));
+  if (state.trains.length >= target || starts.length === 0) return;
+  const idx = starts[rng.nextInt(starts.length)]!;
+  const sx = idx % map.width;
+  const sy = (idx - sx) / map.width;
+  const dir = nextRailStep(map, sx, sy, -1, rng); // any rail neighbour (no incoming heading)
+  if (dir < 0) return;
+  state.trains.push({
+    cells: [idx],
+    hx: sx,
+    hy: sy,
+    tx: sx + DIR_DX[dir]!,
+    ty: sy + DIR_DY[dir]!,
+    dir,
+  });
+}
+
+/** Advance a train along its rail; returns false when it should despawn (its head tile is no longer
+ *  rail, or the line vanished under it). On reaching its target tile it pushes that tile onto the head
+ *  and drops the tail (the cars trace the track), then picks the next rail step (U-turn at a dead-end
+ *  → shuttles back). */
+function stepTrain(map: GameMap, t: Train, rng: Rng): boolean {
+  if (!railTraversable(map, Math.round(t.hx), Math.round(t.hy))) return false;
+  const dist = Math.abs(t.tx - t.hx) + Math.abs(t.ty - t.hy);
+  if (dist <= TRAIN_SPEED) {
+    t.hx = t.tx;
+    t.hy = t.ty;
+    const head = map.idx(t.tx, t.ty);
+    if (t.cells[0] !== head) {
+      t.cells.unshift(head);
+      if (t.cells.length > TRAIN_LEN) t.cells.pop();
+    }
+    const nd = nextRailStep(map, t.tx, t.ty, opposite(t.dir), rng);
+    if (nd < 0) return false; // isolated stub → despawn
+    t.dir = nd;
+    t.tx = t.tx + DIR_DX[nd]!;
+    t.ty = t.ty + DIR_DY[nd]!;
+  } else {
+    t.hx += DIR_DX[t.dir]! * TRAIN_SPEED;
+    t.hy += DIR_DY[t.dir]! * TRAIN_SPEED;
+  }
+  return true;
+}
+
 function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   // 1. Despawn anything whose substrate vanished (read-only self-healing). See pedDespawns for the
   //    exemptions (last-mile walkers + hidden drivers).
@@ -2998,6 +3101,9 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   spawnCitizens(state, map, rng);
   spawnFlocks(state, map, rng);
   spawnCruisers(state, map, rng); // top the patrol fleet up from the precincts
+  spawnTrains(state, map, rng); // ambient trains on the rail network
+  // Advance the trains along their rails; a train whose line vanished underneath despawns.
+  state.trains = state.trains.filter((t) => stepTrain(map, t, rng));
 
   // Per-tile, per-DIRECTION histogram of MOVING cars (a snapshot at substep start), for the pileup
   // slowdown: a car on a crowded tile creeps (congestion made physical). Counts free + owned-being-

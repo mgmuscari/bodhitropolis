@@ -32,6 +32,7 @@ import {
   isPedSubstrate,
   birdSpawnAt,
   nextRoadStep,
+  nextRailStep,
   reachedPlot,
   congestionSpeedMult,
   congestionCount,
@@ -408,6 +409,36 @@ describe('agent substrate invariants (Maddy: cars park on freeways, peds cross w
     m.built[m.idx(4, 4)] = BuiltKind.RoadStreet;
     expect(canDrive(m, 2, 4, 3, 4)).toBe(false); // can't drive onto the median
     expect(canDrive(m, 4, 4, 3, 4)).toBe(false);
+  });
+
+  it('nextRailStep follows a straight rail line and reverses at a dead end', () => {
+    const m = new GameMap(12, 4);
+    for (let x = 1; x <= 10; x++) m.built[m.idx(x, 2)] = BuiltKind.Rail;
+    expect(nextRailStep(m, 5, 2, 3 /*came from west*/, createRng(1))).toBe(1); // East — straight on
+    expect(nextRailStep(m, 10, 2, 3 /*came from west*/, createRng(1))).toBe(3); // dead-end → reverse West
+  });
+
+  it('a train spawns on a rail line and rides it, every car on rail (Maddy: rails need trains)', () => {
+    const m = new GameMap(40, 4);
+    for (let x = 1; x <= 38; x++) m.built[m.idx(x, 2)] = BuiltKind.Rail; // ≥ TRAIN_RAIL_PER → one train
+    const state = createAmbientState();
+    for (let s = 0; s < 80; s++) stepAmbient(state, m, createRng(7), 60);
+    expect(state.trains.length).toBeGreaterThan(0);
+    const t = state.trains[0]!;
+    expect(t.cells.length).toBeGreaterThan(1); // stretched into segments as it moved
+    for (const c of t.cells) {
+      const cx = c % m.width;
+      const cy = (c - cx) / m.width;
+      expect(m.built[m.idx(cx, cy)]).toBe(BuiltKind.Rail); // every car sits on rail
+    }
+  });
+
+  it('no train spawns where there is no rail', () => {
+    const m = new GameMap(12, 8);
+    for (let x = 1; x <= 10; x++) m.built[m.idx(x, 4)] = BuiltKind.RoadStreet;
+    const state = createAmbientState();
+    for (let s = 0; s < 40; s++) stepAmbient(state, m, createRng(3), 60);
+    expect(state.trains.length).toBe(0);
   });
 
   it('a destination-less ped despawns — no ambient stroller pool, everyone paths somewhere (Maddy 2026-06-20)', () => {

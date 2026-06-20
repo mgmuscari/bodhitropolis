@@ -1468,6 +1468,53 @@ export class Renderer {
       ctx.fillRect(Math.floor(sx - lb / 2), Math.floor(sy - cruiserSize / 2), lb, Math.max(1, cruiserSize * 0.34));
     }
 
+    // Trains: a snake of cars riding the rails (Maddy: rails need trains). Each cell is drawn as a
+    // car oriented along the LOCAL track direction (toward the next-newer cell); the head is the
+    // locomotive (interpolated for smooth motion + a bright nose). Always drawn (procedural + tileset).
+    const carLen = Math.max(3, ts * 0.82);
+    const carWid = Math.max(2, ts * 0.46);
+    for (const tr of ambient.trains) {
+      for (let c = tr.cells.length - 1; c >= 0; c--) {
+        // position: the head rides its interpolated (hx,hy); the rest sit on their tile centres.
+        let cx: number;
+        let cy: number;
+        if (c === 0) {
+          cx = tr.hx;
+          cy = tr.hy;
+        } else {
+          const idx = tr.cells[c]!;
+          cx = idx % mapW;
+          cy = (idx - (cx)) / mapW;
+        }
+        const { sx, sy } = camera.worldToScreen(cx + 0.5, cy + 0.5);
+        if (sx < -ts || sx > w + ts || sy < -ts || sy > h + ts) continue;
+        // heading: toward the car AHEAD (cell c-1) so each car aligns with the track; the head uses
+        // its committed dir. The car ahead of cell 1 is the head at its interpolated (hx,hy).
+        let hx: number;
+        let hy: number;
+        if (c === 0) {
+          const v = dirVector(tr.dir);
+          hx = v.dx;
+          hy = v.dy;
+        } else {
+          const ahead = tr.cells[c - 1]!;
+          const ax = c - 1 === 0 ? tr.hx : ahead % mapW;
+          const ay = c - 1 === 0 ? tr.hy : (ahead - (ahead % mapW)) / mapW;
+          hx = ax - cx;
+          hy = ay - cy;
+        }
+        const angle = Math.atan2(hx, -hy); // sprite long axis faces north; rotate to the track heading
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(angle);
+        ctx.fillStyle = c === 0 ? '#b8392f' : '#c9ccd6'; // red locomotive, silver cars
+        ctx.fillRect(-carWid / 2, -carLen / 2, carWid, carLen);
+        ctx.fillStyle = '#2b2f3a'; // window band
+        ctx.fillRect(-carWid / 2, -carLen * 0.18, carWid, Math.max(1, carLen * 0.22));
+        ctx.restore();
+      }
+    }
+
     // Citizens on foot, coloured by TRAVEL MODE so the modal shift is legible: walkers are warm
     // dots, cyclists yellow, tram riders cyan, rail riders violet. (Drivers are CARS — drawn above
     // from ambient.cars — and their last-mile walk is a warm dot.) On a STREET a ped hugs the kerb
