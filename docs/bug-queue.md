@@ -46,7 +46,9 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   translation + shear (`waterSloshAt`, pure + unit-tested, slow angular drift, neighbours out of
   phase so waves travel), clipped once to the cached water mask (bounded, no land bleed). Foam
   flipbook rides on top for twinkle. (Amplitudes are tunable playtest-feel knobs.)
-- 🟡 **Building variety** — 2 variants/1×1 kind shipped; want 5–10 per kind.
+- ✅ **Building variety — 5 variants/kind** (`b0642ac5`) — baked v3–v5 for the 7 repeating 1×1 kinds
+  (R/C/I + ADU) ×2 tiers (42 tiles, floodfill-clean); renderer auto-derives the count, picks across 6
+  per parcel. (Could push toward 10 eventually, but 5 reads varied.)
 - ✅ **Broader bake validation** (`0c3ad03e`, `ae1a6e89`) — added the FACING check (§1, vehicles) and a
   deterministic `isIntact`/`centerOpacity` floodfill check; scanned all 138 center building tiles → no
   floodfilled buildings (the reactive clinic/car fixes held; the only flags are surface kinds 11/22
