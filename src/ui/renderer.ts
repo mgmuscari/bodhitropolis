@@ -665,8 +665,13 @@ export class Renderer {
   // Ambient sprite catalog (cars/flora/smog/props), loaded async; null until set. Under a tileset,
   // cars draw as tiny rotated car sprites ("micro machines") and smog plumes drift over polluted tiles.
   private ambientSprites: AmbientSprites | null = null;
-  // Animated water flipbook (baked from the graded water tile on tileset apply); [] = static water.
+  // Procedural water tiles: frame 0 is the static base (baked into the atlas); the set is the tileable
+  // texture scrolled at low alpha for the animated swirl/waves. [] = no tileset.
   private waterFrames: CanvasImageSource[] = [];
+  // Cached water clip mask (screen-space Path2D of visible water tiles) so the animated water overlay
+  // is O(1) draws/frame (clip + 2 pattern fills) instead of a per-tile row-major loop (the antipattern).
+  private waterMaskPath: Path2D | null = null;
+  private waterMaskKey = '';
   // Cached base pass (terrain + built + overlay) on an offscreen canvas. Rebuilt
   // ONLY when invalidated (map/camera/overlay change), then blitted 1:1 onto the
   // visible canvas each frame. The hover preview and the ambient sprites live in
@@ -735,6 +740,31 @@ export class Renderer {
   setAmbientSprites(sprites: AmbientSprites): void {
     this.ambientSprites = sprites;
     this.invalidateBase(); // flora canopies are baked into the cached base — repaint once loaded
+  }
+
+  /** A cached screen-space clip path of the visible water tiles, rebuilt only when the screen alignment
+   *  (visible range + zoom + sub-tile offset) changes — so the animated water overlay clips in O(1)
+   *  draws/frame instead of a per-tile row-major loop (the top-bar antipattern). Null = no water in view. */
+  private waterMask(world: WorldState, camera: Camera): Path2D | null {
+    const ts = camera.tileSize;
+    const range = camera.visibleTileRange();
+    const o = camera.worldToScreen(range.x0, range.y0);
+    const key = `${range.x0},${range.y0},${range.x1},${range.y1},${ts.toFixed(2)},${Math.floor(o.sx)},${Math.floor(o.sy)}`;
+    if (key === this.waterMaskKey) return this.waterMaskPath;
+    const map = world.map;
+    const path = new Path2D();
+    let any = false;
+    for (let ty = range.y0; ty <= range.y1; ty++) {
+      for (let tx = range.x0; tx <= range.x1; tx++) {
+        if (map.water[map.idx(tx, ty)] === 0) continue;
+        const p = camera.worldToScreen(tx, ty);
+        path.rect(Math.floor(p.sx), Math.floor(p.sy), Math.ceil(ts), Math.ceil(ts));
+        any = true;
+      }
+    }
+    this.waterMaskKey = key;
+    this.waterMaskPath = any ? path : null;
+    return this.waterMaskPath;
   }
 
   /** Set (or clear) the hover/drag preview tiles drawn as translucent tints. */
@@ -1149,11 +1179,37 @@ export class Renderer {
 
     const mapW = world.map.width;
 
-    // NOTE: animated water/grass overlays were a per-tile row-major per-frame draw — an antipattern
-    // that didn't complete in a frame (animation only showed in a top bar). Removed. Water is now a
-    // GOOD static tile baked into the cached base (above); the animated twinkle + wavy grass return via
-    // a non-row-major strategy (tileable pattern clipped to a cached water/grass mask, or the shader).
-    // Logged in docs/playtest-log.md.
+    // Animated water (NON-row-major): scroll the tileable water texture over the static base, clipped
+    // to the cached water mask, at low alpha — subtle wind-driven waves + a swirl from a second crossing
+    // current. O(1) draws/frame (clip + 2 pattern fills), so it can't top-bar like the old per-tile loop.
+    // Waves roll WITH the prevailing wind (Maddy); subtler than the grass.
+    if (this.hasTileset && this.waterFrames.length > 0 && ts >= 4) {
+      const path = this.waterMask(world, camera);
+      if (path) {
+        const tex = this.waterFrames[0]!;
+        const t = performance.now() / 1000;
+        const o = camera.worldToScreen(0, 0);
+        const wx = ambient.wind.dx;
+        const wy = ambient.wind.dy;
+        ctx.save();
+        ctx.clip(path);
+        const layer = (offX: number, offY: number, alpha: number): void => {
+          const pat = ctx.createPattern(tex, 'repeat');
+          if (!pat) return;
+          const m = new DOMMatrix();
+          m.translateSelf(o.sx + offX, o.sy + offY);
+          m.scaleSelf(ts / BASE_TILE, ts / BASE_TILE);
+          pat.setTransform(m);
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = pat;
+          ctx.fillRect(0, 0, w, h);
+        };
+        layer(wx * t * ts * 0.22, wy * t * ts * 0.22, 0.12); // waves rolling with the wind
+        layer((wx * 0.4 - wy * 0.8) * t * ts * 0.12, (wy * 0.4 + wx * 0.8) * t * ts * 0.12, 0.08); // cross-current swirl
+        ctx.restore();
+        ctx.globalAlpha = 1;
+      }
+    }
 
     // Desire-path WEAR: pedestrians beat wild-green ground into brown dirt + litter. Drawn
     // first (ground level), browning the tile by wear and dropping trash specks as it deepens.
