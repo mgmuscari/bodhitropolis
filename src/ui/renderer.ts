@@ -21,6 +21,7 @@ import {
   type FootprintPos,
 } from './renderKey';
 import { surfaceKey } from './tileset';
+import { tileCategory, tileTiling, exportTileName, type TileCategory } from './tilesetExport';
 import { wideRoadAt, powerPoleAt, poleWireDirs } from './decoration';
 import { parcelGlyph } from './glyphContent';
 import { isPowerConsumer } from '../growth/power';
@@ -538,6 +539,44 @@ function buildAtlas(overrides?: ReadonlyMap<string, AtlasImage>): Map<string, At
   }
 
   return atlas;
+}
+
+/** One exported procedural tile: its atlas key, control-PNG filename, diffusion spec, and PNG. */
+export interface ExportedTile {
+  key: string;
+  file: string;
+  category: TileCategory;
+  tiling: boolean;
+  png: string; // a `data:image/png;base64,…` URL of the native BASE_TILE×BASE_TILE tile
+}
+
+/**
+ * Dump every procedural atlas tile as a native BASE_TILE PNG plus its diffusion spec —
+ * the EXPORT half of the tileset generator (docs/art/satellite-tileset.md §5.6). Each
+ * tiny tile is the structural ControlNet guide; the ComfyUI graph upscales it nearest-
+ * exact, so exporting at native 16×16 keeps the whole keyspace a few hundred KB (one
+ * browser_evaluate payload). Build-time tooling only — exposed via
+ * window.bodhitropolis.exportTiles(); never on a render path, so it can allocate freely.
+ */
+export function exportProceduralTiles(): ExportedTile[] {
+  const canvas = document.createElement('canvas');
+  canvas.width = BASE_TILE;
+  canvas.height = BASE_TILE;
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = false;
+  const out: ExportedTile[] = [];
+  for (const [key, tile] of proceduralAtlas()) {
+    ctx.clearRect(0, 0, BASE_TILE, BASE_TILE);
+    ctx.drawImage(tile, 0, 0, BASE_TILE, BASE_TILE);
+    out.push({
+      key,
+      file: exportTileName(key),
+      category: tileCategory(key),
+      tiling: tileTiling(key),
+      png: canvas.toDataURL('image/png'),
+    });
+  }
+  return out;
 }
 
 function kindOf(map: GameMap, i: number): string {

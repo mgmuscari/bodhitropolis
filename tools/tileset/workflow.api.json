@@ -1,0 +1,21 @@
+{
+  "1": { "class_type": "UNETLoader", "inputs": { "unet_name": "z_image_turbo_bf16.safetensors", "weight_dtype": "default" } },
+  "2": { "class_type": "ZImageLoraAutoLoader", "inputs": { "lora_name": "pixel_art_style_z_image_turbo.safetensors", "global_strength": 1, "model": ["1", 0] } },
+  "3": { "class_type": "SeamlessTile", "inputs": { "tiling": "enable", "copy_model": "Make a copy", "model": ["2", 0] } },
+  "4": { "class_type": "ModelSamplingAuraFlow", "inputs": { "shift": 3, "model": ["3", 0] } },
+  "5": { "class_type": "CLIPLoader", "inputs": { "clip_name": "qwen_3_4b.safetensors", "type": "lumina2", "device": "default" } },
+  "6": { "class_type": "VAELoader", "inputs": { "vae_name": "ae.safetensors" } },
+  "7": { "class_type": "CLIPTextEncode", "inputs": { "text": "Pixel art style.", "clip": ["5", 0] } },
+  "8": { "class_type": "ConditioningZeroOut", "inputs": { "conditioning": ["7", 0] } },
+  "9": { "class_type": "EmptySD3LatentImage", "inputs": { "width": 512, "height": 512, "batch_size": 1 } },
+  "17": { "class_type": "LoadImage", "inputs": { "image": "example.png" } },
+  "18": { "class_type": "ImageScale", "inputs": { "upscale_method": "area", "width": 8, "height": 8, "crop": "disabled", "image": ["17", 0] } },
+  "19": { "class_type": "ImageScale", "inputs": { "upscale_method": "bilinear", "width": 512, "height": 512, "crop": "disabled", "image": ["18", 0] } },
+  "20": { "class_type": "Image Filter Adjustments", "inputs": { "image": ["19", 0], "brightness": 0, "contrast": 1, "saturation": 0, "sharpness": 1, "blur": 0, "gaussian_blur": 0, "edge_enhance": 0, "detail_enhance": "false" } },
+  "21": { "class_type": "ModelPatchLoader", "inputs": { "name": "Z-Image-Turbo-Fun-Controlnet-Tile-2.1-2601-8steps.safetensors" } },
+  "22": { "class_type": "ZImageFunControlnet", "inputs": { "strength": 0.55, "model": ["4", 0], "model_patch": ["21", 0], "vae": ["6", 0], "image": ["20", 0] } },
+  "10": { "class_type": "KSampler", "inputs": { "seed": 0, "steps": 8, "cfg": 1, "sampler_name": "res_multistep", "scheduler": "simple", "denoise": 1, "model": ["22", 0], "positive": ["7", 0], "negative": ["8", 0], "latent_image": ["9", 0] } },
+  "11": { "class_type": "VAEDecode", "inputs": { "samples": ["10", 0], "vae": ["6", 0] } },
+  "12": { "class_type": "PixelOE", "inputs": { "pixel_size": 32, "thickness": 2, "mode": "k_centroid", "color_quant": true, "no_post_upscale": true, "num_colors": 32, "quant_mode": "kmeans", "dither_mode": "ordered", "weight_mapping": "current", "device": "default", "img": ["11", 0] } },
+  "14": { "class_type": "SaveImage", "inputs": { "filename_prefix": "bodhitile", "images": ["12", 0] } }
+}

@@ -124,6 +124,8 @@ const PURE_UI_ALLOWLIST = [
   'src/ui/settings.ts',
   'src/ui/controlsContent.ts',
   'src/ui/tileset.ts',
+  'src/ui/tilesetExport.ts',
+  'src/ui/satelliteManifest.ts',
 ];
 
 describe('architecture guard: headless + deterministic', () => {

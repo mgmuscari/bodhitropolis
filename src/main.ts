@@ -19,7 +19,7 @@ import { createRng } from './engine/rng';
 import { cityName } from './engine/names';
 import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
-import { Renderer } from './ui/renderer';
+import { Renderer, exportProceduralTiles } from './ui/renderer';
 import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, setPlantEmitters, seedDecay, liveInspectLine, applyLiveCaps } from './ui/ambientContent';
 import { loadSettings, saveSettings } from './ui/settingsStore';
 import { mountSettingsPanel } from './ui/settingsPanel';
@@ -248,6 +248,14 @@ export function main(): void {
     ambient: ambientState,
     tech,
     power: () => powerGrid,
+    // Build-time tileset-generator export (docs/art/satellite-tileset.md §5.6): dump every
+    // procedural atlas tile + diffusion spec as the ControlNet structural guides. Pulled via
+    // Playwright against the dev server; never used on a render path.
+    exportTiles: exportProceduralTiles,
+    // Hot-swap a tileset skin at runtime (same path as the settings dropdown) — for live verification
+    // and quick A/B without hunting the menu. e.g. window.bodhitropolis.setTileset('satellite').
+    setTileset: (id: string): Promise<void> =>
+      loadTileset(id).then((overrides) => renderer.applyTileset(overrides)),
   };
 
   // Opening challenge overlay. Computed from the same world, mounted over the

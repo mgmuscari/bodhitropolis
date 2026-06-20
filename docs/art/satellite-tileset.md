@@ -160,19 +160,26 @@ marries the two layers correctly: procedural owns STRUCTURE (+ game semantics), 
 All offline/build-time → committed PNGs, determinism intact (matches "no dynamic diffusion in the
 browser").
 
-Two pieces to build:
-1. **Export harness** — a dev mode that walks `proceduralAtlas()` / `renderKeyspace()`, upscales each
-   16×16 tile (nearest, ×N) and saves a PNG per key. (Tiles are browser canvases → a `?exportTiles`
-   route that `toBlob`s each, or a small Playwright dump against the dev server.)
-2. **Structural conditioning in ComfyUI** — true **controlnet** (canny / lineart / depth) needs a
-   model installed; the remote has **none** (`controlnet: EMPTY`). SDXL has mature controlnets and
-   `sd_xl_base` + `pixel-art-xl` LoRA is already installed → the controlnet path is SDXL-based.
-   Z-Image has no controlnet. Cheaper first cut needing NO install: **img2img** on the upscaled
-   procedural tile (denoise ~0.5) — looser structural lock but proves the loop. Escalate to an SDXL
-   canny/lineart controlnet if img2img drifts off the key's structure.
+**BUILT 2026-06-19** (`tools/tileset/`, see its README). Two pieces:
+1. **Export harness** ✓ — `renderer.exportProceduralTiles()` walks `proceduralAtlas()`, dumps each
+   native-16×16 tile as a PNG + its diffusion spec (`tilesetExport.ts` classifies category/tiling);
+   exposed at `window.bodhitropolis.exportTiles()`, pulled via a scratch Playwright dump,
+   `split-control.mjs` explodes it to `control/<key>.png`. ComfyUI upscales nearest-exact, so we
+   export tiny (the whole keyspace is ~135 KB).
+2. **Structural conditioning in ComfyUI** ✓ — the remote now has a **Z-Image Tile Fun-ControlNet**
+   (`Z-Image-Turbo-Fun-Controlnet-Tile-2.1-2601-8steps`), which keeps the fast Z-Image-turbo +
+   `pixel_art_style` LoRA path (no SDXL detour, no canny/lineart preprocess — a *tile* controlnet
+   conditions on the procedural tile directly). **Gotcha:** it's a model-patch, loaded by
+   `ModelPatchLoader` → `ZImageFunControlnet` from `models/model_patches/` — NOT a classic controlnet
+   (`ControlNetLoader` rejects it; the saved `z_image_pixelart_tile.json` wired it wrong). The driver
+   (`generate.mjs` + `lib.mjs`) POSTs the corrected graph straight to `/prompt` (the MCP
+   `enqueue_workflow` is still broken for arbitrary graphs).
 
-Prototype-first: build the export harness, run a few tiles through img2img, eyeball the structural
-lock; install an SDXL controlnet only if needed.
+**Mode finding (probed 2026-06-19):** pure controlnet from an EMPTY latent over-frees on a coarse
+16px control — the pixel LoRA hallucinates a *character* instead of a top-down building tile. The fix
+is **hybrid**: ControlNet model-patch for structure **+** the procedural tile as the init latent
+(denoise 0.7), so color/footprint anchor while the LoRA adds satellite texture. Hybrid is the driver
+default; img2img (no controlnet) remains as a fallback that needs no server model.
 
 ## 6. Open work / decisions (for Maddy)
 
@@ -206,6 +213,11 @@ lock; install an SDXL controlnet only if needed.
   Selecting `satellite` now skins roads with asphalt + procedural lines; everything else falls back
   to the painter. First visible slice. (Asphalt is medium-grey; markings should read — verify in the
   browser, palette is a 1-line tweak if not.)
-- [ ] Pin style/palette/remaining-slice (§6) with Maddy.
-- [ ] Bake terrain + buildings → commit PNGs → grow `SATELLITE_ASSETS`.
-- [ ] Variety-pick seam (§6.1) when residential variants land.
+- [x] **Tileset GENERATOR pipeline** (§5.6) — export harness + ComfyUI Tile-ControlNet driver +
+  manifest codegen (`tools/tileset/`, hybrid mode tuned). Per-key bake (band / building pos+tier).
+- [x] **Full bake** — terrain (28) + buildings (216) baked through the pipeline, committed under
+  `public/tilesets/satellite/{terrain,buildings}/`, wired via the auto-generated `satelliteManifest.ts`.
+- [ ] Pin style/palette with Maddy in the browser (live hot-swap); tune per-category denoise if wanted.
+- [ ] Roads/transport stay surface+procedural (§5.5) — optionally regenerate the asphalt surface
+  through the same pipeline for palette consistency.
+- [ ] Variety-pick seam (§6.1) + "one big image, sliced" multi-tile path (§2) when residential variants land.

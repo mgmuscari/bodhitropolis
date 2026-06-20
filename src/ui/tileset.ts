@@ -10,6 +10,7 @@
 // No IO here — fetching/decoding lives in tilesetLoader.ts (which is not allowlisted).
 
 import { builtRenderKey, variantKey, type FootprintPos } from './renderKey';
+import { SATELLITE_BAKED } from './satelliteManifest';
 
 /** The permanent default tileset id — pure procedural painters, never removed. */
 export const PROCEDURAL = 'procedural';
@@ -90,11 +91,14 @@ export function surfaceKey(role: string): string {
 const SATELLITE_ASSETS: readonly TilesetAsset[] = [
   // Road asphalt SURFACE — three tone-consistent variants, cycled per-tile by a position hash so
   // the texture doesn't tile into a visible "plaid" (Maddy 2026-06-19). The renderer paints the
-  // connection-mask lane markings over them; the rest of the world falls back to the procedural
-  // painter until more art lands.
+  // connection-mask lane markings over them; roads deliberately stay surface+procedural rather than
+  // per-mask diffusion (docs/art/satellite-tileset.md §5.5).
   { file: 'surfaces/asphalt-0.png', keys: [variantKey(surfaceKey('road'), 0)] },
   { file: 'surfaces/asphalt-1.png', keys: [variantKey(surfaceKey('road'), 1)] },
   { file: 'surfaces/asphalt-2.png', keys: [variantKey(surfaceKey('road'), 2)] },
+  // Per-key terrain + building tiles baked through the Z-Image Tile-ControlNet pipeline
+  // (auto-generated list; regenerate with `node tools/tileset/manifest.mjs`).
+  ...SATELLITE_BAKED,
 ];
 
 export const TILESET_DEFS: readonly TilesetDef[] = [

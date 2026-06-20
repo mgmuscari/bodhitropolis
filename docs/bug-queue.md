@@ -5,6 +5,17 @@ Maddy reports bugs as she playtests; Claude **records them here** (need not fix 
 
 Status: 🔴 open · 🟡 in progress · ✅ fixed (note the PR)
 
+## HYBRID SATELLITE SHADER — diffusion tiles × WebGL2 (Maddy, 2026-06-19) — proposed
+
+🔴 Real-time procedural satellite renderer that HYBRIDIZES the baked diffusion tileset (base albedo,
+Oakland identity) with a single-pass WebGL2/GLSL fragment shader (dynamics + depth + variation):
+packed `u_data_map` (R=type, G=height, B=`transportMask` adjacency, A=sim/glow), tile-atlas albedo
+sampling + fBm/Voronoi for water/anti-plaid, adjacency-mask procedural road markings, 2D raymarched
+drop-shadows from the G height channel (10–16 steps), SDF tile-type transitions. Feature-flagged
+WebGL2 path alongside Canvas2D (determinism untouched, render-only). Deliverables: `satelliteShader.ts`
+(program + GLSL), `gridTextureBridge.ts` (world→packed Uint8 texture), 60-FPS mock harness. Full spec
++ phasing + open questions: **`docs/art/satellite-shader.md`**. Depends on the satellite tileset bake.
+
 ## TILESET GRAPHICS — first skin (Maddy, 2026-06-19) — active
 
 The procedural Canvas2D look stays the **permanent default**; generated graphics are an OPTIONAL
@@ -20,6 +31,30 @@ black outlines, SC2000-era, top-down (not iso), Oakland architectural cues. Plan
   tool is broken for arbitrary graphs; recipe = Z-Image turbo + pixel_art_style LoRA + SeamlessTile +
   PixelOE). Probes in `docs/art/probes/satellite/` (v1 + v2 + asphalt). Learnings: edge-to-edge must
   be prompted; "black outline" frames terrain (buildings only); dense-block is the strongest unit.
+  - ✅ **Tileset GENERATOR pipeline** (`tools/tileset/`, 2026-06-19) — the procedural-tile→ControlNet
+    path (plan §5.6): export harness (`exportProceduralTiles` → `control/<key>.png`) → Z-Image **Tile
+    Fun-ControlNet** driver (hybrid: model-patch structure + procedural init latent @ denoise 0.7) →
+    `manifest.mjs` codegen → `satelliteManifest.ts` (per-key terrain+building tiles, spread into
+    `SATELLITE_ASSETS`). Gotcha filed: the Fun-controlnet is a `ModelPatchLoader` model-patch (lives in
+    `models/model_patches/`), not a classic `ControlNetLoader` net. Full terrain+building bake committed.
+    - Method per category: TERRAIN = structure-only Tile-ControlNet (de-dither→desaturate→empty latent,
+      color from prompt — "controlnet for structure only"). BUILDINGS = txt2img (no controlnet — a flat
+      footprint cell has no structure) + white→alpha floodfill so they sit on the ground tile. PARKING
+      (surface kind) = txt2img + SeamlessTile, opaque.
+  - 🟡 **Live-playtest feedback (Maddy, 2026-06-19)** — first live look at the baked satellite skin:
+    - ✅ **Parking lots = tiling asphalt surface** — were alpha objects with a yellow border that didn't
+      tile; now `SURFACE_KINDS` → txt2img + SeamlessTile, opaque, "no yellow lines" prompt. Re-baked.
+    - 🔴 **Multi-tile plots must render at W·16 × H·16** — police/plants are a tiny building repeated on
+      each cell of a 2×2/3×3/4×4 plot. Generate ONE image per (kind,tier[,variant]) at footprint res,
+      slice into cells → `footprintCellKey` (renderer already tries it first). Footprints in
+      `src/tools/tools.ts` (1×1/2×2/3×3/4×4). Also fixes "buildings don't fill the frame."
+    - 🔴 **Building variety per category (esp. residential)** — want 5–10 variants per kind; needs the
+      variety-pick seam (renderer picks variant N per parcel via a `tieHash` of the parcel anchor →
+      `…-v{n}` key) + N× the per-kind bake. (Plan §6.1.)
+    - 🔴 **Streams/rivers are directional** — a single river tile tiled along a diagonal stream makes a
+      sawtooth; rivers need flow-direction awareness (rotate/align per a river connection mask, the
+      water dual of the road `transportMask`) — a renderer feature (or the hybrid shader handles it via
+      the adjacency channel).
   - ✅ **Roads (Maddy's call: generate texture, paint lines on top)** — committed asphalt SURFACE
     (3 tone-consistent variants, `public/tilesets/satellite/surfaces/asphalt-{0,1,2}.png`); renderer
     paints connection-mask markings over them (`@surface/road#n` ingredient seam). `satellite` skins
