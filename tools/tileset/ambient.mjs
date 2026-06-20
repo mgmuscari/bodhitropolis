@@ -16,7 +16,7 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { submit, awaitOutput, fetchImage, buildTxt2imgGraph, whiteToAlpha, seedFor, COMFY_URL } from './lib.mjs';
-import { isTopDown, facesForward } from './validate.mjs';
+import { isTopDown, facesForward, isIntact } from './validate.mjs';
 
 // Categories the renderer rotates to a travel heading, so the sprite's FRONT must point UP (north).
 // These get the extra forward-facing check on top of top-down (Maddy: taxi/van drove backwards).
@@ -141,20 +141,23 @@ async function worker(queue) {
       // pass (best-effort, logged), so a bake never hard-fails on geometry.
       const directional = DIRECTIONAL.has(cat);
       const tries = validate && !isSmog ? attempts : 1;
-      let raw, ok = !validate || isSmog, note = '';
+      let raw, png, ok = !validate || isSmog, note = '';
       for (let a = 0; a < tries; a++) {
         const out = await awaitOutput(await submit(buildTxt2imgGraph({ prompt, seed: seed + a * 7919 })), { timeoutMs: 180000 });
         raw = await fetchImage(out);
+        png = isSmog ? luminanceToAlpha(raw) : whiteToAlpha(raw, 16);
         if (!validate || isSmog) break;
         // Top-down first; for directional sprites ALSO require the front to point up (else it drives
         // backwards/sideways once the renderer rotates it to heading).
         let v = await isTopDown(raw, subject);
         if (v.ok && directional) v = await facesForward(raw, subject);
-        ok = v.ok;
-        note = v.text.split('\n')[0];
+        // INTACTNESS: the white→alpha floodfill must not have eaten the (light-coloured) subject — check
+        // the FINAL png, not the raw, so a floodfilled-away sprite (e.g. a white mattress) retries.
+        const intact = isIntact(png);
+        ok = v.ok && intact;
+        note = !intact ? 'floodfilled — retrying' : v.text.split('\n')[0];
         if (ok) break;
       }
-      const png = isSmog ? luminanceToAlpha(raw) : whiteToAlpha(raw, 16);
       mkdirSync(join(OUT, cat), { recursive: true });
       writeFileSync(join(OUT, cat, `${slug}.png`), png);
       done++;
