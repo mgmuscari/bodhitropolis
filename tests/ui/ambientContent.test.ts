@@ -56,6 +56,8 @@ import {
   accumulateWaterRunoff,
   accumulateGroundPollution,
   driftPollution,
+  diffusePollution,
+  applyRain,
   prevailingWind,
   flowWaterPollution,
   treatWaterPollution,
@@ -657,6 +659,58 @@ describe('driftPollution (Maddy: prevailing wind carries smog downwind into plum
     state.pollution.set(m.idx(4, 4), 70);
     driftPollution(state, m);
     expect(state.pollution.get(m.idx(4, 4))).toBe(70); // unchanged
+  });
+});
+
+describe('diffusePollution (Maddy: smog diffuses, in addition to blowing in the wind)', () => {
+  it('spreads an interior hot tile to its 4 neighbours, conserving total mass', () => {
+    const m = new GameMap(12, 12);
+    const state = createAmbientState();
+    const c = m.idx(6, 6);
+    state.pollution.set(c, 100);
+    diffusePollution(state, m, 0.2);
+    const here = state.pollution.get(c) ?? 0;
+    const n = (state.pollution.get(m.idx(6, 5)) ?? 0) + (state.pollution.get(m.idx(6, 7)) ?? 0)
+      + (state.pollution.get(m.idx(5, 6)) ?? 0) + (state.pollution.get(m.idx(7, 6)) ?? 0);
+    expect(here).toBeLessThan(100); // the centre shed some
+    expect(n).toBeGreaterThan(0); // neighbours received it
+    expect(here + n).toBeCloseTo(100, 5); // interior diffusion conserves mass
+    // isotropic: all four neighbours got the same share
+    expect(state.pollution.get(m.idx(6, 5))).toBeCloseTo(state.pollution.get(m.idx(7, 6))!, 5);
+  });
+
+  it('loses the off-map share at an edge (no wrap)', () => {
+    const m = new GameMap(6, 6);
+    const state = createAmbientState();
+    state.pollution.set(m.idx(0, 3), 100); // left edge: one neighbour is off-map
+    diffusePollution(state, m, 0.4);
+    expect(state.pollution.get(m.idx(5, 3)) ?? 0).toBe(0); // did not wrap to the right edge
+    let total = 0;
+    for (const v of state.pollution.values()) total += v;
+    expect(total).toBeLessThan(100); // the off-map quarter left the system
+  });
+});
+
+describe('applyRain (Maddy: rain washes smog→ground→water, diluting — pollution relocates, not vanishes)', () => {
+  it('washes a fraction of airborne smog down into the ground below', () => {
+    const m = new GameMap(10, 10);
+    const state = createAmbientState();
+    const i = m.idx(5, 5); // dry land
+    state.pollution.set(i, 100);
+    applyRain(state, m);
+    expect(state.pollution.get(i)!).toBeLessThan(100); // smog cleared from the air
+    expect(state.groundPollution.get(i) ?? 0).toBeGreaterThan(0); // ...onto the land
+  });
+
+  it('mobilises ground pollution into adjacent water (runoff seeks the water body)', () => {
+    const m = new GameMap(10, 10);
+    const state = createAmbientState();
+    const land = m.idx(4, 4);
+    m.water[m.idx(5, 4)] = Water.Ocean; // water to the east
+    state.groundPollution.set(land, 100);
+    applyRain(state, m);
+    expect(state.groundPollution.get(land)!).toBeLessThan(100); // washed off the land
+    expect(state.waterPollution.get(m.idx(5, 4)) ?? 0).toBeGreaterThan(0); // into the creek
   });
 });
 

@@ -294,6 +294,13 @@ const WIND_DIRS: ReadonlyArray<readonly [number, number]> = [
 ];
 const WIND_CADENCE = 8; // substeps between drift passes (~0.4s) — the plume streaks, never teleports
 const WIND_FRACTION = 0.34; // share of a tile's smog carried one tile downwind each drift pass
+const POLL_DIFFUSE_COEFF = 0.12; // share of a tile's smog that diffuses out (isotropic) each pass
+// Rain (Maddy): an occasional storm washes smog→ground→water, each conversion DILUTED (<1) so the
+// pollution relocates toward the low/redlined banks rather than vanishing. Cadence/dilution are
+// playtest-feel knobs. Deterministic (a fixed cadence, no rng) — stays on the pure-ui allowlist.
+const RAIN_CADENCE = 560; // substeps between storms (~28s) — "occasional"
+const RAIN_SMOG_DILUTION = 0.4; // fraction of airborne smog rained down onto the land
+const RAIN_RUNOFF_DILUTION = 0.5; // fraction of ground pollution mobilised toward water per storm
 
 /** The world's prevailing wind as an integer unit vector, drawn from the (seeded) ambient rng so it
  *  is consistent per world seed and NEVER touches the sim/worldgen streams. Defaults to a westerly
@@ -777,8 +784,10 @@ export interface AmbientState {
    *  drift pass, so smog streaks downwind into plumes. Seeded per world from the ambient rng (never
    *  the sim streams); defaults to a westerly. Renderer-side, never hashed. */
   wind: { dx: number; dy: number };
-  /** Substep counter gating the smog-drift pass to WIND_CADENCE. */
+  /** Substep counter gating the smog-drift + diffusion pass to WIND_CADENCE. */
   windTick: number;
+  /** Substep counter gating the occasional RAIN storm (smog→ground→water) to RAIN_CADENCE. */
+  rainTick: number;
   /** Live DERIVED land value (0..LV_MAX), keyed by inhabited plot tile: desirability recomputed on a
    *  slow cadence from greenery + amenity neighbours minus pollution/traffic/decay. Steers citizen
    *  destinations (and, next, household growth). Renderer-side, never hashed. */
@@ -815,6 +824,7 @@ export function createAmbientState(rng?: Rng): AmbientState {
   return {
     wind: prevailingWind(rng),
     windTick: 0,
+    rainTick: 0,
     cars: [],
     peds: [],
     cruisers: [],
@@ -3513,7 +3523,14 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   //     from their sources (the freeway, the coal plant) across the neighbourhoods downwind, rather
   //     than only diffusing/lingering in place. Runs before the decay so the drifted haze still fades.
   state.windTick += 1;
-  if (state.windTick % WIND_CADENCE === 0) driftPollution(state, map);
+  if (state.windTick % WIND_CADENCE === 0) {
+    driftPollution(state, map); // wind streaks the plume downwind
+    diffusePollution(state, map); // ...and it diffuses outward (drift + diffusion = a real plume)
+  }
+  // Occasional rain washes smog→ground→water (diluted, so pollution relocates toward the low banks,
+  // doesn't vanish) — the air clears but the ground/water load (Maddy's env-justice arc).
+  state.rainTick += 1;
+  if (state.rainTick % RAIN_CADENCE === 0) applyRain(state, map);
 
   // Air pollution lingers as smog and eases back slowly (slower than traffic) — so calming a
   // corridor clears its jam quickly but the haze takes longer to lift.
@@ -3675,6 +3692,85 @@ export function driftPollution(state: AmbientState, map: GameMap): void {
     state.pollution.set(i, p - move);
   }
   for (const [ni, amt] of arrivals) layField(state.pollution, ni, amt, POLL_MAX);
+}
+
+/** Isotropic DIFFUSION of the smog field (Maddy: "smog diffuses in addition to blowing in the wind").
+ *  Each tile sheds `coeff` of its value, split equally to its 4 neighbours; the share toward an
+ *  off-map edge LEAVES the system (no wrap). Wind {@link driftPollution} streaks the plume downwind;
+ *  this fattens/softens it so it isn't a hard streak. Departures from pre-pass values, arrivals after
+ *  (a clean simultaneous update). Live/non-hashed; gated to WIND_CADENCE by the caller. */
+export function diffusePollution(state: AmbientState, map: GameMap, coeff = POLL_DIFFUSE_COEFF): void {
+  if (state.pollution.size === 0 || coeff <= 0) return;
+  const arrivals: Array<[number, number]> = [];
+  for (const [i, p] of state.pollution) {
+    if (p <= 0) continue;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    const share = (p * coeff) / 4; // each direction's share; off-map shares are lost
+    if (share <= 0) continue;
+    for (let d = 0; d < 4; d++) {
+      const nx = x + DIR_DX[d]!;
+      const ny = y + DIR_DY[d]!;
+      if (!map.inBounds(nx, ny)) continue; // off-map → the share leaves the system
+      arrivals.push([map.idx(nx, ny), share]);
+    }
+    state.pollution.set(i, p - p * coeff); // sheds the full coeff fraction; only in-bounds shares arrive
+  }
+  for (const [ni, amt] of arrivals) layField(state.pollution, ni, amt, POLL_MAX);
+}
+
+/** A RAIN event (Maddy): rain washes airborne smog DOWN onto the land, then mobilises ground
+ *  contamination into runoff that SEEKS water — each conversion diluted by a fraction < 1, so the
+ *  pollution RELOCATES (toward the low-lying redlined/industrial banks) rather than vanishing. Two
+ *  passes: (1) smog→ground over land (× RAIN_SMOG_DILUTION); (2) ground→adjacent water, else downhill
+ *  to a lower-elevation land neighbour (runoff travels), × RAIN_RUNOFF_DILUTION. Live/non-hashed;
+ *  gated to RAIN_CADENCE by the caller. Reparable (WastewaterWorks, remediation, source removal). */
+export function applyRain(state: AmbientState, map: GameMap): void {
+  // 1. Smog → ground: rain washes a fraction of each LAND tile's airborne smog down onto it.
+  const groundAdds: Array<[number, number]> = [];
+  for (const [i, p] of state.pollution) {
+    if (p <= 0 || map.water[i] !== 0) continue; // only over land (smog over water just falls into it)
+    const wash = p * RAIN_SMOG_DILUTION;
+    if (wash <= 0) continue;
+    groundAdds.push([i, wash]);
+    state.pollution.set(i, p - wash);
+  }
+  for (const [i, a] of groundAdds) layField(state.groundPollution, i, a, GROUND_POLL_MAX);
+
+  // 2. Ground → runoff: mobilise ground pollution toward an adjacent water body, else downhill to the
+  //    lowest lower-elevation land neighbour (the runoff travels; over passes it reaches the water).
+  const waterAdds: Array<[number, number]> = [];
+  const landAdds: Array<[number, number]> = [];
+  for (const [i, p] of state.groundPollution) {
+    if (p <= 0) continue;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    let waterTarget = -1;
+    let lowLand = -1;
+    let lowE = map.elevation[i]!;
+    for (let d = 0; d < 4; d++) {
+      const nx = x + DIR_DX[d]!;
+      const ny = y + DIR_DY[d]!;
+      if (!map.inBounds(nx, ny)) continue;
+      const ni = map.idx(nx, ny);
+      if (map.water[ni] !== 0) {
+        waterTarget = ni; // a water neighbour is the sink — runoff reaches the bank
+        break;
+      }
+      if (map.elevation[ni]! < lowE) {
+        lowE = map.elevation[ni]!;
+        lowLand = ni;
+      }
+    }
+    const target = waterTarget !== -1 ? waterTarget : lowLand;
+    if (target === -1) continue; // flat inland with no water neighbour → stays put this storm
+    const move = p * RAIN_RUNOFF_DILUTION;
+    if (move <= 0) continue;
+    state.groundPollution.set(i, p - move);
+    (waterTarget !== -1 ? waterAdds : landAdds).push([target, move]);
+  }
+  for (const [i, a] of waterAdds) layField(state.waterPollution, i, a, WATER_POLL_MAX);
+  for (const [i, a] of landAdds) layField(state.groundPollution, i, a, GROUND_POLL_MAX);
 }
 
 export function flowWaterPollution(state: AmbientState, map: GameMap): void {
