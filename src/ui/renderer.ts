@@ -30,7 +30,7 @@ import { isPowerConsumer } from '../growth/power';
 import { laneOffset, pedCurbOffset, dirVector } from './ambientContent';
 import type { AmbientState } from './ambientContent';
 import type { AmbientSprites } from './ambientSprites';
-import { makeWaterFrames, makeGrassSheen, makeCloudShadow } from './waterAnimation';
+import { makeWaterFrames, makeGrassSheen, cloudFbm } from './waterAnimation';
 import { OVERLAY_DIM } from './overlayLegend';
 
 /** Precomputed CSS for the sparse-overlay scrim (see OverlaySource.dimBase). */
@@ -675,8 +675,9 @@ export class Renderer {
   private maskCache = new Map<string, { key: string; path: Path2D | null }>();
   // Tileable wind-streak texture scrolled over grass/canopy for the subtle wavy-grass sheen.
   private grassSheen: CanvasImageSource | null = null;
-  // Tileable soft cloud-shadow texture drifting with the wind over ground + props.
-  private cloudShadow: CanvasImageSource | null = null;
+  // Low-res offscreen buffer for the cloud-shadow field (evaluated in WORLD space each frame, then
+  // upscaled smooth over the viewport — non-tiling, drifts with the wind). Allocated lazily.
+  private cloudBuf: HTMLCanvasElement | null = null;
   // Cached base pass (terrain + built + overlay) on an offscreen canvas. Rebuilt
   // ONLY when invalidated (map/camera/overlay change), then blitted 1:1 onto the
   // visible canvas each frame. The hover preview and the ambient sprites live in
@@ -714,7 +715,6 @@ export class Renderer {
       ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
       : [];
     this.grassSheen = this.hasTileset ? makeGrassSheen(BASE_TILE) : null;
-    this.cloudShadow = this.hasTileset ? makeCloudShadow(64) : null;
   }
 
   /**
@@ -734,7 +734,6 @@ export class Renderer {
       ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
       : [];
     this.grassSheen = this.hasTileset ? makeGrassSheen(BASE_TILE) : null;
-    this.cloudShadow = this.hasTileset ? makeCloudShadow(64) : null;
     this.invalidateBase();
   }
 
@@ -1467,22 +1466,45 @@ export class Renderer {
     }
 
     // Cloud shadows: an invisible cloud layer drifting with the wind casts soft moving shadows over the
-    // ground + ambient props (Maddy). Skipped when a DATA overlay is active so the viz reads clean. One
-    // scrolled tileable pattern over the viewport (O(1)/frame); repeats every ~12 tiles (clouds are big).
-    if (this.hasTileset && this.cloudShadow && this.overlay === null && this.liveOverlay === null) {
-      const pat = ctx.createPattern(this.cloudShadow, 'repeat');
-      if (pat) {
+    // ground + ambient props (Maddy). Evaluated as NON-periodic fBm in WORLD space into a low-res buffer,
+    // then upscaled smooth over the viewport — so it never tiles/tessellates and drifts with the wind.
+    // Skipped when a DATA overlay is active so the viz reads clean.
+    if (this.hasTileset && this.overlay === null && this.liveOverlay === null) {
+      const BW = 96;
+      const BH = 60;
+      if (!this.cloudBuf) {
+        this.cloudBuf = document.createElement('canvas');
+        this.cloudBuf.width = BW;
+        this.cloudBuf.height = BH;
+      }
+      const bctx = this.cloudBuf.getContext('2d');
+      if (bctx) {
         const t = performance.now() / 1000;
-        const o = camera.worldToScreen(0, 0);
-        const repeat = 12 * ts; // one cloud-texture tile spans ~12 world tiles
-        const m = new DOMMatrix();
-        m.translateSelf(o.sx + ambient.wind.dx * t * ts * 0.1, o.sy + ambient.wind.dy * t * ts * 0.1);
-        m.scaleSelf(repeat / 64, repeat / 64);
-        pat.setTransform(m);
-        ctx.globalAlpha = 0.5; // the texture's own alpha is soft → total shadow stays gentle
-        ctx.fillStyle = pat;
-        ctx.fillRect(0, 0, w, h);
-        ctx.globalAlpha = 1;
+        const tl = camera.screenToWorld(0, 0);
+        const br = camera.screenToWorld(w, h);
+        const wspanX = br.wx - tl.wx;
+        const wspanY = br.wy - tl.wy;
+        const SCALE = 0.09; // cloud feature size in world tiles (smaller = bigger clouds)
+        const driftX = -ambient.wind.dx * t * 0.6; // clouds move WITH the wind
+        const driftY = -ambient.wind.dy * t * 0.6;
+        const id = bctx.createImageData(BW, BH);
+        for (let by = 0; by < BH; by++) {
+          for (let bx = 0; bx < BW; bx++) {
+            const wx = tl.wx + (bx / BW) * wspanX;
+            const wy = tl.wy + (by / BH) * wspanY;
+            const c = cloudFbm(wx * SCALE + driftX, wy * SCALE + driftY);
+            const i = (by * BW + bx) * 4;
+            id.data[i] = 16;
+            id.data[i + 1] = 18;
+            id.data[i + 2] = 26;
+            id.data[i + 3] = Math.min(150, c * 150); // soft shadow
+          }
+        }
+        bctx.putImageData(id, 0, 0);
+        const smooth = ctx.imageSmoothingEnabled;
+        ctx.imageSmoothingEnabled = true; // upscale the low-res field to soft cloud gradients
+        ctx.drawImage(this.cloudBuf, 0, 0, BW, BH, 0, 0, w, h);
+        ctx.imageSmoothingEnabled = smooth;
       }
     }
 
