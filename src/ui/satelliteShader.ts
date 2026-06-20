@@ -69,6 +69,7 @@ float fbm(vec2 p) {
   return s;
 }
 vec4 cell(vec2 c) { return texture(u_data, (c + 0.5) / u_grid); }
+float isLand(vec2 c) { return int(cell(c).r * 255.0 + 0.5) == SAT_WATER ? 0.0 : 1.0; }
 
 void main() {
   vec2 g = u_origin + v_uv * u_view; // screen UV → world cell space (camera pan/zoom)
@@ -87,11 +88,18 @@ void main() {
 
   vec3 col;
   if (type == SAT_WATER) {
-    // time-dilated noise modulating a specular glint — the one thing a static tile can't do
-    float wn = fbm(g * 0.7 + vec2(u_time * 0.05, u_time * 0.03));
-    float spec = pow(wn, 4.0);
+    // two flowing octaves + a moving specular glint — the one thing a static tile can't do
+    float wn = fbm(g * 0.6 + vec2(u_time * 0.04, u_time * 0.03));
+    float wn2 = fbm(g * 1.7 - vec2(u_time * 0.07, u_time * 0.05));
+    float spec = pow(max(wn, wn2), 4.0);
     vec3 deep = vec3(0.05, 0.18, 0.32), shallow = vec3(0.11, 0.33, 0.45);
-    col = mix(deep, shallow, wn) + spec * 0.3;
+    col = mix(deep, shallow, wn * 0.7 + wn2 * 0.3) + spec * 0.3;
+    // SDF-ish shoreline: an animated foam band wherever a 4-neighbour is land
+    float land = isLand(ci + vec2(1, 0)) + isLand(ci + vec2(-1, 0)) + isLand(ci + vec2(0, 1)) + isLand(ci + vec2(0, -1));
+    if (land > 0.0) {
+      float foam = (0.5 + 0.5 * sin(u_time * 2.0 + (g.x + g.y) * 3.0)) * clamp(land, 0.0, 1.0);
+      col = mix(col, vec3(0.72, 0.85, 0.90), foam * 0.32);
+    }
   } else if (type == SAT_ROAD) {
     col = vec3(0.21, 0.21, 0.23) + (h - 0.5) * 0.03;
     // centerlines branch on the B-channel adjacency mask (N=1 E=2 S=4 W=8)
