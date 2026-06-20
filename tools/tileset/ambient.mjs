@@ -82,6 +82,20 @@ const CATALOG = {
     ['exhaust', 'a thin plume of dark exhaust haze'],
     ['smog-cloud', 'a hazy industrial smog cloud'],
   ],
+  // Encampments: tents/tarps that pop up on heavily demand-pathed empty tiles (the displaced made
+  // visible — Maddy). Top-down shelters on white → alpha.
+  encampments: [
+    ['tent-1', 'a small dome camping tent'],
+    ['tent-2', 'a makeshift blue tarp shelter'],
+    ['tent-3', 'a small orange pup tent'],
+  ],
+  // Junk: discarded mattresses + household debris on worn/empty ground (the neglect made visible).
+  junk: [
+    ['mattress', 'a discarded dirty mattress'],
+    ['junk-pile', 'a pile of discarded household junk and black trash bags'],
+    ['old-couch', 'a discarded worn brown sofa couch'],
+    ['debris', 'a heap of broken wood planks and debris'],
+  ],
 };
 
 const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };

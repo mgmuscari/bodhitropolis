@@ -91,6 +91,8 @@ const WATER_FPS = 12;
 const WATER_SLOSH_FPS = 7; // shear-cycle advance rate for the precomputed per-tile slosh flipbook
 const ASPHALT_GROUND_COLOR = '#3a3833'; // paved-over redlined open ground
 const ASPHALT_GROUND_ALPHA = 0.72; // strength at full redline grade (faded by depaveAsphalt near greens)
+const GARBAGE_WEAR = 150; // wear at/above which a worn empty tile shows discarded junk
+const ENCAMPMENT_WEAR = 225; // wear at/above which the heaviest-worn empty tile shows an encampment tent
 
 // Kinds that get a sparse flora-canopy accent under a tileset (the vegetated greens).
 const GREEN_FLORA_KINDS: ReadonlySet<number> = new Set([
@@ -1357,8 +1359,22 @@ export class Renderer {
       ctx.fillStyle = '#6e5d3f';
       ctx.fillRect(Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
       ctx.globalAlpha = 1;
-      if (wear > 120) {
-        ctx.fillStyle = '#2e2a22'; // trash specks, more as the path deepens
+      // Heavily demand-pathed empty ground accumulates JUNK (discarded mattresses/couches/debris) and,
+      // at the worst-worn, an ENCAMPMENT tent — the neglect + displacement made visible (Maddy). Under
+      // a tileset these are sprites; the procedural look keeps the trash specks. Pick is a stable
+      // per-tile hash (no frame flicker); drawn at ground level, so agents pass over them.
+      const tents = this.hasTileset ? this.ambientSprites?.encampments : undefined;
+      const junk = this.hasTileset ? this.ambientSprites?.junk : undefined;
+      if (tents && tents.length > 0 && wear >= ENCAMPMENT_WEAR) {
+        const img = tents[surfaceVariantIndex(wx, wy, tents.length)]!;
+        const es = ts * 0.92;
+        ctx.drawImage(img, sx + (ts - es) / 2, sy + (ts - es) / 2, es, es);
+      } else if (junk && junk.length > 0 && wear >= GARBAGE_WEAR) {
+        const img = junk[surfaceVariantIndex(wx, wy, junk.length)]!;
+        const js = ts * 0.7;
+        ctx.drawImage(img, sx + (ts - js) / 2, sy + (ts - js) / 2, js, js);
+      } else if (!this.hasTileset && wear > 120) {
+        ctx.fillStyle = '#2e2a22'; // procedural: trash specks, more as the path deepens
         const specks: ReadonlyArray<readonly [number, number]> = [
           [0.3, 0.35],
           [0.65, 0.5],
