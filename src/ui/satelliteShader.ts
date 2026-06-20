@@ -48,6 +48,7 @@ uniform vec2 u_view;      // visible window size in cells (camera zoom)
 uniform float u_time;     // seconds, for animated water
 uniform vec2 u_sun;       // sun direction in tile space (shadows trace toward it)
 uniform float u_shadow;   // shadow strength 0..1
+uniform float u_dayspeed; // >0 slowly rotates the sun (day/night sweep); 0 = fixed
 
 in vec2 v_uv;
 out vec4 fragColor;
@@ -70,6 +71,7 @@ float fbm(vec2 p) {
 }
 vec4 cell(vec2 c) { return texture(u_data, (c + 0.5) / u_grid); }
 float isLand(vec2 c) { return int(cell(c).r * 255.0 + 0.5) == SAT_WATER ? 0.0 : 1.0; }
+vec2 rot2(vec2 v, float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c) * v; }
 
 void main() {
   vec2 g = u_origin + v_uv * u_view; // screen UV → world cell space (camera pan/zoom)
@@ -108,7 +110,11 @@ void main() {
     if ((mask & 2) != 0 || (mask & 8) != 0) line = max(line, 1.0 - smoothstep(0.03, 0.05, cc.y));
     if ((mask & 1) != 0 || (mask & 4) != 0) line = max(line, 1.0 - smoothstep(0.03, 0.05, cc.x));
     col = mix(col, vec3(0.78, 0.66, 0.28), line * 0.7);
-    col += vec3(0.6, 0.35, 0.12) * sim * 0.5; // traffic glow
+    // traffic FLOW: a travelling pulse along the road axis, brightness scaled by density (A channel)
+    vec2 dir = vec2((mask & 2) != 0 || (mask & 8) != 0 ? 1.0 : 0.0, (mask & 1) != 0 || (mask & 4) != 0 ? 1.0 : 0.0);
+    float along = dot(g, normalize(dir + vec2(0.001)));
+    float pulse = 0.5 + 0.5 * sin(along * 6.2832 - u_time * 3.0);
+    col += vec3(0.95, 0.78, 0.35) * sim * (0.25 + 0.6 * pulse); // headlight stream
   } else if (type == SAT_TERRAIN) {
     int band = int(mod(G, 4.0));
     float elev = floor(G / 4.0) / 63.0;
@@ -135,11 +141,16 @@ void main() {
     roof *= 0.82 + 0.34 * h;
     float edge = step(0.07, min(min(lf.x, lf.y), min(1.0 - lf.x, 1.0 - lf.y)));
     col = mix(roof * 0.6, roof, edge); // roof inset / parapet
+    // a slow specular glint sweeping across rooftops (HVAC/skylight catching the sun)
+    float glint = pow(0.5 + 0.5 * sin((g.x + g.y) * 1.3 - u_time * 0.6 + h * 6.28), 8.0);
+    col += vec3(0.9, 0.88, 0.8) * glint * 0.18 * edge;
   }
 
-  // single-pass raymarched drop shadows: step toward the sun, occlude under taller neighbours
+  // single-pass raymarched drop shadows: step toward the sun (optionally sweeping a day cycle),
+  // occlude under taller neighbours
+  vec2 sun = u_dayspeed > 0.0 ? rot2(u_sun, u_time * u_dayspeed) : u_sun;
   float shadow = 1.0;
-  vec2 stepv = normalize(u_sun);
+  vec2 stepv = normalize(sun);
   for (int i = 1; i <= 12; i++) {
     vec2 sc = floor(ci + stepv * float(i));
     if (sc.x < 0.0 || sc.y < 0.0 || sc.x >= u_grid.x || sc.y >= u_grid.y) break;
@@ -180,6 +191,7 @@ export class SatelliteShader {
   private readonly uTime: WebGLUniformLocation | null;
   private readonly uSun: WebGLUniformLocation | null;
   private readonly uShadow: WebGLUniformLocation | null;
+  private readonly uDayspeed: WebGLUniformLocation | null;
   private gridW = 0;
   private gridH = 0;
 
@@ -207,6 +219,7 @@ export class SatelliteShader {
     this.uTime = gl.getUniformLocation(program, 'u_time');
     this.uSun = gl.getUniformLocation(program, 'u_sun');
     this.uShadow = gl.getUniformLocation(program, 'u_shadow');
+    this.uDayspeed = gl.getUniformLocation(program, 'u_dayspeed');
   }
 
   /** (Re)upload the entire packed grid as the data texture. Sizes the texture on first call. */
@@ -248,6 +261,7 @@ export class SatelliteShader {
     shadow?: number;
     origin?: readonly [number, number];
     view?: readonly [number, number];
+    dayspeed?: number;
   }): void {
     const gl = this.gl;
     gl.useProgram(this.program);
@@ -260,6 +274,7 @@ export class SatelliteShader {
     if (this.uTime) gl.uniform1f(this.uTime, opts.time);
     if (this.uSun) gl.uniform2f(this.uSun, opts.sun[0], opts.sun[1]);
     if (this.uShadow) gl.uniform1f(this.uShadow, opts.shadow ?? 0.45);
+    if (this.uDayspeed) gl.uniform1f(this.uDayspeed, opts.dayspeed ?? 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -370,7 +385,7 @@ export function buildDemoWorld(size = 64): GameMap {
  */
 export function mountSatelliteDemo(
   canvas: HTMLCanvasElement,
-  opts?: { map?: GameMap; size?: number; sun?: readonly [number, number]; shadow?: number },
+  opts?: { map?: GameMap; size?: number; sun?: readonly [number, number]; shadow?: number; dayspeed?: number },
 ): SatelliteDemoHandle {
   const gl = canvas.getContext('webgl2');
   if (!gl) throw new Error('WebGL2 is unavailable in this browser');
@@ -383,6 +398,7 @@ export function mountSatelliteDemo(
 
   const sun = opts?.sun ?? [0.65, 0.78];
   const shadow = opts?.shadow ?? 0.5;
+  const dayspeed = opts?.dayspeed ?? 0.04; // gentle day/night sweep so shadows visibly move
   const t0 = performance.now();
   let raf = 0;
   let frames = 0;
@@ -418,7 +434,7 @@ export function mountSatelliteDemo(
     else viewH = map.width / aspect;
     const origin: [number, number] = [(map.width - viewW) / 2, (map.height - viewH) / 2];
 
-    shader.render({ time: (now - t0) / 1000, sun, shadow, origin, view: [viewW, viewH] });
+    shader.render({ time: (now - t0) / 1000, sun, shadow, origin, view: [viewW, viewH], dayspeed });
 
     frames++;
     if (now - fpsWindowStart >= 500) {
