@@ -10,7 +10,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Program like the architect.** Several bugs in one subsystem usually mean ONE missing abstraction — step back and build it; don't patch symptom by symptom. Ask "what would the person who designed this idea write?", and build the right abstraction the first time. The maintainer is a senior platform/AI architect — work peer-level (lead with architecture and trade-offs, skip the basics), default to full autonomy, and keep answers short.
 
-**Bug queue.** Playtest bugs go in `docs/bug-queue.md` (which also tracks the active direction). They're recorded as seen — not necessarily fixed at once — so check that file when touching related code and fix opportunistically; mark fixed with the PR. Never call an active direction "deferred".
+**Bug queue.** Playtest bugs go in `docs/bug-queue.md` (which also tracks the active direction). They're recorded as seen — not necessarily fixed at once — so check that file when touching related code and fix opportunistically; mark fixed with the PR. Never call an active direction "deferred". **Keep ONE consolidated backlog** there (`docs/bug-queue.md` → "THE BACKLOG") — don't split open work across files; `docs/playtest-log.md` is the raw capture stream only.
+
+**"Defer" means log-and-continue, not freeze.** When the maintainer says "defer" / "deferred" / "backlog this," it is an *anti-distraction* instruction: don't interrupt the current task to chase it — write it into the backlog and keep going. It is NOT a deprioritization or a separate frozen tier; deferred items are normal backlog and get done in turn.
 
 **Pressure demands the *right* structure.** Scope pressure → tighten methodology (more review, more planning). Performance/bug pressure → tighten feedback loops (faster iteration, empirical validation). Never abandon structure — match it to the problem type.
 
