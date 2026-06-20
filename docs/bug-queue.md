@@ -41,11 +41,11 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   walkers, and cruisers.
 
 ### 3 — Live look / animation polish
-- ✅ **Lake water sloshes — per-tile AFFINE transforms** (`8c02c6ea`). Each visible water tile is
-  redrawn per-frame with its static stochastic rotate/scale PLUS an oscillating wind-aligned
-  translation + shear (`waterSloshAt`, pure + unit-tested, slow angular drift, neighbours out of
-  phase so waves travel), clipped once to the cached water mask (bounded, no land bleed). Foam
-  flipbook rides on top for twinkle. (Amplitudes are tunable playtest-feel knobs.)
+- ✅ **Lake water sloshes — per-tile AFFINE transforms** (`8c02c6ea`, perf-fixed `5c4fba70`). Each
+  visible water tile shows an oscillating rotation+shear; the affine is now PRECOMPUTED into a
+  `[rot][frame]` flipbook per water texture (the live per-tile transformed drawImage murdered FPS), so
+  per tile is a plain blit, shear-frame advancing along the wind (waves travel). Same look, cheap.
+  Foam flipbook on top for twinkle. (Amplitudes/FPS-rate are tunable knobs.)
 - ✅ **Building variety — 5 variants/kind** (`b0642ac5`) — baked v3–v5 for the 7 repeating 1×1 kinds
   (R/C/I + ADU) ×2 tiers (42 tiles, floodfill-clean); renderer auto-derives the count, picks across 6
   per parcel. (Could push toward 10 eventually, but 5 reads varied.)
@@ -78,8 +78,9 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   smog→ground, then ground→adjacent-water/downhill, diluted per hop → harm relocates toward the low
   redlined banks, doesn't vanish). Live, non-hashed, deterministic; unit-tested. Cadence/dilution +
   a rain visual are tunable follow-ups. `docs/design/pollution-weather.md`.
-- 🟡 **Unhoused agents — shelter + days** — first-cut COUNT shipped; deeper mechanics await: visible
-  sheltering agents (encampments), per-event displacement, shelter kinds. `docs/design/unhoused-residents.md`.
+- 🟡 **Unhoused agents — shelter + days** — COUNT (shipped) + VISIBLE ENCAMPMENTS now shipped (`aab8b2d2`:
+  tents on heavily demand-pathed empty tiles + discarded junk on worn ground). REMAINING: per-event
+  displacement, shelter-anchored daily rounds, dedicated shelter kinds. `docs/design/unhoused-residents.md`.
 
 ### 5 — Hybrid satellite shader (cold track)
 - 🔴 **Phase 2 — atlas albedo** — shader samples the baked tiles (not just procedural); prereq for phase 5
@@ -88,10 +89,12 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   two-canvas stack (WebGL base ← Canvas2D sprites/UI on top). CPU dynamics stay the permanent no-WebGL
   default (NOT retired).
 
-### 6 — Theme mechanic (cold track)
-- 🔴 **Asphalt-ground = redline / healing de-paves** — ground-material layer keyed to `world.redline`:
-  redlined ground reads as asphalt (paved-over disinvestment); healing de-paves asphalt→green. On-theme
-  env-justice mechanic (player restores, never "redevelops"). Detailed below.
+### 6 — Theme mechanic
+- ✅ **Asphalt-ground = redline / healing de-paves** (`be377120`) — `depaveAsphalt` (pure): redlined OPEN
+  ground reads as asphalt (paved-over disinvestment), faded toward 0 by nearby player greens (park/
+  garden/rewild/parklet) → the player DE-PAVES by rewilding (never "redevelops"). Cached base, procedural
+  + tileset. Live coupling: ground pollution near greens clears faster (`healGroundNearGreens`) — healing
+  the soil the de-paving replaces. (Heal signal = nearby greens; redline itself stays the static record.)
 
 > **Watch:** multitile commercial only baked `2×1` (not `1×2`) — if vertical commercial appears, add it
 > to `PLOTS` and re-bake (`tools/tileset/generate-multitile.mjs`).
