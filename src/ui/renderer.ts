@@ -30,7 +30,7 @@ import { isPowerConsumer } from '../growth/power';
 import { laneOffset, pedCurbOffset, dirVector } from './ambientContent';
 import type { AmbientState } from './ambientContent';
 import type { AmbientSprites } from './ambientSprites';
-import { makeWaterFrames, makeGrassSheen, cloudFbm } from './waterAnimation';
+import { makeWaterFrames, makeGrassSheen, cloudFbm, waterSloshAt } from './waterAnimation';
 import { OVERLAY_DIM } from './overlayLegend';
 
 /** Precomputed CSS for the sparse-overlay scrim (see OverlaySource.dimBase). */
@@ -1226,47 +1226,62 @@ export class Renderer {
 
     const mapW = world.map.width;
 
-    // Animated water (NON-row-major): scroll the tileable water texture over the static base, clipped
-    // to the cached water mask, at low alpha — subtle wind-driven waves + a swirl from a second crossing
-    // current. O(1) draws/frame (clip + 2 pattern fills), so it can't top-bar like the old per-tile loop.
-    // Waves roll WITH the prevailing wind (Maddy); subtler than the grass.
-    if (this.hasTileset && this.waterFrames.length > 0 && ts >= 4) {
+    // Animated water — the BASE TILES THEMSELVES slosh via a per-tile oscillating AFFINE (Maddy:
+    // "affine transforms to simulate sloshing", not just an overlay scroll). Each VISIBLE water tile
+    // is redrawn per frame with its static stochastic rotate/scale PLUS a wind-aligned translation +
+    // shear (waterSloshAt), so the surface undulates like liquid. Bounded to visible tiles (NOT the
+    // row-major whole-map antipattern) and clipped ONCE to the cached water mask (no per-tile clip →
+    // no land bleed at the shoreline, cheap). A low-alpha foam flipbook rides on top for the twinkle.
+    if (this.hasTileset && ts >= 4) {
       const path = this.tileMask(world, camera, 'water', (m, i) => m.water[i] !== 0);
       if (path) {
         const t = performance.now() / 1000;
-        // Cycle the sloshy flipbook so the surface UNDULATES (sloshes), not just translates.
-        const tex = this.waterFrames[Math.floor(t * WATER_FPS) % this.waterFrames.length]!;
-        const o = camera.worldToScreen(0, 0);
+        const map = world.map;
+        const range = camera.visibleTileRange();
         const wx = ambient.wind.dx;
         const wy = ambient.wind.dy;
         ctx.save();
         ctx.clip(path);
-        const layer = (offX: number, offY: number, alpha: number): void => {
+        for (let ty = range.y0; ty <= range.y1; ty++) {
+          for (let tx = range.x0; tx <= range.x1; tx++) {
+            const i = map.idx(tx, ty);
+            if (map.water[i] === 0) continue;
+            const tkind = kindOf(map, i);
+            const tex = this.atlas.get(`${tkind}-${bandOf(map.elevation[i]!)}`);
+            if (!tex) continue;
+            const { sx, sy } = camera.worldToScreen(tx, ty);
+            const wt = waterTileTransform(tx, ty);
+            const s = waterSloshAt(tx, ty, t, wx, wy);
+            ctx.save();
+            ctx.translate(Math.floor(sx) + ts / 2 + s.ox * ts, Math.floor(sy) + ts / 2 + s.oy * ts);
+            ctx.rotate(wt.rot * Math.PI * 2);
+            ctx.transform(1, s.shA, s.shB, 1, 0, 0); // the oscillating slosh shear
+            const sc = wt.scale * 1.08; // a touch extra so the sheared tile still covers its square
+            ctx.scale(sc, sc);
+            ctx.drawImage(tex, 0, 0, BASE_TILE, BASE_TILE, -ts / 2, -ts / 2, ts, ts);
+            ctx.restore();
+          }
+        }
+        // Foam twinkle: the sloshy flipbook scrolled at low alpha, present 100% of the time (Maddy:
+        // a subtle 10–20% twinkle always on), so crests sparkle over the sloshing base.
+        if (this.waterFrames.length > 0) {
+          const tex = this.waterFrames[Math.floor(t * WATER_FPS) % this.waterFrames.length]!;
+          const o = camera.worldToScreen(0, 0);
+          const wlen = Math.hypot(wx, wy) || 1;
+          const osc = Math.sin(t * 0.8) * ts * 0.5;
           const pat = ctx.createPattern(tex, 'repeat');
-          if (!pat) return;
-          const m = new DOMMatrix();
-          m.translateSelf(o.sx + offX, o.sy + offY);
-          m.scaleSelf(ts / BASE_TILE, ts / BASE_TILE);
-          pat.setTransform(m);
-          ctx.globalAlpha = alpha;
-          ctx.fillStyle = pat;
-          ctx.fillRect(0, 0, w, h);
-        };
-        // OSCILLATING sinusoidal translation along the wind vector (the water sloshes back-and-forth,
-        // not a linear scroll), with a slow ANGULAR DRIFT — a sum of incommensurate sines that wanders
-        // the slosh direction around the wind (a smooth ~normal-ish wobble), per Maddy.
-        const wlen = Math.hypot(wx, wy) || 1;
-        const ang = Math.sin(t * 0.11) * 0.5 + Math.sin(t * 0.19 + 1.3) * 0.3; // drift radians
-        const ca = Math.cos(ang);
-        const sa = Math.sin(ang);
-        const dx = (wx * ca - wy * sa) / wlen; // unit wind, rotated by the drift
-        const dy = (wx * sa + wy * ca) / wlen;
-        const osc1 = Math.sin(t * 0.8) * ts * 0.7; // slosh amplitude along the (drifted) wind
-        const osc2 = Math.sin(t * 0.53 + 1.7) * ts * 0.5; // second layer, different phase → swirl
-        layer(dx * osc1, dy * osc1, 0.12);
-        layer(dx * osc2, dy * osc2, 0.08);
+          if (pat) {
+            const m = new DOMMatrix();
+            m.translateSelf(o.sx + (wx / wlen) * osc, o.sy + (wy / wlen) * osc);
+            m.scaleSelf(ts / BASE_TILE, ts / BASE_TILE);
+            pat.setTransform(m);
+            ctx.globalAlpha = 0.14;
+            ctx.fillStyle = pat;
+            ctx.fillRect(0, 0, w, h);
+            ctx.globalAlpha = 1;
+          }
+        }
         ctx.restore();
-        ctx.globalAlpha = 1;
       }
     }
 

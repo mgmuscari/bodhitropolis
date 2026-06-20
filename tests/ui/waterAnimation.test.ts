@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mutateWaterFrame } from '../../src/ui/waterAnimation';
+import { mutateWaterFrame, waterSloshAt, WATER_SLOSH_AMP, WATER_SLOSH_SHEAR } from '../../src/ui/waterAnimation';
 
 // Animated water: mutate a water tile's color mapping into a flipbook of frames — a moving wave
 // swell (brightness) + whitecap foam — so water reads as waves/whitecaps, not a static tile
@@ -53,5 +53,43 @@ describe('mutateWaterFrame', () => {
     // sin(x+2π) differs from sin(x) by a float epsilon, so allow ±1/255 (imperceptible); the loop
     // is otherwise seamless. (The renderer cycles 0..count-1 and never draws frame `count` anyway.)
     for (let i = 0; i < a.length; i++) expect(Math.abs(a[i]! - b[i]!)).toBeLessThanOrEqual(1);
+  });
+});
+
+// Per-tile AFFINE slosh (Maddy 2026-06-20): the water BASE tiles should themselves slosh, not just
+// a low-alpha overlay scroll. waterSloshAt gives a per-tile, per-frame oscillating affine — a small
+// wind-aligned translation (fraction of a tile) + a shear — wind-aligned with a slow angular drift.
+describe('waterSloshAt (per-tile oscillating affine for the water base tiles)', () => {
+  it('is deterministic in (tx, ty, t, wind)', () => {
+    const a = waterSloshAt(3, 5, 2.0, 1, 0);
+    const b = waterSloshAt(3, 5, 2.0, 1, 0);
+    expect(a).toEqual(b);
+  });
+
+  it('stays bounded — translation ≤ amp, shear ≤ shear cap (so a sheared tile still covers its square)', () => {
+    for (let k = 0; k < 50; k++) {
+      const s = waterSloshAt(k % 7, (k * 3) % 11, k * 0.37, 0.6, -0.8);
+      expect(Math.hypot(s.ox, s.oy)).toBeLessThanOrEqual(WATER_SLOSH_AMP + 1e-9);
+      expect(Math.abs(s.shA)).toBeLessThanOrEqual(WATER_SLOSH_SHEAR + 1e-9);
+      expect(Math.abs(s.shB)).toBeLessThanOrEqual(WATER_SLOSH_SHEAR + 1e-9);
+    }
+  });
+
+  it('oscillates over time (it is not static)', () => {
+    const a = waterSloshAt(4, 4, 0, 1, 0);
+    const b = waterSloshAt(4, 4, 1.6, 1, 0);
+    expect(a.ox !== b.ox || a.oy !== b.oy || a.shA !== b.shA).toBe(true);
+  });
+
+  it('neighbouring tiles are out of phase (waves travel, not a rigid sheet)', () => {
+    const a = waterSloshAt(4, 4, 1.0, 1, 0);
+    const b = waterSloshAt(5, 4, 1.0, 1, 0);
+    expect(a.ox !== b.ox || a.shA !== b.shA).toBe(true);
+  });
+
+  it('zero wind is finite (no NaN) — wlen guards the divide', () => {
+    const s = waterSloshAt(2, 2, 1.0, 0, 0);
+    expect(Number.isFinite(s.ox) && Number.isFinite(s.oy)).toBe(true);
+    expect(Number.isFinite(s.shA) && Number.isFinite(s.shB)).toBe(true);
   });
 });

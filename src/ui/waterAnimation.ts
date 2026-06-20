@@ -56,6 +56,43 @@ export function mutateWaterFrame(
   return out;
 }
 
+// Per-tile AFFINE slosh of the water BASE tiles (Maddy 2026-06-20: the lake tiles should themselves
+// slosh via affine transforms, not just a low-alpha overlay scroll). The renderer redraws each
+// VISIBLE water tile per frame with the static stochastic rotate/scale PLUS this oscillating affine:
+// a small wind-aligned translation + a shear, with a slow angular drift that wanders the slosh
+// direction around the prevailing wind. Tunable; kept conservative so the look Maddy likes is intact.
+const WATER_SLOSH_W = 1.3; // temporal frequency of the slosh
+export const WATER_SLOSH_AMP = 0.06; // peak translation as a fraction of a tile
+export const WATER_SLOSH_SHEAR = 0.07; // peak shear factor (keep small so a scale≥√2 tile still covers)
+
+/** The per-tile water slosh affine at tile (tx,ty) and time `t` (seconds) under a prevailing wind:
+ *  `ox`/`oy` = translation as a FRACTION of a tile (renderer scales by tile size), `shA`/`shB` = the
+ *  two shear factors. Pure + deterministic; bounded by {@link WATER_SLOSH_AMP}/{@link WATER_SLOSH_SHEAR}.
+ *  Neighbouring tiles run out of phase (waves travel), and the slosh axis drifts slowly around the
+ *  wind (a smooth ~normal-ish wander). Zero wind is finite (the length divide is guarded). */
+export function waterSloshAt(
+  tx: number,
+  ty: number,
+  t: number,
+  windDx: number,
+  windDy: number,
+): { ox: number; oy: number; shA: number; shB: number } {
+  const wlen = Math.hypot(windDx, windDy) || 1;
+  const ph = t * WATER_SLOSH_W + tx * 0.7 + ty * 1.1; // per-tile phase → travelling waves
+  const drift = Math.sin(t * 0.11 + tx * 0.3 + ty * 0.2) * 0.45; // angular wander around the wind
+  const ca = Math.cos(drift);
+  const sa = Math.sin(drift);
+  const wdx = (windDx * ca - windDy * sa) / wlen; // unit wind, rotated by the drift
+  const wdy = (windDx * sa + windDy * ca) / wlen;
+  const amp = Math.sin(ph) * WATER_SLOSH_AMP;
+  return {
+    ox: wdx * amp,
+    oy: wdy * amp,
+    shA: Math.sin(ph * 0.8 + 1.3) * WATER_SLOSH_SHEAR,
+    shB: Math.sin(ph * 0.6 + 2.1) * WATER_SLOSH_SHEAR,
+  };
+}
+
 /** Fallback deep satellite-water colour if no baked tile is supplied (muted blue-teal). */
 const WATER_BASE: readonly [number, number, number] = [30, 60, 82];
 
