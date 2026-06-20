@@ -47,9 +47,12 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   phase so waves travel), clipped once to the cached water mask (bounded, no land bleed). Foam
   flipbook rides on top for twinkle. (Amplitudes are tunable playtest-feel knobs.)
 - 🟡 **Building variety** — 2 variants/1×1 kind shipped; want 5–10 per kind.
-- 🟡 **Broader bake validation** — `validate.mjs` (LMStudio gemma vision) gates top-down geometry; extend
-  to gate "building intact, not floodfilled" + the facing check (§1) + run over the WHOLE baked set, not
-  just ambient.
+- ✅ **Broader bake validation** (`0c3ad03e`, `ae1a6e89`) — added the FACING check (§1, vehicles) and a
+  deterministic `isIntact`/`centerOpacity` floodfill check; scanned all 138 center building tiles → no
+  floodfilled buildings (the reactive clinic/car fixes held; the only flags are surface kinds 11/22
+  with vestigial building tiles + a thin wind turbine). FOLLOW-UP: a fully-automated intact GATE wired
+  into the building generators needs per-kind size normalization (small buildings read sparse), so it's
+  a manual-review tool for now.
 - 🔴 **Road structure remainder** — parcel-side setback/sidewalk frontage, tech-gated edge props (street
   trees, bike racks), per-corridor lane lines on wide roads. (Plan §5.5; curbs/median/ramps already done.)
 
