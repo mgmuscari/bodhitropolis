@@ -1457,6 +1457,12 @@ export class Renderer {
     // dots, cyclists yellow, tram riders cyan, rail riders violet. (Drivers are CARS — drawn above
     // from ambient.cars — and their last-mile walk is a warm dot.) On a STREET a ped hugs the kerb
     // (sidewalk); crossing open ground (a demand path) it stays centred.
+    // Under a tileset, walkers + cyclists are tiny rotated SPRITES (like the cars) — a 4-frame walk
+    // cycle / 2-frame pedal, rotated to heading, phase-offset per ped so they're not in lockstep.
+    // Procedural (or missing sprites) keeps the tone-coded mode dots.
+    const pedSprites = this.hasTileset ? this.ambientSprites?.peds : undefined;
+    const cyclistSprites = this.hasTileset ? this.ambientSprites?.cyclists : undefined;
+    const walkPhase = Math.floor(performance.now() / 160); // ~6 fps gait
     const pedSize = Math.max(1, ts * 0.16);
     for (const p of ambient.peds) {
       if (p.phase === 'inside' || p.phase === 'driving') continue; // inside a building, or riding its car
@@ -1469,8 +1475,23 @@ export class Renderer {
       }
       const { sx, sy } = camera.worldToScreen(p.x + ox, p.y + oy);
       if (!onScreen(sx, sy)) continue;
-      ctx.fillStyle = MODE_COLORS[p.mode ?? TravelMode.Walk] ?? MODE_COLORS[TravelMode.Walk]!;
-      ctx.fillRect(sx - pedSize / 2, sy - pedSize / 2, pedSize, pedSize);
+      const isBike = (p.mode ?? TravelMode.Walk) === TravelMode.Bike;
+      const set = isBike ? cyclistSprites : pedSprites;
+      if (set && set.length > 0) {
+        const phase = walkPhase + Math.round(p.x * 2 + p.y * 3); // per-ped gait offset
+        const img = set[((phase % set.length) + set.length) % set.length]!;
+        const hv = dirVector(p.dir);
+        const angle = Math.atan2(hv.dx, -hv.dy); // sprite faces north; rotate CW to heading (like cars)
+        const ss = ts * (isBike ? 0.46 : 0.4);
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(angle);
+        ctx.drawImage(img, -ss / 2, -ss / 2, ss, ss);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = MODE_COLORS[p.mode ?? TravelMode.Walk] ?? MODE_COLORS[TravelMode.Walk]!;
+        ctx.fillRect(sx - pedSize / 2, sy - pedSize / 2, pedSize, pedSize);
+      }
     }
 
     // Bird flocks: tiny dot clusters. Centre on the tile (+0.5) for the same
