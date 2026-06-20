@@ -1338,6 +1338,10 @@ function isWalkable(map: GameMap, x: number, y: number): boolean {
   if (map.water[map.idx(x, y)] !== 0) return false; // Water.None === 0
   const k = map.built[map.idx(x, y)]!;
   if (k === BuiltKind.RoadHighway || k === BuiltKind.RoadRamp) return false; // no walking a freeway/ramp
+  // A planted median is a no-traffic green BARRIER dividing a road, not a crossing or a park: cars
+  // never drive on/across it, and peds must not cut through it either (Maddy: travelers path through
+  // dividers/medians). It's an amenity that lifts the corridor, never a foot route or a destination.
+  if (k === BuiltKind.PlantedMedian) return false;
   return zoneTypeOf(k) === ZoneType.None;
 }
 

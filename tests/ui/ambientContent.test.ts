@@ -393,6 +393,23 @@ describe('agent substrate invariants (Maddy: cars park on freeways, peds cross w
     expect(reachedPlot(m, 3, 6, 3, 3)).toBe(false); // 3 tiles off, no footprint
   });
 
+  it('a planted median is a BARRIER — peds never route through it, cars never drive onto it (Maddy: travelers path through dividers/medians)', () => {
+    const m = new GameMap(8, 8);
+    // A vertical water wall at x=3 splits the map; the ONLY land bridge is the tile (3,4).
+    for (let y = 0; y < 8; y++) m.water[m.idx(3, y)] = Water.Ocean;
+    m.water[m.idx(3, 4)] = Water.None; // open the single gap
+    // With the gap as plain land, a ped can cross (control).
+    expect(walkPath(m, 2, 4, 4, 4)).not.toBeNull();
+    // Plant a median in the gap: now the only crossing is a no-traffic green BARRIER → no foot route.
+    m.built[m.idx(3, 4)] = BuiltKind.PlantedMedian;
+    expect(walkPath(m, 2, 4, 4, 4)).toBeNull(); // peds must NOT cut across the median
+    // Cars were already blocked (carTraversable/canDrive exclude the median) — lock it in.
+    m.built[m.idx(2, 4)] = BuiltKind.RoadStreet;
+    m.built[m.idx(4, 4)] = BuiltKind.RoadStreet;
+    expect(canDrive(m, 2, 4, 3, 4)).toBe(false); // can't drive onto the median
+    expect(canDrive(m, 4, 4, 3, 4)).toBe(false);
+  });
+
   it('curbStallOffsets: <=4 discrete kerb stalls; a no-shoulder lane interior offers NONE', () => {
     const m = new GameMap(12, 12);
     for (let x = 1; x <= 10; x++) m.built[m.idx(x, 6)] = BuiltKind.RoadStreet; // a 1-wide street, land both sides
