@@ -18,7 +18,11 @@ for (const sub of SUBDIRS) {
   const dir = join(ROOT, sub);
   if (!existsSync(dir)) continue;
   for (const f of readdirSync(dir).filter((f) => f.endsWith('.png')).sort()) {
-    entries.push({ file: `${sub}/${f}`, key: f.replace(/\.png$/, '') });
+    // A `-v{n}` suffix is a building VARIANT — map it to the variantKey form `{base}#{n}` the
+    // renderer picks per parcel (generate-variants.mjs). Plain files map to their key 1:1.
+    const stem = f.replace(/\.png$/, '');
+    const v = /^(.+)-v(\d+)$/.exec(stem);
+    entries.push({ file: `${sub}/${f}`, key: v ? `${v[1]}#${v[2]}` : stem });
   }
 }
 

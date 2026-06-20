@@ -511,6 +511,20 @@ function collectRoadSurfaces(overrides: ReadonlyMap<string, AtlasImage>): AtlasI
   return out;
 }
 
+/**
+ * How many building VARIANTS a tileset supplies, counting the base as variant 0. A tileset baking
+ * `b-{kind}-c-{tier}#1`, `#2`, … (generate-variants.mjs) lets drawBase cycle them per parcel so the
+ * same kind stops repeating. Returns max-index + 1, or 0 when no variant tiles exist.
+ */
+function collectBuildingVariants(overrides: ReadonlyMap<string, AtlasImage>): number {
+  let max = 0;
+  for (const key of overrides.keys()) {
+    const m = /^b-\d+-[cek]-\d+#(\d+)$/.exec(key);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return max > 0 ? max + 1 : 0;
+}
+
 function buildAtlas(overrides?: ReadonlyMap<string, AtlasImage>): Map<string, AtlasImage> {
   // Shallow clone of the cached procedural atlas (shares the painted tile canvases by reference).
   const atlas = new Map(proceduralAtlas());
@@ -632,6 +646,8 @@ export class Renderer {
   // Count of road asphalt-surface variants (0 = procedural roads, 1 = single surface, >1 = cycle
   // per-tile to break the repeated-texture plaid). Read in drawBase's per-tile road key pick.
   private roadVariants = 0;
+  // building variant count (base + baked #1..#n), cycled per parcel under a tileset to break repeats.
+  private buildingVariants = 0;
   // Cached base pass (terrain + built + overlay) on an offscreen canvas. Rebuilt
   // ONLY when invalidated (map/camera/overlay change), then blitted 1:1 onto the
   // visible canvas each frame. The hover preview and the ambient sprites live in
@@ -662,6 +678,7 @@ export class Renderer {
     this.atlas = buildAtlas(overrides);
     this.hasTileset = (overrides?.size ?? 0) > 0;
     this.roadVariants = overrides ? collectRoadSurfaces(overrides).length : 0;
+    this.buildingVariants = overrides ? collectBuildingVariants(overrides) : 0;
   }
 
   /**
@@ -674,6 +691,7 @@ export class Renderer {
     this.atlas = buildAtlas(overrides);
     this.hasTileset = (overrides?.size ?? 0) > 0;
     this.roadVariants = overrides ? collectRoadSurfaces(overrides).length : 0;
+    this.buildingVariants = overrides ? collectBuildingVariants(overrides) : 0;
     this.invalidateBase();
   }
 
@@ -798,7 +816,15 @@ export class Renderer {
           if (this.hasTileset && !isT && pid !== 0) {
             const fp = parcels.get(pid - 1);
             const cellKey = footprintCellKey(built, fp.width, fp.height, tx - fp.x, ty - fp.y, tier);
-            if (this.atlas.has(cellKey)) builtKey = cellKey;
+            if (this.atlas.has(cellKey)) {
+              builtKey = cellKey; // segmented multi-tile cell wins (seam continuity)
+            } else if (this.buildingVariants > 1) {
+              // 1×1 building VARIETY: cycle baked variants (b-…#n) by the PARCEL ANCHOR hash, so the
+              // whole footprint agrees and adjacent same-kind parcels read distinctly. Falls back to
+              // the base key when that variant slot has no baked tile (e.g. variant 0).
+              const vk = variantKey(builtKey, surfaceVariantIndex(fp.x, fp.y, this.buildingVariants));
+              if (this.atlas.has(vk)) builtKey = vk;
+            }
           }
           // Road asphalt-surface VARIANT pick (anti-plaid): cycle the tone-consistent variants
           // per-tile via a direction-neutral position hash, so the surface doesn't tile into a grid.

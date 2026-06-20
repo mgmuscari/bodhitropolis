@@ -159,8 +159,12 @@ export function isSurfaceKey(key) {
   return !!b && SURFACE_KINDS.has(b.kind);
 }
 
-/** The positive prompt for an atlas key (terrain or building). Throws on unsupported category. */
-export function promptFor(key, category) {
+/**
+ * The positive prompt for an atlas key (terrain or building). Throws on unsupported category.
+ * `salt` (default 0) varies the variety-pool pick for building VARIANTS — salt 0 is the committed
+ * tile (unchanged), salt 1..N pick different roof/site subjects so the same kind reads distinctly.
+ */
+export function promptFor(key, category, salt = 0) {
   if (category === 'terrain') {
     const kind = key.replace(/-\d+$/, '');
     const subj = TERRAIN_SUBJECT[kind];
@@ -174,7 +178,8 @@ export function promptFor(key, category) {
       return `${PIXEL_PREFIX}${SURFACE_SUBJECT[b.kind]}. ${SURFACE_SUFFIX}`;
     }
     const entry = BUILDING_SUBJECT[b.kind] ?? 'a small city building';
-    const subj = Array.isArray(entry) ? entry[hash32(key) % entry.length] : entry; // variety pool pick
+    const pick = hash32(salt ? `${key}#${salt}` : key) % (Array.isArray(entry) ? entry.length : 1);
+    const subj = Array.isArray(entry) ? entry[pick] : entry; // variety pool pick (salted per variant)
     const decay = b.tier >= 1 ? ', weathered and decayed, faded peeling paint, overgrown' : '';
     return `${PIXEL_PREFIX}${subj}${decay}. ${BUILDING_SUFFIX}`;
   }
@@ -191,12 +196,12 @@ function hash32(s) {
   }
   return h >>> 0;
 }
-export function seedFor(key, category) {
+export function seedFor(key, category, salt = 0) {
   if (category === 'building') {
     const b = parseBuildingKey(key);
-    if (b) return hash32(`b-${b.kind}-${b.tier}`);
+    if (b) return hash32(salt ? `b-${b.kind}-${b.tier}#${salt}` : `b-${b.kind}-${b.tier}`);
   }
-  return hash32(key);
+  return hash32(salt ? `${key}#${salt}` : key);
 }
 
 // ── ComfyUI graph ───────────────────────────────────────────────────────────────────────────
