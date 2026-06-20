@@ -119,9 +119,14 @@ Mapped to our stack (TypeScript, `src/ui/`, not standalone JS):
    procedural base per SatType (the procedural synthesis becomes the no-baked-tile fallback).
 3. ✅ `GridTextureBridge` + `satelliteFormat` (CPU packing) — reuses existing masks; unit-tested.
 4. ✅ `satelliteShader.ts` + `?shaderdemo` (deliverable 3) — proved the pass on a dummy grid.
-5. Wire to the live world behind `?shader`; A/B against Canvas2D; tune. (The bridge already accepts a
-   live `GameMap`; this is camera/viewport mapping + reading the live world each invalidation.)
-6. Migrate dynamics (water/shadows/glow) and retire CPU equivalents only once at parity.
+5. Wire to the live world as a **settings TOGGLE** (not just `?shader`); A/B against Canvas2D; tune.
+   The WebGL canvas renders the base UNDER the menu bars / UI layer (Maddy 2026-06-20). (The bridge
+   already accepts a live `GameMap`; this is camera/viewport mapping + reading the live world each
+   invalidation + the two-canvas stack: WebGL base ← Canvas2D sprites/overlays/UI on top.)
+6. The shader is **additive, never a replacement**: the CPU dynamics (animated-water flipbook,
+   wind-aligned grass sheen, smog plumes, drop-shadow-free flat look) are a PERMANENT path for
+   machines that can't run WebGL2 — they look good and ship as the default. Do NOT retire them at
+   parity; the shader is the opt-in high-end path (Maddy 2026-06-20).
 
 ## Open questions (for Maddy)
 

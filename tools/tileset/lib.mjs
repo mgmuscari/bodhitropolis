@@ -105,7 +105,7 @@ const BUILDING_SUBJECT = {
   23: 'a civic hall roof with a central cupola, skylights, and a paved plaza',
   31: 'a police precinct roof with rooftop antennas, HVAC units, and a parking lot of cruisers',
   32: 'a fire station with a red roof, a hose-drying tower, and an apron with a fire truck',
-  33: 'a clinic with a white roof, rooftop HVAC, and a painted helipad cross',
+  33: 'a medical clinic with a slate-grey roof, rooftop HVAC units, and a painted red cross marking', // not white — white floodfills to alpha
   34: 'a library roof with skylights, a small cupola, and rooftop vents',
   35: 'a school roof, flat with vents, beside a yard with a basketball court',
   24: 'a coal power plant roof with tall smokestacks, piping, conveyors, and exhaust vents',
@@ -397,7 +397,7 @@ export function whiteToAlpha(buf, size = 16) {
 // plant across its 3×3 plot, not nine tiny plants (Maddy 2026-06-19). Kinds absent here are 1×1 →
 // the single-tile object path. (Zoned R/C/I that grow to dynamic sizes are not handled yet.)
 export const FOOTPRINTS = {
-  23: 2, 32: 2, 33: 2, 34: 2, 35: 2, 26: 2, 49: 2, 51: 2, 52: 2, 56: 2, 58: 2, 59: 2, // 2×2 civic/service/eco
+  23: 2, 31: 2, 32: 2, 33: 2, 34: 2, 35: 2, 26: 2, 49: 2, 51: 2, 52: 2, 56: 2, 58: 2, 59: 2, // 2×2 civic/service/eco (31=precinct)
   24: 3, 25: 3, 29: 3, 57: 3, 60: 3, // 3×3 coal/gas/solar/commune/healing
   27: 4, 30: 4, // 4×4 nuclear/fusion
 };
