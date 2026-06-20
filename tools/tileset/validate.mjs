@@ -111,12 +111,43 @@ export async function facesForward(pngBuffer, subject) {
   return { ok: readsYes(text), text };
 }
 
-// CLI: `node tools/tileset/validate.mjs <png> "<subject>" [facing]` — quick manual check. With the
-// `facing` arg it runs the forward-facing check instead of top-down.
+/** Mean alpha of the CENTRAL region of a PNG (0..1). The white→alpha floodfill that ate light
+ *  buildings (the white clinic roof, white cars) leaves the building BODY transparent — so a
+ *  CENTER-position building tile reads near-empty in the middle. Checking the centre (not the whole
+ *  tile) avoids false positives from the legitimately-transparent OUTER edges every building sprite
+ *  has (it sits on transparency so the ground shows). No vision model — a fast, deterministic pixel
+ *  check, so it can scan the whole baked set cheaply. */
+export function centerOpacity(pngBuffer) {
+  const out = execFileSync(
+    'magick',
+    ['png:-', '-gravity', 'center', '-crop', '50%x50%+0+0', '+repage', '-format', '%[fx:mean.a]', 'info:'],
+    { input: pngBuffer, maxBuffer: 32 * 1024 * 1024 },
+  );
+  return Number(out.toString().trim()) || 0;
+}
+
+/** Is a CENTER-position ('c') building tile intact (its body wasn't floodfilled away)? True when the
+ *  central region has at least `min` mean alpha. The default catches only EGREGIOUS floodfill (a body
+ *  erased to near-empty, like the original white-roof/white-car bug ≈ 0) — a small building still has
+ *  a sparse-but-present centre (~0.2), so a low bar avoids false-positiving legitimately small/light
+ *  sprites. Use on full-body center cells; edge/corner cells legitimately have transparent centres.
+ *  Deterministic (no vision), so it can scan the whole baked set cheaply as a flag for manual review. */
+export const INTACT_MIN = 0.08;
+export function isIntact(pngBuffer, min = INTACT_MIN) {
+  return centerOpacity(pngBuffer) >= min;
+}
+
+// CLI: `node tools/tileset/validate.mjs <png> "<subject>" [facing|intact]` — quick manual check.
+//   facing → forward-facing check; intact → center-opacity floodfill check; default → top-down.
 if (process.argv[1] && process.argv[1].endsWith('validate.mjs') && process.argv[2]) {
   const { readFileSync } = await import('node:fs');
   const buf = readFileSync(process.argv[2]);
-  const check = process.argv[4] === 'facing' ? facesForward : isTopDown;
-  const { ok, text } = await check(buf, process.argv[3] ?? 'object');
-  console.log(`ok=${ok}\n${text}`);
+  if (process.argv[4] === 'intact') {
+    const a = centerOpacity(buf);
+    console.log(`ok=${a >= INTACT_MIN} centerOpacity=${a.toFixed(3)}`);
+  } else {
+    const check = process.argv[4] === 'facing' ? facesForward : isTopDown;
+    const { ok, text } = await check(buf, process.argv[3] ?? 'object');
+    console.log(`ok=${ok}\n${text}`);
+  }
 }
