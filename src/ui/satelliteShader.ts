@@ -310,6 +310,22 @@ export function buildDemoWorld(size = 64): GameMap {
       }
     }
   }
+  // a few solid tower blocks on open ground so the raymarched drop-shadows are unmistakable
+  // (the headline feature: tall structures cast real volume over their neighbours and the street)
+  const towers: ReadonlyArray<readonly [number, number, number, number]> = [
+    [Math.floor(size * 0.33), Math.floor(size * 0.32), 3, BuiltKind.CoalPlant],
+    [Math.floor(size * 0.6), Math.floor(size * 0.55), 3, BuiltKind.Offices],
+    [Math.floor(size * 0.42), Math.floor(size * 0.7), 2, BuiltKind.Apartments],
+  ];
+  for (const [tx, ty, tw, kind] of towers) {
+    for (let dy = 0; dy < tw; dy++) {
+      for (let dx = 0; dx < tw; dx++) {
+        const x = tx + dx;
+        const y = ty + dy;
+        if (x < size && y < size && m.getWater(x, y) === Water.None) m.setBuilt(x, y, kind);
+      }
+    }
+  }
   return m;
 }
 

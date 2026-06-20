@@ -5,16 +5,39 @@ Maddy reports bugs as she playtests; Claude **records them here** (need not fix 
 
 Status: 🔴 open · 🟡 in progress · ✅ fixed (note the PR)
 
-## HYBRID SATELLITE SHADER — diffusion tiles × WebGL2 (Maddy, 2026-06-19) — proposed
+## HYBRID SATELLITE SHADER — diffusion tiles × WebGL2 (Maddy, 2026-06-19) — GROUND BROKEN
 
-🔴 Real-time procedural satellite renderer that HYBRIDIZES the baked diffusion tileset (base albedo,
-Oakland identity) with a single-pass WebGL2/GLSL fragment shader (dynamics + depth + variation):
-packed `u_data_map` (R=type, G=height, B=`transportMask` adjacency, A=sim/glow), tile-atlas albedo
-sampling + fBm/Voronoi for water/anti-plaid, adjacency-mask procedural road markings, 2D raymarched
-drop-shadows from the G height channel (10–16 steps), SDF tile-type transitions. Feature-flagged
-WebGL2 path alongside Canvas2D (determinism untouched, render-only). Deliverables: `satelliteShader.ts`
-(program + GLSL), `gridTextureBridge.ts` (world→packed Uint8 texture), 60-FPS mock harness. Full spec
-+ phasing + open questions: **`docs/art/satellite-shader.md`**. Depends on the satellite tileset bake.
+Real-time procedural satellite renderer that HYBRIDIZES the baked diffusion tileset (base albedo,
+Oakland identity) with a single-pass WebGL2/GLSL fragment shader (dynamics + depth + variation).
+
+- 🟢 **Foundation landed + live-verified (2026-06-19)** — the bake-independent half:
+  - `satelliteFormat.ts` — the CPU↔GPU data contract: `SatType` enum, `packCell` → 4 channels
+    (R=type, G=height/band/class, B=`transportMask` adjacency, A=live sim). Pure, allowlisted, tested.
+  - `gridTextureBridge.ts` — `GridTextureBridge`: world grid → packed `Uint8Array` + dirty-rect for
+    `texSubImage2D`. Pure, allowlisted, tested.
+  - `satelliteShader.ts` — WebGL2 `SatelliteShader` + GLSL: anti-plaid noise terrain, time-animated
+    water, adjacency-mask road centerlines + traffic glow, single-pass raymarched drop-shadows from
+    the G height channel. Source builders unit-tested for the CPU↔GPU enum contract.
+  - `?shaderdemo` route + `mountSatelliteDemo`/`buildDemoWorld` — proven on a synthetic 64² world,
+    ~50 FPS on software WebGL (→60 on a GPU). Commits `eefaee77`, `61d7b65b`.
+- 🔴 **Phase 2 (next, gated on the bake):** pack the baked tiles into the albedo atlas the shader
+  samples (the `tilesetExport` keyspace → a `TEXTURE_2D_ARRAY`), composite albedo over the procedural
+  base per SatType; then wire to the live world behind `?shader` (the bridge already accepts a live
+  `GameMap`). SDF tile-type transitions. Full spec + phasing + open questions:
+  **`docs/art/satellite-shader.md`**.
+
+## ASPHALT GROUND = REDLINE, healing DE-PAVES (Maddy, 2026-06-19) — proposed, on-theme
+
+🔴 Tie the satellite tileset's GROUND-BASE layer to the redline field + the healing loop: in redlined
+areas the developed ground under/around buildings reads as **asphalt** (paved-over disinvestment); as
+the player HEALS redline over time, the asphalt "comes up" and is replaced by greener/living ground
+(de-paving → grass/meadow/rewild). Buildings already composite over the ground via alpha, so this is a
+GROUND-MATERIAL layer driven by `world.redline` grade (not natural terrain): high redline → asphalt,
+healing → asphalt→green transition keyed to the grade improving. Reuses the committed asphalt surface +
+grass/meadow terrain tiles + the redline field (`redlineOverlayContent`). Deeply on the env-justice
+theme (asphalt = the legacy of redlining; healing = depaving/greening — the player restores, never
+"redevelops"; see CLAUDE.md 2026-06-17 + [[maddy-environmental-justice-stake]]). The hybrid shader could
+animate the transition (A-channel = heal progress → asphalt-to-grass blend). Design after the bake.
 
 ## TILESET GRAPHICS — first skin (Maddy, 2026-06-19) — active
 

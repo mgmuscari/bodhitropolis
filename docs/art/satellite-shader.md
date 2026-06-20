@@ -1,7 +1,13 @@
 # Hybrid satellite renderer — diffusion tiles × real-time procedural shader
 
-**Status:** proposed (Maddy 2026-06-19). Feature request, not yet built. Depends on the satellite
-tileset (`satellite-tileset.md`) being baked.
+**Status:** ground broken (2026-06-19). The bake-independent foundation is landed and live-verified:
+the CPU→GPU data bridge (`src/ui/satelliteFormat.ts` + `src/ui/gridTextureBridge.ts`), the WebGL2
+procedural pass (`src/ui/satelliteShader.ts` — anti-plaid terrain, animated water, road centerlines
+from the adjacency mask, single-pass raymarched drop-shadows), and a `?shaderdemo` harness proving the
+pass on a synthetic world (~50 FPS on *software* WebGL in a container → 60 on a GPU). What remains is
+**phase 2**: pack the baked diffusion tiles into the albedo atlas the shader samples, then wire the
+path to the live world behind `?shader`. That phase depends on the satellite tileset
+(`satellite-tileset.md`) finishing its bake.
 
 ## Vision
 
@@ -82,13 +88,17 @@ tiles, and it animates with a day cycle if `u_sun_direction` rotates.
 
 Mapped to our stack (TypeScript, `src/ui/`, not standalone JS):
 
-1. **`src/ui/satelliteShader.ts`** — WebGL2 program init + vertex/fragment GLSL source (the
-   `SatelliteShaderMaterial`). Pure-ish (GL handles + source strings); the GLSL lives here.
-2. **`src/ui/gridTextureBridge.ts`** — `GridTextureBridge`: world grid → bitmask/height/type/sim
-   packing → `Uint8Array` → optimal `texSubImage2D`. Reuses `transportMask`/`kindOf` from the engine.
-3. **Mock/dev harness** — a minimal WebGL2 canvas init with a dummy 64×64 grid proving procedural
-   synthesis + raymarched shadows + animation tick at 60 FPS, before wiring to the live world. (A
-   `?shader` dev route or a vitest+headless-gl smoke test.)
+1. **`src/ui/satelliteShader.ts`** ✅ — WebGL2 program (`SatelliteShader`) + the vertex/fragment GLSL.
+   The GLSL *source builders* (`buildVertexSource`/`buildFragmentSource`/`glslDefines`) are pure and
+   unit-tested for the CPU↔GPU enum contract; the GL program + `mountSatelliteDemo` are browser code.
+2. **`src/ui/satelliteFormat.ts` + `src/ui/gridTextureBridge.ts`** ✅ — the data contract (`SatType`,
+   `packCell`) and `GridTextureBridge` (world grid → 4-channel `Uint8Array` → dirty-rect for
+   `texSubImage2D`). Pure/DOM-free (allowlisted), reuse `transportMask`/`transportCategory`. Fully
+   unit-tested.
+3. **Mock/dev harness** ✅ — `?shaderdemo` route mounts `mountSatelliteDemo` on a synthetic 64×64
+   world (`buildDemoWorld`: terrain bands + elevation, a lake, a road grid with traffic, contrasting
+   tower blocks) proving procedural synthesis + raymarched shadows + the animation tick. Safe to open
+   in a scratch browser — it returns before the live game boots.
 
 ## Relationship to the current renderer
 
@@ -102,12 +112,15 @@ Mapped to our stack (TypeScript, `src/ui/`, not standalone JS):
 
 ## Dependencies & phasing
 
-1. **(done/in-progress)** Bake the satellite tileset (terrain + building PNGs) — the shader's albedo
+1. **(in-progress)** Bake the satellite tileset (terrain + building PNGs) — the shader's albedo
    source. Without baked tiles the shader is pure-procedural and loses the Oakland identity.
-2. Atlas bake: pack the tileset PNGs into a single GPU texture array (the `tilesetExport` keyspace).
-3. `GridTextureBridge` (CPU packing) — reuses existing masks; standalone-testable.
-4. `satelliteShader.ts` mock (deliverable 3) — prove the pass at 60 FPS on a dummy grid.
-5. Wire to the live world behind `?shader`; A/B against Canvas2D; tune.
+2. **(next, gated on the bake)** Atlas bake: pack the tileset PNGs into a single GPU texture array
+   (the `tilesetExport` keyspace), and have the fragment shader composite the baked albedo over the
+   procedural base per SatType (the procedural synthesis becomes the no-baked-tile fallback).
+3. ✅ `GridTextureBridge` + `satelliteFormat` (CPU packing) — reuses existing masks; unit-tested.
+4. ✅ `satelliteShader.ts` + `?shaderdemo` (deliverable 3) — proved the pass on a dummy grid.
+5. Wire to the live world behind `?shader`; A/B against Canvas2D; tune. (The bridge already accepts a
+   live `GameMap`; this is camera/viewport mapping + reading the live world each invalidation.)
 6. Migrate dynamics (water/shadows/glow) and retire CPU equivalents only once at parity.
 
 ## Open questions (for Maddy)
