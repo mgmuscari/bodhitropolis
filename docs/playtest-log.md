@@ -3,6 +3,10 @@
 Running capture of Maddy's playtest reports so they're absorbed without thrashing. Newest at top.
 `[ ]` open · `[~]` in progress · `[x]` done · `(feat)` = feature request (log, don't build until prioritized).
 
+> **This is the raw capture stream only.** The single consolidated open backlog lives in
+> **`docs/bug-queue.md` → "THE BACKLOG"**. Open `[ ]` items here are folded into it (don't track open
+> work in two places).
+
 ## 2026-06-20 — satellite look pass
 
 - [x] **Water system redesign.** (done: good static base + hybrid stochastic tiling + sloshy wind-driven overlay) The baked water tiles are bad (esp. rivers); the de-cyan grade + subtle
@@ -89,8 +93,9 @@ Renderer/look:
 Sim/agents:
 - [ ] **Travelers can path THROUGH dividers/medians — should be blocked.** DIAGNOSED: carTraversable() explicitly includes PlantedMedian (ambientContent ~1104) → cars drive on it; ped pathing likely same. Fix needs care (road routing must still work around the barrier on median-containing corridors) + freeway jersey-divider no-cross.
 - (feat) **Rails need TRAINS** (ambient trains running on rail).
-- [ ] **People walk around green plots with no destination** — is leisure; Q from Maddy: are these
-  actors or ambient? (Decide: give leisure walkers a destination/dwell, or is it the ambient stroller pool.)
+- [→] **People walk around green plots with no destination** — DECIDED (Maddy 2026-06-20): no ambient
+  stroller pool anymore; EVERY agent paths to a real destination, and green/leisure tiles join the agent
+  destination loop. → THE BACKLOG §2.
 
 ## 2026-06-20 — batch 6 (deferred)
 

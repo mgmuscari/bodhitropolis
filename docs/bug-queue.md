@@ -8,28 +8,68 @@ Status: 🔴 open · 🟡 in progress · ✅ fixed (note the PR)
 > Detailed running playtest capture: **`docs/playtest-log.md`** (newest first). This file is the
 > curated backlog; the log is the raw stream.
 
-## ACTIVE BACKLOG — pending work (2026-06-20)
+## THE BACKLOG — single consolidated open list (2026-06-20)
 
-Open, in priority-ish order. Branch `playtest/overnight-batch` (sequential, one branch).
+**One backlog.** This is the single source of open work — the `playtest-log.md` open items, the
+bug-queue sections, and every "deferred" item are folded in here. ("Deferred" never meant frozen —
+it means *don't context-switch now, write it down, do it later*; deferred items are normal backlog.)
+The dated sections below this one are the **archive** (✅ done + diagnoses kept for context); the
+`playtest-log.md` stays only as the raw newest-first capture stream. Newest decisions at the bottom
+of each group. Branch `playtest/overnight-batch` (sequential, one branch).
 
-- ✅ **R/C/I + civic multi-tile blocks rendered as repeated singles** (FIXED 2026-06-20, `726b47e0`) —
-  worldgen/tool/growth place footprints the bake never covered (civic 3×3, commercial 2×1, offices 2×2,
-  projects/industrial 3×3). Extended the multitile baker to **non-square W×H + multiple sizes per kind**
-  (`PLOTS` list; `footprintPng`/`uploadFootprint`/`whiteToAlpha`/`buildBuildingGraph` take W×H), baked
-  the 10 missing plots, cells verified to compose into one building. ⚠️ Only `2×1` commercial baked (not
-  `1×2`); if vertical commercial appears, add it to `PLOTS`.
-- 🔴 **Shader as a SETTINGS TOGGLE under the menu bars (phase 5)** — fold the WebGL path into settings so
-  it can be A/B'd live; two-canvas stack (WebGL base ← Canvas2D sprites/UI on top). Needs phase 2 (atlas
-  albedo) so the shader keeps the baked identity. The CPU dynamics stay the permanent no-WebGL default
-  (NOT retired). See `docs/art/satellite-shader.md`.
-- 🔴 **Hybrid shader phase 2 — atlas albedo** — shader samples the baked tiles (not just procedural).
-  Prereq for phase 5 looking right. (Detailed below.)
-- 🔴 **Asphalt-ground = redline / healing de-paves** — on-theme ground-material mechanic (detailed below).
-- 🟡 **Peds + cyclists wiring** (feature) — sprites baked + validated; drop into the ped draw loop like
-  the cars (rotate by heading; ped vs cyclist by `TravelMode`). `public/sprites/ambient/{peds,cyclists}`.
-- 🟡 **Building variety** — 2 variants/1×1 kind shipped; want 5–10 per kind eventually.
-- 🟡 **More bake validation** — `validate.mjs` (LMStudio gemma vision) gates top-down geometry; could
-  also gate "building intact, not floodfilled" + run over the whole baked set, not just ambient.
+### 1 — Live-game bugs (playtest loop, do first)
+- 🔴 **Travelers path THROUGH dividers/medians — must be blocked** (sim). `carTraversable()` includes
+  `PlantedMedian` (ambientContent ~1104) → cars drive on it; peds likely same. Fix must keep road
+  routing *around* the barrier on median corridors + freeway jersey-divider no-cross. (Couples to the
+  destination-loop work in §2.)
+- 🔴 **Taxi/van drives BACKWARDS** — sprite faces wrong way for travel. Add a *facing* check to the
+  ambient validator (vehicle FRONT must be at the TOP; renderer rotates assuming north-facing);
+  reject/normalize + re-bake offenders. Most cars re-baked top-down already, but facing is unverified.
+- 🔴 **Rail crossings should render** where rail crosses road (renderer).
+
+### 2 — Agent destination model (DECIDED — Maddy 2026-06-20)
+- 🔴 **No ambient stroller pool — EVERY agent paths to a real destination.** Retire the catch-all
+  wander/ambient-stroller branch entirely; bring **green/leisure tiles into the agent destination loop**
+  as first-class trip targets (parks/greens/rewilded become "leisure" destinations with a dwell), so
+  "people walking green plots with no destination" become real trips, not loiterers. This subsumes the
+  old leisure-walker question. Couples with §1 divider-blocking (destinations must be reachability-gated).
+
+### 3 — Live look / animation polish
+- 🔴 **Lake water doesn't slosh — per-tile AFFINE transforms.** Apply an oscillating affine (skew +
+  small translate, wind-aligned, normal angular drift) per water tile to *simulate* sloshing — richer
+  than the current pattern-scroll overlay. (Was tagged "defer"; now normal backlog.)
+- 🟡 **Building variety** — 2 variants/1×1 kind shipped; want 5–10 per kind.
+- 🟡 **Broader bake validation** — `validate.mjs` (LMStudio gemma vision) gates top-down geometry; extend
+  to gate "building intact, not floodfilled" + the facing check (§1) + run over the WHOLE baked set, not
+  just ambient.
+- 🔴 **Road structure remainder** — parcel-side setback/sidewalk frontage, tech-gated edge props (street
+  trees, bike racks), per-corridor lane lines on wide roads. (Plan §5.5; curbs/median/ramps already done.)
+
+### 4 — Agent / sim features (spec'd, not built)
+- 🟡 **Peds + cyclists wiring** — sprites baked + validated; drop into the draw loop like cars (rotate by
+  heading; ped vs cyclist by `TravelMode`). `public/sprites/ambient/{peds,cyclists}`.
+- 🔵 **Trains on rails** — ambient trains running on rail.
+- 🔵 **Multi-tile plots get built-in parking** — ≥2×2 plots reserve a `ParkingLot` edge tile facing a
+  drivable neighbour; the STRUCTURAL fix for walled-off-job churn. `docs/design/multitile-parking.md`.
+- 🔵 **Smog diffusion + rain→runoff** — isotropic smog diffusion + occasional rain relocating smog→ground
+  →water (dilution <1, pollution relocates not vanishes). `docs/design/pollution-weather.md`.
+- 🟡 **Unhoused agents — shelter + days** — first-cut COUNT shipped; deeper mechanics await: visible
+  sheltering agents (encampments), per-event displacement, shelter kinds. `docs/design/unhoused-residents.md`.
+
+### 5 — Hybrid satellite shader (cold track)
+- 🔴 **Phase 2 — atlas albedo** — shader samples the baked tiles (not just procedural); prereq for phase 5
+  looking right. Detailed under HYBRID SATELLITE SHADER below + `docs/art/satellite-shader.md`.
+- 🔴 **Phase 5 — settings toggle under the menu bars** — fold the WebGL path into settings for live A/B;
+  two-canvas stack (WebGL base ← Canvas2D sprites/UI on top). CPU dynamics stay the permanent no-WebGL
+  default (NOT retired).
+
+### 6 — Theme mechanic (cold track)
+- 🔴 **Asphalt-ground = redline / healing de-paves** — ground-material layer keyed to `world.redline`:
+  redlined ground reads as asphalt (paved-over disinvestment); healing de-paves asphalt→green. On-theme
+  env-justice mechanic (player restores, never "redevelops"). Detailed below.
+
+> **Watch:** multitile commercial only baked `2×1` (not `1×2`) — if vertical commercial appears, add it
+> to `PLOTS` and re-bake (`tools/tileset/generate-multitile.mjs`).
 
 ### Done this session (2026-06-19 → 06-20, satellite polish)
 
