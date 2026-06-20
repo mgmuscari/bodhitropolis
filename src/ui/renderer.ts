@@ -1126,6 +1126,28 @@ export class Renderer {
 
     const mapW = world.map.width;
 
+    // Animated water shimmer (under a tileset): a travelling sun-glint sparkle over visible water
+    // tiles so bodies of water MOVE in the live game (Maddy: "begging for animation"). The full
+    // continuous treatment is the shader path; this is the cheap Canvas2D layer — gated on a readable
+    // zoom (ts≥8) and the per-tile phase so only a moving subset sparkles, and culled to the viewport.
+    if (this.hasTileset && ts >= 8) {
+      const map = world.map;
+      const range = camera.visibleTileRange();
+      const t = performance.now() / 1000;
+      ctx.fillStyle = '#bcd6de';
+      for (let ty = range.y0; ty <= range.y1; ty++) {
+        for (let tx = range.x0; tx <= range.x1; tx++) {
+          if (map.water[map.idx(tx, ty)] === 0) continue;
+          const ph = Math.sin(t * 1.4 + (tx * 0.7 + ty * 1.3)); // travelling wave across the water
+          if (ph < 0.35) continue; // only the crest sparkles → a moving glint, not a flat sheen
+          const { sx, sy } = camera.worldToScreen(tx, ty);
+          ctx.globalAlpha = 0.16 * ph;
+          ctx.fillRect(Math.floor(sx + ts * 0.18), Math.floor(sy + ts * 0.42), ts * 0.5 * ph, Math.max(1, ts * 0.1));
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+
     // Desire-path WEAR: pedestrians beat wild-green ground into brown dirt + litter. Drawn
     // first (ground level), browning the tile by wear and dropping trash specks as it deepens.
     for (const [tile, wear] of ambient.wear) {
