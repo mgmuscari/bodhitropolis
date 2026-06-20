@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { footprintPng, pickShape } from './footprint.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WORKFLOW = JSON.parse(readFileSync(join(HERE, 'workflow.api.json'), 'utf8'));
@@ -27,6 +28,20 @@ export const CLIENT_ID = 'bodhi-tileset-gen';
 export const CN_STRENGTH_BUILDING = Number(process.env.TS_CN ?? 0.55);
 export const CN_STRENGTH_TERRAIN = Number(process.env.TS_CN_TERRAIN ?? 0.3);
 export const LORA = Number(process.env.TS_LORA ?? 1.0); // pixel-art LoRA global strength (node 2)
+
+// Building generation (img2img from a black-footprint silhouette; the full convergence of Maddy's
+// guidance 2026-06-19): low LoRA (kills iso bias), cfg>1 + a REAL negative (suppress iso/perspective
+// in the negative, not the positive), high denoise (paint into the black footprint region).
+export const BUILDING_LORA = Number(process.env.TS_BLORA ?? 0.35);
+// cfg MUST stay 1.0: Z-Image turbo is guidance-distilled for cfg=1; cfg>1 breaks its color (probed
+// 2026-06-19 — blue/muted, footprint stays dark). So the negative node (node 8) is mathematically
+// cancelled and unused; the positive roof/site prompt + black footprint + low LoRA carry it.
+export const BUILDING_CFG = Number(process.env.TS_CFG ?? 1.0);
+export const BUILDING_DENOISE = Number(process.env.TS_DENOISE ?? 0.92);
+export const NEGATIVE_PROMPT = process.env.TS_NEG ??
+  'isometric, 3/4 view, side view, profile, perspective, elevation, walls, facade, building sides, ' +
+  '3d render, photorealistic, smooth shading, gradient, blurry, anti-aliasing, drop shadow, horizon, ' +
+  'low contrast, watermark, signature, jpeg artifacts';
 
 // ── Prompt table ────────────────────────────────────────────────────────────────────────────
 // Style is built from a category suffix; the subject comes from the terrain kind or building kind.
@@ -41,10 +56,15 @@ const TERRAIN_SUFFIX =
 // they sit on asphalt / grass / whatever is beneath — Maddy 2026-06-19). So prompt them ISOLATED on
 // plain white, centered and filling most of the tile — NOT painting their own ground (the terrain
 // supplies that). The flat white background is what whiteToAlpha() floodfills away.
+// TRUE orthographic top-down (Maddy 2026-06-19: "it's a profile… not straight down the stacks on the
+// roof"). POSITIVE-ONLY framing: negations in the positive prompt ("no walls, not isometric") invoke
+// what they name (diffusion paradox — Maddy), so we describe ONLY the desired overhead imagery and let
+// real negatives live in a proper negative-conditioning node (cfg>1, pending from the comfy agent).
+// Frame as aerial/satellite photo + low LoRA so the base model's top-down wins (on-vision Google-Maps).
 const BUILDING_SUFFIX =
-  'seen from directly straight above, top-down, the building centered and filling most of the frame, ' +
-  'isolated on a plain solid white background, bold black outline, slightly cartoonish, flat even ' +
-  'lighting, no drop shadow, no perspective, pixel art, 16-bit city-builder, Oakland California';
+  'aerial photograph, satellite imagery, overhead drone photo straight down, orthographic top-down ' +
+  'map tile, flat rooftop viewed from directly above, centered, filling most of the frame, isolated ' +
+  'on a plain white background, crisp pixels, Oakland California';
 
 // Terrain kind (the `${kind}` of `${kind}-${band}`) → subject.
 const TERRAIN_SUBJECT = {
@@ -57,43 +77,58 @@ const TERRAIN_SUBJECT = {
   forest: 'dense green tree canopy treetops, forest from above',
 };
 
-// Building kind code → subject (Oakland cues; roof-from-above framing comes from the suffix).
+// Building kind → ROOF / SITE subject, named top-down features (Maddy 2026-06-19: "name items that
+// might be on the roof: terra cotta tile roof, HVAC machinery, smokestacks and piping"; "house with
+// pool, tennis court, junk cars — be creative"). An ARRAY is a variety pool (a craftsman house should
+// not look like every other); promptFor picks one per seed. All described as seen from straight above.
 const BUILDING_SUBJECT = {
-  16: 'a single Victorian craftsman bungalow with a gabled roof and small yard',
-  17: 'a stucco apartment block with a flat roof and rooftop vents',
-  18: 'a mid-century concrete housing project block with a flat roof',
-  19: 'a low commercial strip of storefronts with flat roofs',
-  20: 'a downtown office building, flat roof with rooftop HVAC units',
-  21: 'an industrial warehouse, corrugated metal roof with vents',
-  22: 'an asphalt parking lot with painted stalls and a few cars',
-  23: 'a civic hall building with a formal roof and plaza',
-  31: 'a police precinct building roof',
-  32: 'a fire station with a red roof and apparatus bay',
-  33: 'a small medical clinic building roof',
-  34: 'a public library building roof',
-  35: 'a school building with a yard',
-  24: 'a coal power plant with dark smokestacks',
-  25: 'a gas power plant with storage tanks and pipes',
-  26: 'a hydroelectric plant with water channels and turbines',
-  27: 'a nuclear power plant with a cooling tower',
-  28: 'a white wind turbine over a green field',
-  29: 'a blue solar panel array',
-  30: 'a sleek futuristic fusion power plant',
-  48: 'a tiny urban parklet with benches and planters',
-  49: 'a community garden with raised beds and green plots',
-  50: 'a compost hub with bins and organic material',
-  51: 'a vertical farm building with a green roof and greenhouses',
-  52: 'a wastewater treatment works with round settling tanks',
-  53: 'a small clean-energy substation',
-  54: 'a sleek AI data center building roof',
-  55: 'a small backyard accessory dwelling unit roof',
-  56: 'a co-op housing block around a garden courtyard',
-  57: 'communal housing around a shared garden courtyard',
-  58: 'an open-air market bazaar with colorful stalls and awnings',
-  59: 'a maker-space workshop building roof',
-  60: 'a serene healing-commons garden building',
-  61: 'a green city park with lawn, trees, and paths',
-  62: 'rewilded native land, wild grasses and restored nature',
+  16: [ // residential variety
+    'a craftsman house with a terra cotta tile roof, a backyard swimming pool, and a garden',
+    'a Victorian house with a grey shingle roof, a tennis court, and a driveway with a parked car',
+    'a bungalow with a gabled roof, a vegetable garden, a detached garage, and hedges',
+    'a two-story house with rooftop solar panels, a back patio, and a lawn with a tree',
+    'a cottage with a small kidney-shaped pool, a paved path, and shrubs',
+  ],
+  55: [ // accessory dwelling
+    'a small backyard cottage with a shingle roof beside a garden and a parked car',
+    'a tiny house with a green roof, a deck, and potted plants',
+  ],
+  17: 'an apartment block, tar-and-gravel roof with rooftop water tanks, vents, and a stair hatch',
+  18: 'a concrete housing project roof, flat with vents, stairwell hatches, and a courtyard',
+  19: 'a strip of shop rooftops, flat with skylights, rooftop signage, and ducting',
+  20: 'an office building roof with HVAC machinery, ductwork, and rooftop units',
+  21: [ // industrial variety
+    'a warehouse with a corrugated metal roof, skylights, roof vents, and loading docks',
+    'an industrial yard with shipping containers, junk cars, storage tanks, and piping',
+    'a factory roof with exhaust stacks and ducting beside a lot full of junk cars',
+  ],
+  23: 'a civic hall roof with a central cupola, skylights, and a paved plaza',
+  31: 'a police precinct roof with rooftop antennas, HVAC units, and a parking lot of cruisers',
+  32: 'a fire station with a red roof, a hose-drying tower, and an apron with a fire truck',
+  33: 'a clinic with a white roof, rooftop HVAC, and a painted helipad cross',
+  34: 'a library roof with skylights, a small cupola, and rooftop vents',
+  35: 'a school roof, flat with vents, beside a yard with a basketball court',
+  24: 'a coal power plant roof with tall smokestacks, piping, conveyors, and exhaust vents',
+  25: 'a gas power plant with cylindrical storage tanks, piping, and flare stacks',
+  26: 'a hydroelectric plant with turbine housings, water intakes, and penstocks',
+  27: 'a nuclear plant with a domed containment, cooling structures, and piping',
+  28: 'a wind turbine from directly above, a white nacelle and three long blades',
+  29: 'a solar plant, neat rows of dark blue photovoltaic panels',
+  30: 'a fusion plant with a sleek reactor dome, cooling fins, and conduits',
+  48: 'a parklet with benches, planters, and a paved path',
+  49: 'a community garden with raised planting beds, green plots, and a tool shed',
+  50: 'a compost hub with rows of compost bins, bays, and a wheelbarrow',
+  51: 'a vertical farm with glass greenhouse roofs and rooftop solar panels',
+  52: 'a wastewater works with round settling tanks and pipework',
+  53: 'a clean-energy substation with transformers and switchgear',
+  54: 'an AI data center roof, dense rows of cooling units and ductwork',
+  56: 'a co-op housing block with rooftop solar around a shared garden courtyard',
+  57: 'communal housing roofs around a green courtyard with garden beds',
+  58: 'an open-air market, rows of colorful striped stall awnings',
+  59: 'a maker-space with sawtooth skylight roofs and rooftop vents',
+  60: 'a healing-commons green garden roof with skylights and a meditation court',
+  61: 'a city park with lawn, tree canopies, winding paths, and a pond',
+  62: 'rewilded land, wild grasses, shrubs, a pond, and fallen logs',
 };
 
 const PIXEL_PREFIX = 'Pixel art style. ';
@@ -138,7 +173,8 @@ export function promptFor(key, category) {
     if (SURFACE_KINDS.has(b.kind)) {
       return `${PIXEL_PREFIX}${SURFACE_SUBJECT[b.kind]}. ${SURFACE_SUFFIX}`;
     }
-    const subj = BUILDING_SUBJECT[b.kind] ?? 'a small city building';
+    const entry = BUILDING_SUBJECT[b.kind] ?? 'a small city building';
+    const subj = Array.isArray(entry) ? entry[hash32(key) % entry.length] : entry; // variety pool pick
     const decay = b.tier >= 1 ? ', weathered and decayed, faded peeling paint, overgrown' : '';
     return `${PIXEL_PREFIX}${subj}${decay}. ${BUILDING_SUFFIX}`;
   }
@@ -212,6 +248,37 @@ export function buildTxt2imgGraph({ prompt, seed, tiling = false }) {
   return g;
 }
 
+/**
+ * Building graph: img2img from a black-footprint silhouette init, with a REAL negative prompt (node 8
+ * CLIPTextEncode) at cfg>1 to suppress iso/perspective. The building diffuses into the black footprint
+ * region (flat, top-down); white is kept → alpha. `gen` = latent px (512 single tile, w·256 plot),
+ * `pixel` = PixelOE size (gen/pixel = output px). Low BUILDING_LORA kills the iso game-sprite bias.
+ */
+export function buildBuildingGraph({ initName, prompt, seed, gen = 512, pixel = 32 }) {
+  return {
+    1: { class_type: 'UNETLoader', inputs: { unet_name: 'z_image_turbo_bf16.safetensors', weight_dtype: 'default' } },
+    2: { class_type: 'ZImageLoraAutoLoader', inputs: { lora_name: 'pixel_art_style_z_image_turbo.safetensors', global_strength: BUILDING_LORA, model: ['1', 0] } },
+    4: { class_type: 'ModelSamplingAuraFlow', inputs: { shift: 3, model: ['2', 0] } },
+    5: { class_type: 'CLIPLoader', inputs: { clip_name: 'qwen_3_4b.safetensors', type: 'lumina2', device: 'default' } },
+    6: { class_type: 'VAELoader', inputs: { vae_name: 'ae.safetensors' } },
+    7: { class_type: 'CLIPTextEncode', inputs: { text: prompt, clip: ['5', 0] } },
+    8: { class_type: 'CLIPTextEncode', inputs: { text: NEGATIVE_PROMPT, clip: ['5', 0] } }, // real negative (cfg>1)
+    17: { class_type: 'LoadImage', inputs: { image: initName } },
+    18: { class_type: 'ImageScale', inputs: { upscale_method: 'bilinear', width: gen, height: gen, crop: 'disabled', image: ['17', 0] } },
+    21: { class_type: 'VAEEncode', inputs: { pixels: ['18', 0], vae: ['6', 0] } },
+    10: { class_type: 'KSampler', inputs: { seed, steps: 8, cfg: BUILDING_CFG, sampler_name: 'res_multistep', scheduler: 'simple', denoise: BUILDING_DENOISE, model: ['4', 0], positive: ['7', 0], negative: ['8', 0], latent_image: ['21', 0] } },
+    11: { class_type: 'VAEDecode', inputs: { samples: ['10', 0], vae: ['6', 0] } },
+    12: { class_type: 'PixelOE', inputs: { pixel_size: pixel, thickness: 2, mode: 'k_centroid', color_quant: true, no_post_upscale: true, num_colors: 32, quant_mode: 'kmeans', dither_mode: 'ordered', weight_mapping: 'current', device: 'default', img: ['11', 0] } },
+    14: { class_type: 'SaveImage', inputs: { filename_prefix: 'bodhitile', images: ['12', 0] } },
+  };
+}
+
+/** Render + upload a creative black-footprint silhouette init for a building (kind,tier) at `size`px. */
+export async function uploadFootprint(kind, seed, size) {
+  const shape = pickShape(seed);
+  return uploadImage(footprintPng(shape, size), `fp-${kind}-${size}.png`);
+}
+
 // ── ComfyUI REST helpers ──────────────────────────────────────────────────────────────────────
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -282,7 +349,9 @@ export async function generateTile({ key, category, tiling, controlBuf, controlN
   const object = category === 'building' && !surface; // houses/etc → alpha sprite over the ground
   let graph;
   if (object) {
-    graph = buildTxt2imgGraph({ prompt, seed }); // no controlnet, framed object
+    const b = parseBuildingKey(key);
+    const initName = await uploadFootprint(b.kind, seed, 512); // creative black-footprint silhouette
+    graph = buildBuildingGraph({ initName, prompt, seed, gen: 512, pixel: 32 });
   } else if (surface) {
     graph = buildTxt2imgGraph({ prompt, seed, tiling: true }); // seamless opaque asphalt
   } else {
@@ -298,20 +367,46 @@ export async function generateTile({ key, category, tiling, controlBuf, controlN
 }
 
 /**
- * White background → transparent alpha, flood-filled from the 4 corners of a 16×16 tile so only the
- * background-connected white is cleared (interior white survives). Lets a building composite over the
- * ground tile (asphalt / grass / whatever — Maddy 2026-06-19). Returns the original on any magick error.
+ * White background → transparent alpha, flood-filled from the 4 corners of a `size`×`size` tile so
+ * only the background-connected white is cleared (interior white survives). Lets a building composite
+ * over the ground tile (asphalt / grass / whatever — Maddy 2026-06-19). Original on any magick error.
  */
-export function whiteToAlpha(buf) {
+export function whiteToAlpha(buf, size = 16) {
+  const e = size - 1;
+  const fuzz = `${process.env.TS_FUZZ ?? 12}%`; // lower fuzz = less of the building eaten away
   try {
     return execFileSync(
       'magick',
-      ['png:-', '-alpha', 'set', '-fuzz', '22%', '-fill', 'none',
-        '-draw', 'alpha 0,0 floodfill', '-draw', 'alpha 15,0 floodfill',
-        '-draw', 'alpha 0,15 floodfill', '-draw', 'alpha 15,15 floodfill', 'png:-'],
-      { input: buf, maxBuffer: 16 * 1024 * 1024 },
+      ['png:-', '-alpha', 'set', '-fuzz', fuzz, '-fill', 'none',
+        '-draw', 'alpha 0,0 floodfill', '-draw', `alpha ${e},0 floodfill`,
+        '-draw', `alpha 0,${e} floodfill`, '-draw', `alpha ${e},${e} floodfill`, 'png:-'],
+      { input: buf, maxBuffer: 32 * 1024 * 1024 },
     );
   } catch {
     return buf;
   }
+}
+
+// Multi-tile building footprints (square, w=h) from src/tools/tools.ts. A multi-tile plot is rendered
+// as ONE image at (w·16)² then SLICED into 16×16 cells (footprintCellKey), so a coal plant is one big
+// plant across its 3×3 plot, not nine tiny plants (Maddy 2026-06-19). Kinds absent here are 1×1 →
+// the single-tile object path. (Zoned R/C/I that grow to dynamic sizes are not handled yet.)
+export const FOOTPRINTS = {
+  23: 2, 32: 2, 33: 2, 34: 2, 35: 2, 26: 2, 49: 2, 51: 2, 52: 2, 56: 2, 58: 2, 59: 2, // 2×2 civic/service/eco
+  24: 3, 25: 3, 29: 3, 57: 3, 60: 3, // 3×3 coal/gas/solar/commune/healing
+  27: 4, 30: 4, // 4×4 nuclear/fusion
+};
+
+/**
+ * Txt2img graph for a multi-tile building at footprint resolution: latent = w·256 (so PixelOE
+ * pixel_size 16 → a clean (w·16)² pixel tile, divisible into 16×16 cells). No controlnet — the prompt
+ * paints the whole building filling the plot.
+ */
+export function buildMultiTileGraph({ prompt, seed, footprint }) {
+  const px = footprint * 256;
+  const g = buildTxt2imgGraph({ prompt, seed });
+  g[9].inputs.width = px;
+  g[9].inputs.height = px;
+  g[12].inputs.pixel_size = 16; // px / 16 = footprint·16 output
+  return g;
 }
