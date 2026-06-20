@@ -30,7 +30,7 @@ import { isPowerConsumer } from '../growth/power';
 import { laneOffset, pedCurbOffset, dirVector } from './ambientContent';
 import type { AmbientState } from './ambientContent';
 import type { AmbientSprites } from './ambientSprites';
-import { makeWaterFrames, makeGrassSheen, cloudFbm, waterSloshAt } from './waterAnimation';
+import { makeWaterFrames, makeGrassSheen, cloudFbm, buildWaterSloshFlipbook, WATER_SLOSH_ROTS, WATER_SLOSH_FRAMES } from './waterAnimation';
 import { OVERLAY_DIM } from './overlayLegend';
 
 /** Precomputed CSS for the sparse-overlay scrim (see OverlaySource.dimBase). */
@@ -88,6 +88,7 @@ const GLYPH_MIN_TS = 16;
 // flipbook cycled in the low-alpha overlay (the surface undulates) while it scrolls with the wind.
 const WATER_FRAMES = 16;
 const WATER_FPS = 12;
+const WATER_SLOSH_FPS = 7; // shear-cycle advance rate for the precomputed per-tile slosh flipbook
 
 // Kinds that get a sparse flora-canopy accent under a tileset (the vegetated greens).
 const GREEN_FLORA_KINDS: ReadonlySet<number> = new Set([
@@ -670,6 +671,10 @@ export class Renderer {
   // Procedural water tiles: frame 0 is the static base (baked into the atlas); the set is the tileable
   // texture scrolled at low alpha for the animated swirl/waves. [] = no tileset.
   private waterFrames: CanvasImageSource[] = [];
+  // PRECOMPUTED water-slosh flipbook per water texture key (`ocean-2` → [rot][frame] canvases). Baked
+  // once on tileset load so the per-frame slosh is a plain blit per tile (not a live rotate+shear
+  // drawImage, which murdered FPS over hundreds of water tiles — Maddy). Empty when no tileset.
+  private waterSlosh = new Map<string, HTMLCanvasElement[][]>();
   // Cached screen-space clip masks (Path2D per kind: 'water', 'grass') so the animated overlays are
   // O(1) draws/frame (clip + pattern fill) instead of a per-tile row-major loop (the antipattern).
   private maskCache = new Map<string, { key: string; path: Path2D | null }>();
@@ -715,6 +720,19 @@ export class Renderer {
       ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
       : [];
     this.grassSheen = this.hasTileset ? makeGrassSheen(BASE_TILE) : null;
+    this.buildWaterSlosh();
+  }
+
+  /** Precompute the per-texture slosh flipbooks (rotation × shear-frame) once, so the per-frame water
+   *  slosh is a cheap plain blit per tile rather than a live rotate+shear drawImage (the FPS killer). */
+  private buildWaterSlosh(): void {
+    this.waterSlosh.clear();
+    if (!this.hasTileset) return;
+    for (const key of this.atlas.keys()) {
+      if (!/^(ocean|lake|river)-\d+$/.test(key)) continue;
+      const tex = this.atlas.get(key);
+      if (tex) this.waterSlosh.set(key, buildWaterSloshFlipbook(tex, WATER_SLOSH_ROTS, WATER_SLOSH_FRAMES, BASE_TILE));
+    }
   }
 
   /**
@@ -734,6 +752,7 @@ export class Renderer {
       ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
       : [];
     this.grassSheen = this.hasTileset ? makeGrassSheen(BASE_TILE) : null;
+    this.buildWaterSlosh();
     this.invalidateBase();
   }
 
@@ -1227,12 +1246,13 @@ export class Renderer {
     const mapW = world.map.width;
 
     // Animated water — the BASE TILES THEMSELVES slosh via a per-tile oscillating AFFINE (Maddy:
-    // "affine transforms to simulate sloshing", not just an overlay scroll). Each VISIBLE water tile
-    // is redrawn per frame with its static stochastic rotate/scale PLUS a wind-aligned translation +
-    // shear (waterSloshAt), so the surface undulates like liquid. Bounded to visible tiles (NOT the
-    // row-major whole-map antipattern) and clipped ONCE to the cached water mask (no per-tile clip →
-    // no land bleed at the shoreline, cheap). A low-alpha foam flipbook rides on top for the twinkle.
-    if (this.hasTileset && ts >= 4) {
+    // "affine transforms to simulate sloshing"). The affine (static rotation for anti-plaid + an
+    // oscillating shear) is PRECOMPUTED into a [rot][frame] flipbook per water texture, so per tile
+    // this is just a PLAIN scaled BLIT of the right cell — NOT a live rotate+shear drawImage, which
+    // murdered FPS over hundreds of water tiles (Maddy: "precompute we can do to animate it better").
+    // The shear-frame advances along the prevailing wind, so the waves TRAVEL downwind. Clipped once
+    // to the cached water mask (no per-tile clip → no shoreline bleed). Low-alpha foam rides on top.
+    if (this.hasTileset && this.waterSlosh.size > 0 && ts >= 4) {
       const path = this.tileMask(world, camera, 'water', (m, i) => m.water[i] !== 0);
       if (path) {
         const t = performance.now() / 1000;
@@ -1240,30 +1260,26 @@ export class Renderer {
         const range = camera.visibleTileRange();
         const wx = ambient.wind.dx;
         const wy = ambient.wind.dy;
+        const frameBase = Math.floor(t * WATER_SLOSH_FPS);
         ctx.save();
         ctx.clip(path);
         for (let ty = range.y0; ty <= range.y1; ty++) {
           for (let tx = range.x0; tx <= range.x1; tx++) {
             const i = map.idx(tx, ty);
             if (map.water[i] === 0) continue;
-            const tkind = kindOf(map, i);
-            const tex = this.atlas.get(`${tkind}-${bandOf(map.elevation[i]!)}`);
-            if (!tex) continue;
+            const fb = this.waterSlosh.get(`${kindOf(map, i)}-${bandOf(map.elevation[i]!)}`);
+            if (!fb || fb.length === 0) continue;
             const { sx, sy } = camera.worldToScreen(tx, ty);
-            const wt = waterTileTransform(tx, ty);
-            const s = waterSloshAt(tx, ty, t, wx, wy);
-            ctx.save();
-            ctx.translate(Math.floor(sx) + ts / 2 + s.ox * ts, Math.floor(sy) + ts / 2 + s.oy * ts);
-            ctx.rotate(wt.rot * Math.PI * 2);
-            ctx.transform(1, s.shA, s.shB, 1, 0, 0); // the oscillating slosh shear
-            const sc = wt.scale * 1.08; // a touch extra so the sheared tile still covers its square
-            ctx.scale(sc, sc);
-            ctx.drawImage(tex, 0, 0, BASE_TILE, BASE_TILE, -ts / 2, -ts / 2, ts, ts);
-            ctx.restore();
+            const rotB = Math.floor(waterTileTransform(tx, ty).rot * WATER_SLOSH_ROTS) % WATER_SLOSH_ROTS;
+            // phase = position projected on the wind → consecutive tiles downwind are one frame apart,
+            // so the shear cycle reads as waves travelling along the wind. (Modulo, kept non-negative.)
+            const phase = Math.round(tx * wx + ty * wy);
+            const frame = (((frameBase + phase) % WATER_SLOSH_FRAMES) + WATER_SLOSH_FRAMES) % WATER_SLOSH_FRAMES;
+            ctx.drawImage(fb[rotB]![frame]!, Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
           }
         }
         // Foam twinkle: the sloshy flipbook scrolled at low alpha, present 100% of the time (Maddy:
-        // a subtle 10–20% twinkle always on), so crests sparkle over the sloshing base.
+        // a subtle 10–20% twinkle always on), so crests sparkle over the sloshing base. O(1).
         if (this.waterFrames.length > 0) {
           const tex = this.waterFrames[Math.floor(t * WATER_FPS) % this.waterFrames.length]!;
           const o = camera.worldToScreen(0, 0);

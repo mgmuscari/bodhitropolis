@@ -93,6 +93,57 @@ export function waterSloshAt(
   };
 }
 
+// Precomputed-slosh dimensions: the renderer bakes a [rot][frame] flipbook of each water texture ONCE
+// (rotation for anti-plaid, frame for the oscillating shear), then per tile does a cheap axis-aligned
+// scaled BLIT of the right cell — instead of a live rotate+shear+scale drawImage per tile per frame,
+// which murdered FPS over hundreds of water tiles (Maddy). Same look, precomputed (Maddy's call).
+export const WATER_SLOSH_ROTS = 6; // distinct static rotations (anti-plaid)
+export const WATER_SLOSH_FRAMES = 8; // shear-cycle frames (the slosh animation)
+const WATER_SLOSH_COVER = 1.6; // scale so a rotated+sheared tile still covers its square (≥ √2)
+
+/**
+ * Bake the `[rot][frame]` slosh flipbook of one water texture: each cell is the texture rotated by a
+ * static angle (rot/ROTS turns) + sheared by an oscillating amount (frame of a full sin cycle) +
+ * scaled to cover, drawn into a `size×size` canvas. The renderer blits cell `[rotBucket(tile)]
+ * [(frameBase + tilePhase) % FRAMES]` per water tile — a plain scaled blit, no live transform. Browser
+ * IO (creates canvases); returns `[]` headless. The slosh affine is precomputed, so the per-frame cost
+ * is just blits.
+ */
+export function buildWaterSloshFlipbook(
+  src: CanvasImageSource,
+  rots: number = WATER_SLOSH_ROTS,
+  frames: number = WATER_SLOSH_FRAMES,
+  size = 16,
+): HTMLCanvasElement[][] {
+  if (typeof document === 'undefined') return [];
+  const out: HTMLCanvasElement[][] = [];
+  for (let r = 0; r < rots; r++) {
+    const row: HTMLCanvasElement[] = [];
+    for (let f = 0; f < frames; f++) {
+      const c = document.createElement('canvas');
+      c.width = size;
+      c.height = size;
+      const ctx = c.getContext('2d');
+      if (!ctx) {
+        row.push(c);
+        continue;
+      }
+      ctx.imageSmoothingEnabled = false;
+      const phase = (f / frames) * TAU; // one full shear cycle across the frames → seamless loop
+      const shA = Math.sin(phase) * WATER_SLOSH_SHEAR;
+      const shB = Math.sin(phase + 1.6) * WATER_SLOSH_SHEAR; // a second axis, out of phase → liquid wobble
+      ctx.translate(size / 2, size / 2);
+      ctx.rotate((r / rots) * TAU);
+      ctx.transform(1, shA, shB, 1, 0, 0);
+      ctx.scale(WATER_SLOSH_COVER, WATER_SLOSH_COVER);
+      ctx.drawImage(src, 0, 0, size, size, -size / 2, -size / 2, size, size);
+      row.push(c);
+    }
+    out.push(row);
+  }
+  return out;
+}
+
 /** Fallback deep satellite-water colour if no baked tile is supplied (muted blue-teal). */
 const WATER_BASE: readonly [number, number, number] = [30, 60, 82];
 
