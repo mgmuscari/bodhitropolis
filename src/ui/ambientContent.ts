@@ -1258,11 +1258,6 @@ export function nextRoadStep(
   return pickStep(map, x, y, fromDir, rng, (nx, ny) => canDrive(map, x, y, nx, ny), CAR_STRAIGHT_WEIGHT, recent);
 }
 
-/** The pedestrian motion seam: the same junction rule over ped substrate. */
-function nextPedStep(map: GameMap, x: number, y: number, fromDir: number, rng: Rng): number {
-  return pickStep(map, x, y, fromDir, rng, (nx, ny) => isPedSubstrate(map, nx, ny));
-}
-
 // --- Despawn predicates --------------------------------------------------
 
 /** A car is gone once the tile under it is no longer traversable — a road or parking
@@ -2261,17 +2256,6 @@ function pathStep(map: GameMap, car: Mover, x: number, y: number): number {
   return -1; // non-adjacent (shouldn't happen on a committed path) → despawn
 }
 
-function spawnPeds(state: AmbientState, map: GameMap, rng: Rng): void {
-  for (let s = 0; s < SAMPLES_PER_SUBSTEP; s++) {
-    if (state.peds.length >= liveCaps.pedCap) return;
-    const { x, y } = sampleTile(map, rng);
-    if (!isPedSubstrate(map, x, y)) continue;
-    const dir = nextPedStep(map, x, y, -1, rng);
-    if (dir < 0) continue;
-    state.peds.push({ x, y, dir, tx: x + DIR_DX[dir]!, ty: y + DIR_DY[dir]! });
-  }
-}
-
 /** How many daily-itinerary citizens are out right now — counting both active travellers (peds with
  *  an itinerary) and DRIVERS (citizen-cars with an itinerary), so the population cap covers both. */
 function citizenCount(state: AmbientState): number {
@@ -3006,12 +2990,12 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   }
   state.birds = state.birds.filter((f) => f.birds.length > 0);
 
-  // 2. Spawn the daily-itinerary CITIZENS (the primary walkers — from the residential census),
-  //    then top up with ambient wanderers and bird flocks. Cars are NOT spawned here — they are
-  //    the sim's O-D trips, ingested via ingestTrips on the traffic cadence (cars=trips).
-  //    Last-mile walkers spawn on a car PARKING (see tryPark → spawnParkPed), not here.
+  // 2. Spawn the daily-itinerary CITIZENS (the foot population — from the residential census; each
+  //    runs a home→work→shop→lifestyle→leisure round, so green/leisure tiles draw real trips). There
+  //    is no ambient-wanderer pool (Maddy 2026-06-20: everyone paths to a destination). Cars are NOT
+  //    spawned here — they are the sim's O-D trips, ingested via ingestTrips on the traffic cadence
+  //    (cars=trips). Last-mile walkers spawn on a car PARKING (see tryPark → spawnParkPed), not here.
   spawnCitizens(state, map, rng);
-  spawnPeds(state, map, rng);
   spawnFlocks(state, map, rng);
   spawnCruisers(state, map, rng); // top the patrol fleet up from the precincts
 
@@ -3357,8 +3341,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     // An IDLE ped that HAS a home — a citizen repositioned beside home after a failed/boxed/exhausted
     // trip (respawnAtHome cleared its round) — heads HOME and goes inside, instead of aimlessly
     // wandering the green substrate forever (Maddy: "citizens not commuting home; peds roam parks/
-    // rewilded, may never go home"). At the door it goes inside (despawns into the household). A
-    // homeless ped is ambient street life and wanders.
+    // rewilded, may never go home"). At the door it goes inside (despawns into the household).
     if (p.homeTile !== undefined) {
       const hx = p.homeTile % map.width;
       const hy = (p.homeTile - hx) / map.width;
@@ -3371,7 +3354,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       p.recent = undefined;
       return true;
     }
-    return advanceMover(p, PED_SPEED, map, (x, y, fromDir) => nextPedStep(map, x, y, fromDir, rng));
+    // A ped with NO home AND no destination is the retired ambient-stroller pool — it despawns
+    // (Maddy 2026-06-20: "there should be no ambient stroller pool anymore. everyone needs to path
+    // to somewhere"). Purposeful agents are citizens (an itinerary + home, with green/leisure stops),
+    // last-mile walkers (a car + walkTo), and cruisers — never destination-less wanderers.
+    return false;
   });
   for (const f of state.birds) advanceFlock(f);
 

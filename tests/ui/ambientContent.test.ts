@@ -410,6 +410,18 @@ describe('agent substrate invariants (Maddy: cars park on freeways, peds cross w
     expect(canDrive(m, 4, 4, 3, 4)).toBe(false);
   });
 
+  it('a destination-less ped despawns — no ambient stroller pool, everyone paths somewhere (Maddy 2026-06-20)', () => {
+    const m = new GameMap(12, 12);
+    // A 3×3 quiet-street patch: directly ped-substrate AND walkable, so the ped has room to wander —
+    // its survival hinges only on whether the stroller pool exists, not on being boxed in.
+    for (let y = 4; y <= 6; y++) for (let x = 4; x <= 6; x++) m.built[m.idx(x, y)] = BuiltKind.QuietStreet;
+    const state = createAmbientState();
+    // A wanderer with NO home, NO itinerary, NO walkTo, NO car — the retired ambient-stroller pool.
+    state.peds.push({ x: 5, y: 5, dir: 1, tx: 5, ty: 5 });
+    stepAmbient(state, m, createRng(1), 60); // one 50ms substep
+    expect(state.peds.length).toBe(0); // a ped with no destination is not a persistent agent
+  });
+
   it('curbStallOffsets: <=4 discrete kerb stalls; a no-shoulder lane interior offers NONE', () => {
     const m = new GameMap(12, 12);
     for (let x = 1; x <= 10; x++) m.built[m.idx(x, 6)] = BuiltKind.RoadStreet; // a 1-wide street, land both sides
