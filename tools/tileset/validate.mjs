@@ -56,13 +56,23 @@ export async function askVision(pngBuffer, question, { timeoutMs = 90000 } = {})
   }
 }
 
-/** Classify the answer. The model is told to START with YES/NO, so trust that first; only fall back to
- *  keyword heuristics for a reasoning-trace (no leading verdict) — and there, a CONCLUDING side-view
- *  phrase loses to the final yes/no. (Don't naively match "side view" — answers say "...NOT a side view".) */
+/** Classify a YES/NO answer. The model is told to START with YES/NO, so trust that first; only fall
+ *  back to keyword heuristics for a reasoning-trace (no leading verdict) — and there, take the LAST
+ *  yes/no (the conclusion). (Don't naively match negated phrases — answers say "...NOT a side view".) */
+export function readsYes(text) {
+  const lead = text.trim().match(/^[*_\s]*(yes|no)\b/i);
+  if (lead) return lead[1].toLowerCase() === 'yes';
+  const t = text.toLowerCase();
+  const lastYes = t.lastIndexOf('yes');
+  const lastNo = t.lastIndexOf('no');
+  if (lastYes !== -1 || lastNo !== -1) return lastYes > lastNo;
+  return false;
+}
+
+/** Back-compat alias (top-down used the same YES/NO-first reader). */
 function readsTopDown(text) {
   const lead = text.trim().match(/^[*_\s]*(yes|no)\b/i);
   if (lead) return lead[1].toLowerCase() === 'yes';
-  // Reasoning trace with no leading verdict: take the LAST yes/no mentioned (the conclusion).
   const t = text.toLowerCase();
   const lastYes = t.lastIndexOf('yes');
   const lastNo = t.lastIndexOf('no');
@@ -84,10 +94,29 @@ export async function isTopDown(pngBuffer, subject) {
   return { ok: readsTopDown(text), text };
 }
 
-// CLI: `node tools/tileset/validate.mjs <png> "<subject>"` — quick manual check.
+/**
+ * Does the FRONT of the directional `subject` (a vehicle/cyclist) point toward the TOP of the image?
+ * The renderer draws these sprites assuming they face NORTH (up) and rotates them to the travel
+ * heading, so a sprite whose front is at the bottom/side drives BACKWARDS or sideways (Maddy: the
+ * taxi/van driving backwards). Returns { ok, text }; fail-OPEN on an unreachable model.
+ */
+export async function facesForward(pngBuffer, subject) {
+  const q =
+    `This is a small top-down pixel-art game sprite of "${subject}". Treating the TOP edge of the ` +
+    `image as NORTH, is the FRONT of the vehicle (the hood/handlebars — the direction it would drive ` +
+    `forward) pointing UP toward the top of the image? Answer NO if the front points down, left, or ` +
+    `right, or if it is a side view. Start your answer with YES or NO.`;
+  const text = await askVision(pngBuffer, q);
+  if (text === '') return { ok: true, text: '(validator unreachable — passed)' }; // fail-open
+  return { ok: readsYes(text), text };
+}
+
+// CLI: `node tools/tileset/validate.mjs <png> "<subject>" [facing]` — quick manual check. With the
+// `facing` arg it runs the forward-facing check instead of top-down.
 if (process.argv[1] && process.argv[1].endsWith('validate.mjs') && process.argv[2]) {
   const { readFileSync } = await import('node:fs');
   const buf = readFileSync(process.argv[2]);
-  const { ok, text } = await isTopDown(buf, process.argv[3] ?? 'object');
+  const check = process.argv[4] === 'facing' ? facesForward : isTopDown;
+  const { ok, text } = await check(buf, process.argv[3] ?? 'object');
   console.log(`ok=${ok}\n${text}`);
 }
