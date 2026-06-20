@@ -27,16 +27,19 @@ export function mutateWaterFrame(
       const w =
         Math.sin(((x * 1 + y * 2) / size) * TAU + phase) +
         0.7 * Math.sin(((x * 2 - y * 1) / size) * TAU - 2 * phase);
-      const bright = 1 + w * 0.09;
+      const bright = 1 + w * 0.06;
       let r = base[i]! * bright;
       let g = base[i + 1]! * bright;
       let b = base[i + 2]! * bright;
-      // Whitecaps: foam flecks at strong crests, broken by a per-pixel hash so they read as spray,
-      // not a continuous line. The hash includes frameIdx so foam shifts frame to frame.
-      if (w > 1.05 && (x * 7 + y * 13 + frameIdx * 11) % 4 === 0) {
-        r += (255 - r) * 0.65;
-        g += (255 - g) * 0.65;
-        b += (255 - b) * 0.65;
+      // Whitecaps: FIXED foam sites (spatial speckle, no frameIdx) that LIGHT UP smoothly as the
+      // moving wave crest sweeps over them — a twinkle that fades in/out with the wave, NOT a per-frame
+      // random flicker (the previous flash bug). Foam tracks `w`, which loops, so the loop stays clean.
+      const crest = w - 1.0;
+      if (crest > 0 && (x * 7 + y * 13) % 5 === 0) {
+        const foam = Math.min(1, crest * 1.6) * 0.55;
+        r += (255 - r) * foam;
+        g += (255 - g) * foam;
+        b += (255 - b) * foam;
       }
       out[i] = r;
       out[i + 1] = g;

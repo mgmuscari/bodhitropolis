@@ -43,7 +43,7 @@ describe('mutateWaterFrame', () => {
       const out = mutateWaterFrame(base, f, 8, SIZE);
       for (let i = 0; i < out.length; i += 4) maxR = Math.max(maxR, out[i]!);
     }
-    expect(maxR).toBeGreaterThan(30 + 60); // foam pushes RGB toward white, far above base R=30
+    expect(maxR).toBeGreaterThan(30 + 45); // foam pushes RGB toward white, well above base R=30
   });
 
   it('loops seamlessly in time — frame `count` equals frame 0', () => {

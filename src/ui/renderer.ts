@@ -83,9 +83,9 @@ const POLE_WIRE_REACH = 4;
 // glyph is stamped per footprint, centered, with a dark halo for contrast.
 const GLYPH_MIN_TS = 16;
 
-// Animated-water flipbook: how many frames to bake, and how fast to cycle them (fps).
-const WATER_FRAMES = 12;
-const WATER_FPS = 10;
+// Animated-water flipbook: more frames + a higher cycle rate read as smooth motion, not a flash.
+const WATER_FRAMES = 16;
+const WATER_FPS = 15;
 
 // Kinds that get a sparse flora-canopy accent under a tileset (the vegetated greens).
 const GREEN_FLORA_KINDS: ReadonlySet<number> = new Set([
@@ -1312,7 +1312,10 @@ export class Renderer {
         );
         if (!onScreen(sx, sy)) continue;
         const sz = ts * (1.0 + amt / 180 + phase * 0.8); // billows as it drifts
-        ctx.globalAlpha = Math.min(0.45, (amt / 255) * 0.6) * (1 - phase); // fades out downwind
+        // Triangle envelope: fade IN from the source then OUT downwind — 0 at both loop ends, so the
+        // puff doesn't pop back to full opacity when the loop resets (the periodic-flash bug).
+        const env = phase < 0.5 ? phase * 2 : (1 - phase) * 2;
+        ctx.globalAlpha = Math.min(0.45, (amt / 255) * 0.6) * env;
         ctx.drawImage(smogSprites[tile % smogSprites.length]!, sx - sz / 2, sy - sz / 2, sz, sz);
       }
       ctx.globalAlpha = 1;
