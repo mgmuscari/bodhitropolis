@@ -610,6 +610,20 @@ describe('accumulateGroundPollution (Maddy: live land contamination; litter feed
   });
 });
 
+describe('ground pollution heals near player greens (Maddy: healing redline clears ground pollution)', () => {
+  it('clears ground pollution faster on tiles near a park/garden/rewild than far from any green', () => {
+    const m = new GameMap(20, 8);
+    const state = createAmbientState();
+    const far = m.idx(2, 4);
+    const near = m.idx(15, 4);
+    state.groundPollution.set(far, 100);
+    state.groundPollution.set(near, 100);
+    m.built[m.idx(15, 5)] = BuiltKind.Park; // a player green beside the 'near' tile
+    accumulateGroundPollution(state, m); // decay + the extra green-heal pass
+    expect(state.groundPollution.get(near)!).toBeLessThan(state.groundPollution.get(far)!);
+  });
+});
+
 describe('driftPollution (Maddy: prevailing wind carries smog downwind into plumes)', () => {
   it('carries a fraction of a tile\'s smog one tile downwind, conserving the rest', () => {
     const m = new GameMap(12, 12);

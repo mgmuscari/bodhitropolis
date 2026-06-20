@@ -18,6 +18,7 @@ import {
   isLimitedAccessBoundary,
   roadCurbMask,
   railCrossingMask,
+  depaveAsphalt,
   rampMarkingMask,
   freewayMedianAxis,
   freewayAxis,
@@ -1239,6 +1240,34 @@ describe('railCrossingMask (level crossing where a road meets a rail/tram tile)'
     map.setBuilt(2, 2, BuiltKind.Streetcar);
     map.setBuilt(1, 2, BuiltKind.RoadAvenue); // a cross avenue to the west
     expect(railCrossingMask(map, 2, 2)).toBe(W);
+  });
+});
+
+describe('depaveAsphalt (redlined open ground reads as asphalt; player greens de-pave it)', () => {
+  it('is the redline grade on open redlined ground, 0 on greenlined/built/water', () => {
+    const map = new GameMap(9, 9);
+    map.redline[map.idx(4, 4)] = 200; // redlined open land
+    map.redline[map.idx(4, 6)] = 10; // greenlined open land (below the min)
+    expect(depaveAsphalt(map, 4, 4)).toBe(200); // paved-over disinvestment
+    expect(depaveAsphalt(map, 4, 6)).toBe(0); // greenlined → no asphalt
+    map.setBuilt(4, 4, BuiltKind.HouseSingle); // a building covers its own ground
+    expect(depaveAsphalt(map, 4, 4)).toBe(0);
+    map.setBuilt(4, 4, BuiltKind.None);
+    map.water[map.idx(4, 4)] = Water.Ocean;
+    expect(depaveAsphalt(map, 4, 4)).toBe(0); // water isn't ground
+  });
+
+  it('is reduced toward 0 by a nearby player GREEN (the player de-paves by rewilding)', () => {
+    const map = new GameMap(11, 11);
+    map.redline[map.idx(5, 5)] = 240;
+    const bare = depaveAsphalt(map, 5, 5);
+    map.setBuilt(5, 6, BuiltKind.RewildedLand); // a rewilded green right next to it
+    const greened = depaveAsphalt(map, 5, 5);
+    expect(greened).toBeLessThan(bare); // de-paved by the adjacent green
+    // a green ON the tile-adjacent ring de-paves most; far away leaves it paved
+    map.setBuilt(5, 6, BuiltKind.None);
+    map.setBuilt(5, 5 - 0, BuiltKind.None);
+    expect(depaveAsphalt(map, 5, 5)).toBe(240); // green removed → fully paved again
   });
 });
 

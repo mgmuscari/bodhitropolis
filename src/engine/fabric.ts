@@ -805,6 +805,45 @@ export function railCrossingMask(map: GameMap, x: number, y: number): number {
   return mask;
 }
 
+/** Player GREENS that DE-PAVE the redlined asphalt around them (the restoration spreads from what the
+ *  player rewilds/plants — healing, never "redeveloping"). */
+const DEPAVE_GREENS: ReadonlySet<number> = new Set([
+  BuiltKind.Parklet,
+  BuiltKind.CommunityGarden,
+  BuiltKind.Park,
+  BuiltKind.RewildedLand,
+]);
+const DEPAVE_RADIUS = 3;
+const DEPAVE_REDLINE_MIN = 40; // below this grade the ground reads natural, not paved
+
+/**
+ * Render-only asphalt-paving intensity (0..255) of an OPEN redlined LAND tile: redlined open ground
+ * reads as ASPHALT — paved-over disinvestment (Maddy + CLAUDE.md env-justice arc). It is the tile's
+ * redline grade, REDUCED toward 0 by the nearest player GREEN within {@link DEPAVE_RADIUS} (Chebyshev),
+ * so as the player rewilds/plants, the asphalt de-paves back to living ground. 0 on built tiles (a
+ * building covers its own ground), water, and greenlined ground (grade < min). Pure; no rng. */
+export function depaveAsphalt(map: GameMap, x: number, y: number): number {
+  if (!map.inBounds(x, y)) return 0;
+  const i = map.idx(x, y);
+  if (map.getBuilt(x, y) !== BuiltKind.None) return 0; // only open ground
+  if (map.water[i] !== 0) return 0;
+  const grade = map.redline[i]!;
+  if (grade < DEPAVE_REDLINE_MIN) return 0;
+  let near = 0; // 0..1 greenness from the closest green
+  for (let dy = -DEPAVE_RADIUS; dy <= DEPAVE_RADIUS; dy++) {
+    for (let dx = -DEPAVE_RADIUS; dx <= DEPAVE_RADIUS; dx++) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!map.inBounds(nx, ny)) continue;
+      if (!DEPAVE_GREENS.has(map.getBuilt(nx, ny))) continue;
+      const cheb = Math.max(Math.abs(dx), Math.abs(dy));
+      const g = 1 - cheb / (DEPAVE_RADIUS + 1); // adjacent → strongest de-pave, fading with distance
+      if (g > near) near = g;
+    }
+  }
+  return Math.round(grade * (1 - near));
+}
+
 /**
  * The MARKING mask for a RoadRamp tile (a street overlaid on a freeway tile): only the edges toward
  * the FREEWAY band (RoadHighway / RoadRamp neighbours). Used instead of the full connection mask so

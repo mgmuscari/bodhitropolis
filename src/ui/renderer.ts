@@ -9,7 +9,7 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, railCrossingMask, rampMarkingMask, freewayMedianAxis, freewayAxis, freewayLaneBoundaryMask, freewayCenterLaneAxis } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, railCrossingMask, depaveAsphalt, rampMarkingMask, freewayMedianAxis, freewayAxis, freewayLaneBoundaryMask, freewayCenterLaneAxis } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import {
@@ -89,6 +89,8 @@ const GLYPH_MIN_TS = 16;
 const WATER_FRAMES = 16;
 const WATER_FPS = 12;
 const WATER_SLOSH_FPS = 7; // shear-cycle advance rate for the precomputed per-tile slosh flipbook
+const ASPHALT_GROUND_COLOR = '#3a3833'; // paved-over redlined open ground
+const ASPHALT_GROUND_ALPHA = 0.72; // strength at full redline grade (faded by depaveAsphalt near greens)
 
 // Kinds that get a sparse flora-canopy accent under a tileset (the vegetated greens).
 const GREEN_FLORA_KINDS: ReadonlySet<number> = new Set([
@@ -887,6 +889,18 @@ export class Renderer {
           ctx.restore();
         } else {
           ctx.drawImage(terrain, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
+        }
+
+        // ASPHALT GROUND: redlined OPEN ground reads as paved-over disinvestment (env-justice arc);
+        // the player DE-PAVES it back to living ground by greening/rewilding nearby (depaveAsphalt
+        // fades it near greens). Cached in the base (redline is static; greens invalidate on build).
+        // Drawn over open terrain only (built tiles cover their own ground). Procedural + tileset.
+        const pave = depaveAsphalt(map, tx, ty);
+        if (pave > 0) {
+          ctx.globalAlpha = (pave / 255) * ASPHALT_GROUND_ALPHA;
+          ctx.fillStyle = ASPHALT_GROUND_COLOR;
+          ctx.fillRect(dx, dy, Math.ceil(ts), Math.ceil(ts));
+          ctx.globalAlpha = 1;
         }
 
         const built = map.built[i]!;

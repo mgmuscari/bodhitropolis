@@ -3667,6 +3667,46 @@ export function accumulateGroundPollution(state: AmbientState, map: GameMap): vo
     }
   }
   decayField(state.groundPollution, GROUND_DECAY); // lingers, but clears once the sources are gone
+  healGroundNearGreens(state, map); // de-paving heals the soil — pollution clears faster near greens
+}
+
+/** Player GREENS whose presence heals the soil around them (mirrors the renderer's de-pave set):
+ *  parks, gardens, rewilded land, parklets. The player restores by greening, never "redeveloping". */
+const GREEN_HEAL_KINDS: ReadonlySet<number> = new Set([
+  BuiltKind.Parklet,
+  BuiltKind.CommunityGarden,
+  BuiltKind.Park,
+  BuiltKind.RewildedLand,
+]);
+const GREEN_HEAL_RADIUS = 2;
+const GROUND_GREEN_HEAL = 0.6; // extra decay multiplier on ground pollution within reach of a green
+
+/** Is there a player green within {@link GREEN_HEAL_RADIUS} (Chebyshev) of (x, y)? */
+function nearPlayerGreen(map: GameMap, x: number, y: number): boolean {
+  for (let dy = -GREEN_HEAL_RADIUS; dy <= GREEN_HEAL_RADIUS; dy++) {
+    for (let dx = -GREEN_HEAL_RADIUS; dx <= GREEN_HEAL_RADIUS; dx++) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (map.inBounds(nx, ny) && GREEN_HEAL_KINDS.has(map.built[map.idx(nx, ny)]!)) return true;
+    }
+  }
+  return false;
+}
+
+/** Extra ground-pollution clearing on tiles near the player's greens: de-paving (greening) heals the
+ *  contaminated soil it replaces (Maddy: healing redline helps clear ground pollution). Sparse pass
+ *  over the live field; the de-paved land recovers faster than the lingering GROUND_DECAY alone. */
+function healGroundNearGreens(state: AmbientState, map: GameMap): void {
+  if (state.groundPollution.size === 0) return;
+  for (const [i, v] of state.groundPollution) {
+    if (v <= 0) continue;
+    const x = i % map.width;
+    const y = (i - x) / map.width;
+    if (!nearPlayerGreen(map, x, y)) continue;
+    const nv = v * GROUND_GREEN_HEAL;
+    if (nv <= 0.5) state.groundPollution.delete(i);
+    else state.groundPollution.set(i, nv);
+  }
 }
 
 /**
