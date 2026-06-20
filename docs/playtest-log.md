@@ -103,3 +103,18 @@ Sim/agents:
 - [x] **Water lake tiles slosh — per-tile AFFINE TRANSFORMS** (`8c02c6ea`). Each visible water tile is
   redrawn per-frame with its static stochastic rotate/scale PLUS an oscillating wind-aligned translate
   + shear (`waterSloshAt`), clipped once to the cached water mask. Foam flipbook on top for twinkle.
+
+## 2026-06-20 — batch 7 (post-feature playtest)
+
+- [x] **Water animation tanks FPS zoomed out** (`5e553a44`) — slosh gated to zoom≥2 (zoom 1 shows the
+  whole map's water = thousands of blits/frame; slosh sub-pixel there). Static base shows zoomed out.
+- [x] **Pedestrians flash "rainbow road"** (`5e553a44`) — the walk frames are different-coloured PEOPLE,
+  not gait frames; cycling them flashed. Each ped now shows ONE stable sprite (no animation). Cyclists too.
+- [x] **Tents/junk dead-centre + too big** (`5e553a44`) — scaled down + scattered at a stable per-tile
+  jitter; 1–2 junk pieces. Sprite branch gated zoom≥2.
+- [~] **Encampment tents cartoonish/side-view** — re-baking with overhead "roof-from-above" prompts +
+  top-down/intact validation (bake in flight).
+- [~] **One ped sprite has black spots (pigpen)** — walk-4 (highest dark-pixel fraction); re-baking all 4
+  peds fresh (validated top-down + intact).
+- [~] **Blue vehicle orthogonal to travel, not car-like** — re-baking hatchback-blue + van-silver with
+  top-down + FACING + intact validation.
