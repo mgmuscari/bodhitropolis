@@ -55,6 +55,6 @@ Running capture of Maddy's playtest reports so they're absorbed without thrashin
 - [ ] **Blue step van sprite is a SIDE view, rotated 90° while driving** — kills vibes. The van bake
   isn't top-down. Re-bake top-down; if diffusion won't reliably give top-down vans, the validator below
   is the real fix. (Buses likely same risk.)
-- (feat) **Bake VALIDATORS via LMStudio vision (gemma)** — https://lmstudio.tailea7e08.ts.net/v1/models —
+- [x] **Bake VALIDATORS via LMStudio vision (gemma)** — https://lmstudio.tailea7e08.ts.net/v1/models —
   check each baked tile/sprite for correct geometry (e.g. "is this top-down?", "is the building intact
   not floodfilled?") and flag/reject failures. Would've caught the side-van, the floodfilled clinic/cars.

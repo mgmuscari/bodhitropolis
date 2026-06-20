@@ -16,6 +16,7 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { submit, awaitOutput, fetchImage, buildTxt2imgGraph, whiteToAlpha, seedFor, COMFY_URL } from './lib.mjs';
+import { isTopDown } from './validate.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(HERE, '../..', 'public/sprites/ambient');
@@ -83,6 +84,8 @@ const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 
 const force = process.argv.includes('--force');
 const concurrency = Number(arg('concurrency', '3'));
 const onlyCats = arg('cat', '').split(',').filter(Boolean);
+const validate = process.argv.includes('--validate'); // gate each sprite on the vision-model geometry check
+const attempts = Number(arg('attempts', '5')); // seed retries when validation fails
 
 // Copy luminance → alpha (smoke on black → transparent black, opaque highlights).
 function luminanceToAlpha(buf) {
@@ -115,13 +118,26 @@ async function worker(queue) {
       const isSmog = cat === 'smog';
       const prompt = isSmog ? `${subject}, ${SMOG_FRAME}` : `${subject}, ${TOPDOWN}`;
       const seed = seedFor(`ambient-${cat}-${slug}`, 'ambient');
-      const out = await awaitOutput(await submit(buildTxt2imgGraph({ prompt, seed })), { timeoutMs: 180000 });
-      const raw = await fetchImage(out);
+      // With --validate, retry different seeds until the LMStudio vision model agrees the sprite is a
+      // strict top-down view (smog is exempt — it has no orientation). Keeps the last attempt if none
+      // pass (best-effort, logged), so a bake never hard-fails on geometry.
+      const tries = validate && !isSmog ? attempts : 1;
+      let raw, ok = !validate || isSmog, note = '';
+      for (let a = 0; a < tries; a++) {
+        const out = await awaitOutput(await submit(buildTxt2imgGraph({ prompt, seed: seed + a * 7919 })), { timeoutMs: 180000 });
+        raw = await fetchImage(out);
+        if (!validate || isSmog) break;
+        const v = await isTopDown(raw, subject);
+        ok = v.ok;
+        note = v.text.split('\n')[0];
+        if (ok) break;
+      }
       const png = isSmog ? luminanceToAlpha(raw) : whiteToAlpha(raw, 16);
       mkdirSync(join(OUT, cat), { recursive: true });
       writeFileSync(join(OUT, cat, `${slug}.png`), png);
       done++;
-      console.log(`✓ ${cat}/${slug}  [${done}/${targets.length}]`);
+      const tag = validate && !isSmog ? (ok ? '✓valid' : '⚠best-effort') : '';
+      console.log(`✓ ${cat}/${slug} ${tag} [${done}/${targets.length}]${note ? ` — ${note}` : ''}`);
     } catch (e) {
       failed++;
       console.error(`✗ ${cat}/${slug}: ${e.message}`);
