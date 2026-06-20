@@ -1357,7 +1357,10 @@ export class Renderer {
       const size = c.parked ? parkedSize : carSize;
       if (carSprites && carSprites.length > 0) {
         const img = carSprites[(c.tint ?? 0) % carSprites.length]!;
-        const hv = dirVector(c.dir);
+        // A curb-PARKED car sits PARALLEL to the curb: its long axis runs along the road, i.e.
+        // perpendicular to curbDir (N/S curb → E-W car; E/W curb → N-S car). Moving cars face travel.
+        const headingDir = c.parked && c.curbDir !== undefined ? (c.curbDir % 2 === 0 ? 1 : 0) : c.dir;
+        const hv = dirVector(headingDir);
         const angle = Math.atan2(hv.dx, -hv.dy); // sprite faces north; rotate CW to the heading
         const ss = size * 1.7;
         ctx.save();
@@ -1370,33 +1373,7 @@ export class Renderer {
         ctx.fillRect(Math.floor(sx - size / 2), Math.floor(sy - size / 2), size, size);
       }
     }
-    // Smog plumes: draw the translucent smog sprites over polluted tiles, drifting downwind — the
-    // dirty-plant / traffic pollution made visible (under a tileset; the field still drives land value).
-    const smogSprites = this.hasTileset ? this.ambientSprites?.smog : undefined;
-    if (smogSprites && smogSprites.length > 0) {
-      const drift = performance.now() / 1000;
-      for (const [tile, amt] of ambient.pollution) {
-        if (amt < 40) continue; // only real plumes, not faint road haze
-        const px = tile % mapW;
-        const py = (tile - px) / mapW;
-        // The puff STREAMS downwind along the prevailing wind, looping + fading as it travels — so the
-        // smog visibly blows off its source in the wind direction (Maddy: "follow prevailing winds").
-        const phase = (drift * 0.35 + (tile % 13) * 0.11) % 1; // 0..1 loop, per-tile phase offset
-        const distance = phase * 3.0; // tiles carried downwind this cycle
-        const { sx, sy } = camera.worldToScreen(
-          px + 0.5 + ambient.wind.dx * distance,
-          py + 0.5 + ambient.wind.dy * distance,
-        );
-        if (!onScreen(sx, sy)) continue;
-        const sz = ts * (1.0 + amt / 180 + phase * 0.8); // billows as it drifts
-        // Triangle envelope: fade IN from the source then OUT downwind — 0 at both loop ends, so the
-        // puff doesn't pop back to full opacity when the loop resets (the periodic-flash bug).
-        const env = phase < 0.5 ? phase * 2 : (1 - phase) * 2;
-        ctx.globalAlpha = Math.min(0.45, (amt / 255) * 0.6) * env;
-        ctx.drawImage(smogSprites[tile % smogSprites.length]!, sx - sz / 2, sy - sz / 2, sz, sz);
-      }
-      ctx.globalAlpha = 1;
-    }
+    // (Smog is drawn LAST — the top layer, above cars/peds — see end of drawSprites.)
 
     // Police Violence map (toggled, P): a blood-red stain on every tile where the state has done
     // harm (arrests), drawn per-frame from the live field so it tracks arrests + decay. The inverse
@@ -1461,6 +1438,27 @@ export class Renderer {
         if (!onScreen(sx, sy)) continue;
         ctx.fillRect(sx - birdSize / 2, sy - birdSize / 2, birdSize, birdSize);
       }
+    }
+
+    // Smog plumes — TOP layer (above cars/peds, Maddy): translucent puffs over polluted tiles, streaming
+    // downwind along the prevailing wind (loop + triangle fade so they don't pop), billowing as they go.
+    const smogSprites = this.hasTileset ? this.ambientSprites?.smog : undefined;
+    if (smogSprites && smogSprites.length > 0) {
+      const drift = performance.now() / 1000;
+      for (const [tile, amt] of ambient.pollution) {
+        if (amt < 40) continue; // only real plumes, not faint road haze
+        const px = tile % mapW;
+        const py = (tile - px) / mapW;
+        const phase = (drift * 0.35 + (tile % 13) * 0.11) % 1; // 0..1 loop, per-tile phase offset
+        const distance = phase * 3.0; // tiles carried downwind this cycle
+        const { sx, sy } = camera.worldToScreen(px + 0.5 + ambient.wind.dx * distance, py + 0.5 + ambient.wind.dy * distance);
+        if (!onScreen(sx, sy)) continue;
+        const sz = ts * (1.0 + amt / 180 + phase * 0.8);
+        const env = phase < 0.5 ? phase * 2 : (1 - phase) * 2; // fade in then out (0 at both loop ends)
+        ctx.globalAlpha = Math.min(0.45, (amt / 255) * 0.6) * env;
+        ctx.drawImage(smogSprites[tile % smogSprites.length]!, sx - sz / 2, sy - sz / 2, sz, sz);
+      }
+      ctx.globalAlpha = 1;
     }
   }
 }

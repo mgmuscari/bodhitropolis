@@ -606,6 +606,9 @@ export interface Mover {
    *  palette mod its length). Stays with the car for its whole life, so it shows the same
    *  colour moving on the road and parked in a lot. */
   tint?: number;
+  /** A per-car speed multiplier (~0.85..1.15) bound at spawn — declumps traffic so cars don't move in
+   *  lockstep (Maddy). Deterministic (hashed from id), not rng. Multiplies the congestion-adjusted speed. */
+  speedMul?: number;
   /** A pedestrian on a citizen trip. A DRIVE trip's last-mile ped is bound to a parked car
    *  (`carId`) and returns to it ('to-car'); a WALK trip's ped has no car and returns home
    *  ('to-home'), depositing the visit at `homeTile` on arrival. `phase` tracks the leg;
@@ -1814,6 +1817,8 @@ function ensureOwnedCar(state: AmbientState, p: Ped, map: GameMap): Car | null {
     id,
     dwell: PARK_MAX_WAIT,
     tint: (Math.imul((map.idx(start.x, start.y) + 1) ^ id, 0x9e3779b1) >>> 0) % 0x10000,
+    // ±15% deterministic speed jitter (hashed from id, not rng) so cars don't bunch in lockstep.
+    speedMul: 0.85 + ((Math.imul((id + 7) ^ 0x85ebca6b, 0xc2b2ae35) >>> 0) % 31) / 100,
   };
   applyParkSpot(car, spot); // parked in a real stall (sets x/y + curbSlot|lotIdx, parked = true)
   state.cars.push(car);
@@ -3045,7 +3050,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     const cx = Math.round(c.x);
     const cy = Math.round(c.y);
     const onFreeway = map.built[map.idx(cx, cy)] === BuiltKind.RoadHighway;
-    const sp = speedAt(onFreeway ? CAR_SPEED * 2 : CAR_SPEED, cx, cy, c.dir);
+    const sp = speedAt(onFreeway ? CAR_SPEED * 2 : CAR_SPEED, cx, cy, c.dir) * (c.speedMul ?? 1);
     if (c.path !== undefined) {
       const alive = advanceMover(c, sp, map, (x, y) => pathStep(map, c, x, y));
       return alive ? true : tryPark(state, c, map);
@@ -3143,7 +3148,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
       const cary = Math.round(car.y);
       const onFreeway = map.built[map.idx(carx, cary)] === BuiltKind.RoadHighway;
       // Freeways move traffic 2×; a crowded tile slows it (the same pileup field the car filter uses).
-      const sp = speedAt(onFreeway ? CAR_SPEED * 2 : CAR_SPEED, carx, cary, car.dir);
+      const sp = speedAt(onFreeway ? CAR_SPEED * 2 : CAR_SPEED, carx, cary, car.dir) * (car.speedMul ?? 1);
       const moving = advanceMover(car, sp, map, (x, y) => pathStep(map, car, x, y));
       layTraffic(state, map, Math.round(car.x), Math.round(car.y)); // the car IS the traffic
       layPollution(state, map, Math.round(car.x), Math.round(car.y), onFreeway); // ...and the smog
