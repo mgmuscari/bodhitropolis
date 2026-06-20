@@ -12,12 +12,12 @@ Status: 🔴 open · 🟡 in progress · ✅ fixed (note the PR)
 
 Open, in priority-ish order. Branch `playtest/overnight-batch` (sequential, one branch).
 
-- ✅ **R/C/I + civic multi-tile blocks** (FIXED 2026-06-20) — non-square multitile baker (PLOTS list) + baked civic 3×3, projects/industrial 3×3, offices 2×2, commercial 2×1. Was: ~~repeated singles~~ — grown commercial (`2×1`), offices (`2×2`),
-  projects/industrial (`3×3`) have no multitile cells (only fixed square civic/plants were baked), so
-  they fall back to per-tile whole-building singles → "repeated." FIX: extend `generate-multitile.mjs`
-  to **non-square W×H** + bake kinds 16–21's grown footprints (the `2×1` commercial is the bulk → needs
-  non-square). Renderer already prefers `footprintCellKey(kind,w,h,…)`. Meaty bake. (Cheap stopgap
-  option: renderer draws one building scaled across the footprint — mild distortion, no bake.)
+- ✅ **R/C/I + civic multi-tile blocks rendered as repeated singles** (FIXED 2026-06-20, `726b47e0`) —
+  worldgen/tool/growth place footprints the bake never covered (civic 3×3, commercial 2×1, offices 2×2,
+  projects/industrial 3×3). Extended the multitile baker to **non-square W×H + multiple sizes per kind**
+  (`PLOTS` list; `footprintPng`/`uploadFootprint`/`whiteToAlpha`/`buildBuildingGraph` take W×H), baked
+  the 10 missing plots, cells verified to compose into one building. ⚠️ Only `2×1` commercial baked (not
+  `1×2`); if vertical commercial appears, add it to `PLOTS`.
 - 🔴 **Shader as a SETTINGS TOGGLE under the menu bars (phase 5)** — fold the WebGL path into settings so
   it can be A/B'd live; two-canvas stack (WebGL base ← Canvas2D sprites/UI on top). Needs phase 2 (atlas
   albedo) so the shader keeps the baked identity. The CPU dynamics stay the permanent no-WebGL default
