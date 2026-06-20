@@ -89,6 +89,37 @@ export function makeGrassSheen(size: number): CanvasImageSource | null {
 }
 
 /**
+ * A tileable soft CLOUD-SHADOW texture — sparse cool-dark blobs on transparency. The renderer scrolls
+ * it with the prevailing wind over the whole viewport at low alpha, darkening ground + ambient props
+ * (an invisible cloud layer casting moving shadows, Maddy). Integer wave numbers → seamless tiling.
+ */
+export function makeCloudShadow(size: number): CanvasImageSource | null {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  const id = ctx.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      // Low-frequency blobs (products of integer-freq sines → tileable, organic clumps).
+      const n =
+        Math.sin((x / size) * TAU) * Math.sin((y / size) * TAU) +
+        0.6 * Math.sin((x / size) * TAU * 2 + 0.7) * Math.sin((y / size) * TAU * 2 + 1.9);
+      const a = Math.max(0, n - 0.12); // only the peaks → sparse, soft cloud cover
+      id.data[i] = 16;
+      id.data[i + 1] = 18;
+      id.data[i + 2] = 26; // cool dark shadow
+      id.data[i + 3] = Math.min(255, a * 170);
+    }
+  }
+  ctx.putImageData(id, 0, 0);
+  return canvas;
+}
+
+/**
  * Bake `frameCount` sloshy water frames by mutating the BAKED water tile (hybrid: the baked texture
  * carries the identity, the warp/foam adds the slosh). The renderer cycles these in a low-alpha
  * overlay over the baked base, so the surface undulates. Falls back to {@link WATER_BASE} if no baked

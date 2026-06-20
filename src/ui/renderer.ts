@@ -30,7 +30,7 @@ import { isPowerConsumer } from '../growth/power';
 import { laneOffset, pedCurbOffset, dirVector } from './ambientContent';
 import type { AmbientState } from './ambientContent';
 import type { AmbientSprites } from './ambientSprites';
-import { makeWaterFrames, makeGrassSheen } from './waterAnimation';
+import { makeWaterFrames, makeGrassSheen, makeCloudShadow } from './waterAnimation';
 import { OVERLAY_DIM } from './overlayLegend';
 
 /** Precomputed CSS for the sparse-overlay scrim (see OverlaySource.dimBase). */
@@ -675,6 +675,8 @@ export class Renderer {
   private maskCache = new Map<string, { key: string; path: Path2D | null }>();
   // Tileable wind-streak texture scrolled over grass/canopy for the subtle wavy-grass sheen.
   private grassSheen: CanvasImageSource | null = null;
+  // Tileable soft cloud-shadow texture drifting with the wind over ground + props.
+  private cloudShadow: CanvasImageSource | null = null;
   // Cached base pass (terrain + built + overlay) on an offscreen canvas. Rebuilt
   // ONLY when invalidated (map/camera/overlay change), then blitted 1:1 onto the
   // visible canvas each frame. The hover preview and the ambient sprites live in
@@ -712,6 +714,7 @@ export class Renderer {
       ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
       : [];
     this.grassSheen = this.hasTileset ? makeGrassSheen(BASE_TILE) : null;
+    this.cloudShadow = this.hasTileset ? makeCloudShadow(64) : null;
   }
 
   /**
@@ -731,6 +734,7 @@ export class Renderer {
       ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
       : [];
     this.grassSheen = this.hasTileset ? makeGrassSheen(BASE_TILE) : null;
+    this.cloudShadow = this.hasTileset ? makeCloudShadow(64) : null;
     this.invalidateBase();
   }
 
@@ -1229,8 +1233,19 @@ export class Renderer {
           ctx.fillStyle = pat;
           ctx.fillRect(0, 0, w, h);
         };
-        layer(wx * t * ts * 0.22, wy * t * ts * 0.22, 0.12); // waves rolling with the wind
-        layer((wx * 0.4 - wy * 0.8) * t * ts * 0.12, (wy * 0.4 + wx * 0.8) * t * ts * 0.12, 0.08); // cross-current swirl
+        // OSCILLATING sinusoidal translation along the wind vector (the water sloshes back-and-forth,
+        // not a linear scroll), with a slow ANGULAR DRIFT — a sum of incommensurate sines that wanders
+        // the slosh direction around the wind (a smooth ~normal-ish wobble), per Maddy.
+        const wlen = Math.hypot(wx, wy) || 1;
+        const ang = Math.sin(t * 0.11) * 0.5 + Math.sin(t * 0.19 + 1.3) * 0.3; // drift radians
+        const ca = Math.cos(ang);
+        const sa = Math.sin(ang);
+        const dx = (wx * ca - wy * sa) / wlen; // unit wind, rotated by the drift
+        const dy = (wx * sa + wy * ca) / wlen;
+        const osc1 = Math.sin(t * 0.8) * ts * 0.7; // slosh amplitude along the (drifted) wind
+        const osc2 = Math.sin(t * 0.53 + 1.7) * ts * 0.5; // second layer, different phase → swirl
+        layer(dx * osc1, dy * osc1, 0.12);
+        layer(dx * osc2, dy * osc2, 0.08);
         ctx.restore();
         ctx.globalAlpha = 1;
       }
@@ -1448,6 +1463,26 @@ export class Renderer {
         const { sx, sy } = camera.worldToScreen(b.x + 0.5, b.y + 0.5);
         if (!onScreen(sx, sy)) continue;
         ctx.fillRect(sx - birdSize / 2, sy - birdSize / 2, birdSize, birdSize);
+      }
+    }
+
+    // Cloud shadows: an invisible cloud layer drifting with the wind casts soft moving shadows over the
+    // ground + ambient props (Maddy). Skipped when a DATA overlay is active so the viz reads clean. One
+    // scrolled tileable pattern over the viewport (O(1)/frame); repeats every ~12 tiles (clouds are big).
+    if (this.hasTileset && this.cloudShadow && this.overlay === null && this.liveOverlay === null) {
+      const pat = ctx.createPattern(this.cloudShadow, 'repeat');
+      if (pat) {
+        const t = performance.now() / 1000;
+        const o = camera.worldToScreen(0, 0);
+        const repeat = 12 * ts; // one cloud-texture tile spans ~12 world tiles
+        const m = new DOMMatrix();
+        m.translateSelf(o.sx + ambient.wind.dx * t * ts * 0.1, o.sy + ambient.wind.dy * t * ts * 0.1);
+        m.scaleSelf(repeat / 64, repeat / 64);
+        pat.setTransform(m);
+        ctx.globalAlpha = 0.5; // the texture's own alpha is soft → total shadow stays gentle
+        ctx.fillStyle = pat;
+        ctx.fillRect(0, 0, w, h);
+        ctx.globalAlpha = 1;
       }
     }
 
