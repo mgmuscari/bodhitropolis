@@ -918,6 +918,17 @@ export class Renderer {
           }
           const builtTile = this.atlas.get(builtKey);
           if (builtTile) ctx.drawImage(builtTile, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
+          // Road-class value (Maddy): streets read lighter than avenues lighter than freeways. The
+          // asphalt is normalized to one average at load; this darkens the heavier classes on top.
+          if (this.hasTileset && builtTile) {
+            const darken = built === BuiltKind.RoadHighway ? 0.26 : built === BuiltKind.RoadAvenue ? 0.13 : 0;
+            if (darken > 0) {
+              ctx.globalAlpha = darken;
+              ctx.fillStyle = '#000';
+              ctx.fillRect(dx, dy, Math.ceil(ts), Math.ceil(ts));
+              ctx.globalAlpha = 1;
+            }
+          }
 
           // Flora canopies: a sparse tree/shrub sprite over the green-amenity kinds (parks, gardens,
           // rewilded land) under a tileset — Google-Maps-style canopy dots. Baked into the cached base

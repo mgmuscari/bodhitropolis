@@ -118,3 +118,22 @@ describe('applyTerrainGrade: green pull (de-cyan water)', () => {
     expect([d[0], d[1], d[2], d[3]]).toEqual([100, 100, 150, 255]);
   });
 });
+
+import { normalizeLuma } from '../../src/ui/tilesetLoader';
+
+describe('normalizeLuma: asphalt variant brightness match', () => {
+  it('scales a flat tile so its mean luma equals the target', () => {
+    const d = new Uint8ClampedArray([50, 50, 50, 255, 50, 50, 50, 255]);
+    normalizeLuma(d, 100);
+    expect(d[0]).toBe(100);
+    expect(d[3]).toBe(255); // alpha untouched
+  });
+
+  it('two tiles of different brightness converge to the same mean', () => {
+    const dark = new Uint8ClampedArray([40, 40, 40, 255]);
+    const light = new Uint8ClampedArray([120, 120, 120, 255]);
+    normalizeLuma(dark, 96);
+    normalizeLuma(light, 96);
+    expect(Math.abs(dark[0]! - light[0]!)).toBeLessThanOrEqual(1);
+  });
+});

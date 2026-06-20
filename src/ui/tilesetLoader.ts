@@ -75,10 +75,33 @@ export function applyTerrainGrade(data: Uint8ClampedArray, sat: number, bright: 
   }
 }
 
-/** Re-draw a terrain source through a grade into a fresh BASE_TILE canvas. Falls back to the raw
- *  source if no 2D context (never drops the asset). */
-function gradeImage(src: CanvasImageSource, sat: number, bright: number, gMul = 1): CanvasImageSource {
-  if (typeof document === 'undefined') return src; // headless (tests) — grading is a browser concern
+// Asphalt surface variants bake at different overall brightness, so a road reads patchy as the
+// variants cycle (Maddy). Normalize each to one mean luma at load; the renderer then darkens the
+// heavier road classes (avenue/freeway) on top.
+const ASPHALT_LUMA = 96;
+
+/** Scale a buffer's RGB so its MEAN luma equals `target` (alpha untouched). Pure — unit-tested. */
+export function normalizeLuma(data: Uint8ClampedArray, target: number): void {
+  let sum = 0;
+  let n = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    sum += 0.299 * data[i]! + 0.587 * data[i + 1]! + 0.114 * data[i + 2]!;
+    n++;
+  }
+  const mean = sum / Math.max(1, n);
+  if (mean < 1) return;
+  const f = target / mean;
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = data[i]! * f;
+    data[i + 1] = data[i + 1]! * f;
+    data[i + 2] = data[i + 2]! * f;
+  }
+}
+
+/** Re-draw a source through a pixel transform into a fresh BASE_TILE canvas. Falls back to the raw
+ *  source if no 2D context / headless (never drops the asset). */
+function transformImage(src: CanvasImageSource, fn: (data: Uint8ClampedArray) => void): CanvasImageSource {
+  if (typeof document === 'undefined') return src; // headless (tests) — pixel transforms are a browser concern
   const canvas = document.createElement('canvas');
   canvas.width = BASE_TILE;
   canvas.height = BASE_TILE;
@@ -87,7 +110,7 @@ function gradeImage(src: CanvasImageSource, sat: number, bright: number, gMul = 
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(src, 0, 0, BASE_TILE, BASE_TILE);
   const id = ctx.getImageData(0, 0, BASE_TILE, BASE_TILE);
-  applyTerrainGrade(id.data, sat, bright, gMul);
+  fn(id.data);
   ctx.putImageData(id, 0, 0);
   return canvas;
 }
@@ -113,12 +136,15 @@ export async function loadTilesetAssets(
     def.assets.map(async (asset) => {
       const img = await loadImage(assetUrl(def, asset.file, base));
       if (!img) return; // skip — this asset's keys fall back to procedural
-      // Terrain gets the satellite grade; water a stronger de-cyan grade; buildings pass through.
+      // Terrain gets the satellite grade; water a stronger de-cyan grade; asphalt is luma-normalized
+      // (so road variants match); buildings pass through.
       let out = img;
       if (asset.file.startsWith('terrain/')) {
         out = isWaterFile(asset.file)
-          ? gradeImage(img, WATER_SAT, WATER_BRIGHT, WATER_GREEN)
-          : gradeImage(img, TERRAIN_SAT, TERRAIN_BRIGHT);
+          ? transformImage(img, (d) => applyTerrainGrade(d, WATER_SAT, WATER_BRIGHT, WATER_GREEN))
+          : transformImage(img, (d) => applyTerrainGrade(d, TERRAIN_SAT, TERRAIN_BRIGHT));
+      } else if (/surfaces\/asphalt/.test(asset.file)) {
+        out = transformImage(img, (d) => normalizeLuma(d, ASPHALT_LUMA));
       }
       for (const key of asset.keys) overrides.set(key, out);
     }),
