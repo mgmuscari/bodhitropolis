@@ -29,6 +29,7 @@ import { isPowerConsumer } from '../growth/power';
 import { laneOffset, pedCurbOffset, dirVector } from './ambientContent';
 import type { AmbientState } from './ambientContent';
 import type { AmbientSprites } from './ambientSprites';
+import { makeWaterFrames } from './waterAnimation';
 import { OVERLAY_DIM } from './overlayLegend';
 
 /** Precomputed CSS for the sparse-overlay scrim (see OverlaySource.dimBase). */
@@ -81,6 +82,10 @@ const POLE_WIRE_REACH = 4;
 // are skipped — they would be an unreadable smear when zoomed out. Above it, one
 // glyph is stamped per footprint, centered, with a dark halo for contrast.
 const GLYPH_MIN_TS = 16;
+
+// Animated-water flipbook: how many frames to bake, and how fast to cycle them (fps).
+const WATER_FRAMES = 12;
+const WATER_FPS = 10;
 
 // Kinds that get a sparse flora-canopy accent under a tileset (the vegetated greens).
 const GREEN_FLORA_KINDS: ReadonlySet<number> = new Set([
@@ -660,6 +665,8 @@ export class Renderer {
   // Ambient sprite catalog (cars/flora/smog/props), loaded async; null until set. Under a tileset,
   // cars draw as tiny rotated car sprites ("micro machines") and smog plumes drift over polluted tiles.
   private ambientSprites: AmbientSprites | null = null;
+  // Animated water flipbook (baked from the graded water tile on tileset apply); [] = static water.
+  private waterFrames: CanvasImageSource[] = [];
   // Cached base pass (terrain + built + overlay) on an offscreen canvas. Rebuilt
   // ONLY when invalidated (map/camera/overlay change), then blitted 1:1 onto the
   // visible canvas each frame. The hover preview and the ambient sprites live in
@@ -691,6 +698,9 @@ export class Renderer {
     this.hasTileset = (overrides?.size ?? 0) > 0;
     this.roadVariants = overrides ? collectRoadSurfaces(overrides).length : 0;
     this.buildingVariants = overrides ? collectBuildingVariants(overrides) : 0;
+    this.waterFrames = this.hasTileset
+      ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
+      : [];
   }
 
   /**
@@ -704,6 +714,9 @@ export class Renderer {
     this.hasTileset = (overrides?.size ?? 0) > 0;
     this.roadVariants = overrides ? collectRoadSurfaces(overrides).length : 0;
     this.buildingVariants = overrides ? collectBuildingVariants(overrides) : 0;
+    this.waterFrames = this.hasTileset
+      ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
+      : [];
     this.invalidateBase();
   }
 
@@ -1141,16 +1154,19 @@ export class Renderer {
           const i = map.idx(tx, ty);
           if (map.built[i] !== 0) continue; // only open ground / water
           if (map.water[i] !== 0) {
-            const ph = Math.sin(t * 1.4 + (tx * 0.7 + ty * 1.3)); // glint wave across the water
-            if (ph < 0.35) continue;
+            // Animated water: draw the current flipbook frame (waves + whitecaps). The frame tiles
+            // seamlessly, so every water cell drawing the SAME frame reads as one continuous sea.
+            if (this.waterFrames.length === 0) continue;
             const { sx, sy } = camera.worldToScreen(tx, ty);
-            ctx.fillStyle = '#bcd6de';
-            ctx.globalAlpha = 0.16 * ph;
-            ctx.fillRect(Math.floor(sx + ts * 0.18), Math.floor(sy + ts * 0.42), ts * 0.5 * ph, Math.max(1, ts * 0.1));
+            const fi = Math.floor(t * WATER_FPS) % this.waterFrames.length;
+            ctx.drawImage(this.waterFrames[fi]!, Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
           } else {
             const lc = map.landCover[i]!;
             if (lc !== 1 && lc !== 2) continue; // meadow(1) / grass(2) only — the vegetated bands
-            const ph = Math.sin(t * 1.1 + (tx * 1.1 - ty * 0.6)); // wind gust rolling across the grass
+            // Wind sheen rolls along the PREVAILING WIND (a crest travelling downwind), so grass waves
+            // match the wind that drives the smog (Maddy bug). proj = tile position along the wind axis.
+            const proj = tx * ambient.wind.dx + ty * ambient.wind.dy;
+            const ph = Math.sin(proj * 0.8 - t * 1.4);
             if (ph < 0.4) continue;
             const { sx, sy } = camera.worldToScreen(tx, ty);
             ctx.fillStyle = '#d6e6ac';
