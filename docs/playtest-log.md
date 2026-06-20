@@ -5,14 +5,14 @@ Running capture of Maddy's playtest reports so they're absorbed without thrashin
 
 ## 2026-06-20 — satellite look pass
 
-- [~] **Water system redesign.** The baked water tiles are bad (esp. rivers); the de-cyan grade + subtle
+- [x] **Water system redesign.** (done: good static base + hybrid stochastic tiling + sloshy wind-driven overlay) The baked water tiles are bad (esp. rivers); the de-cyan grade + subtle
   flipbook overlay reads as "bad base showing through, twinkle pops every ~2s." Target: GOOD static water
   tile as the base (kills the bad tile — "killed with fire"), plus a **subtle 10–20% alpha** animated
   twinkle that is present **100% of the time**, drawn with a **non-row-major** strategy.
-- [ ] **ANTIPATTERN: per-tile row-major drawing every frame.** The water overlay fills top→bottom row-major
+- [x] **ANTIPATTERN: per-tile row-major drawing every frame.** The water overlay fills top→bottom row-major
   and doesn't complete in a frame → animation only shows in a horizontal bar at the top. Recurring project
   problem. Needs a better strategy (tileable pattern + cached water clip, O(1) draws/frame).
-- [ ] **White/silver cars floodfilled → "camouflage cars"** (white→alpha ate the body). Recolor white/silver
+- [x] **White/silver cars floodfilled → "camouflage cars"** (white→alpha ate the body). Recolor white/silver
   car prompts (non-white) and re-bake. Same class as the clinic white-roof bug.
 - [x] River tile `(31,95)` "kill with fire" — it's the bad baked water tile; folded into the water redesign.
 - [x] Smog "flash every 2s" → triangle fade-in/out envelope (no pop at loop reset).
@@ -45,14 +45,18 @@ Running capture of Maddy's playtest reports so they're absorbed without thrashin
 
 ## 2026-06-20 — batch 3
 
-- [~] **Wavy grass / canopy gone** — removed with the row-major loop; restoring via the non-row-major
+- [x] **Wavy grass / canopy restored** — removed with the row-major loop; restoring via the non-row-major
   technique (tileable wind-streak sheen scrolled over a cached grass mask, wind-aligned, subtle).
-- [ ] **Multitile commercial blocks render as repeated single tiles.** Commercial (19/20) grown/large
-  blocks aren't using a W×H multitile bake. Investigate: do C parcels grow to multi-tile footprints?
-  If so they need multitile cells (like civic/plants); if they're adjacent 1×1s, the building-variant
-  pick should differ them. Check footprint sizes + the cellKey path.
+- [ ] **Multitile R/C/I blocks render as repeated single tiles.** DIAGNOSED: R/C/I parcels GROW to
+  dynamic rectangular footprints (observed 19=2×1, 20=2×2, 18/21=3×3; vary by seed). Only the FIXED
+  square civic/plant footprints were baked as multitile (`b-{kind}-{w}x{w}-…`), so grown R/C/I have no
+  cell key and fall back to per-tile `b-{kind}-{pos}-{tier}` singles — each a *whole centered building*
+  (footprint method), not composable edge pieces → an N-tile block reads as N repeated buildings. FIX
+  (deferred, meaty): extend `generate-multitile.mjs` to NON-square W×H + bake the grown footprints for
+  kinds 16–21 (bound the set from revival.ts growth max), so a grown block renders as ONE sliced
+  building (renderer already prefers `footprintCellKey(kind,w,h,…)`). Needs growth-max enumerated first.
 
-- [ ] **Blue step van sprite is a SIDE view, rotated 90° while driving** — kills vibes. The van bake
+- [x] **Blue step van sprite was a SIDE view, rotated 90° while driving** — kills vibes. The van bake
   isn't top-down. Re-bake top-down; if diffusion won't reliably give top-down vans, the validator below
   is the real fix. (Buses likely same risk.)
 - [x] **Bake VALIDATORS via LMStudio vision (gemma)** — https://lmstudio.tailea7e08.ts.net/v1/models —

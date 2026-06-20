@@ -5,6 +5,42 @@ Maddy reports bugs as she playtests; Claude **records them here** (need not fix 
 
 Status: 🔴 open · 🟡 in progress · ✅ fixed (note the PR)
 
+> Detailed running playtest capture: **`docs/playtest-log.md`** (newest first). This file is the
+> curated backlog; the log is the raw stream.
+
+## ACTIVE BACKLOG — pending work (2026-06-20)
+
+Open, in priority-ish order. Branch `playtest/overnight-batch` (sequential, one branch).
+
+- 🔴 **R/C/I multi-tile blocks render as repeated singles** — grown commercial (`2×1`), offices (`2×2`),
+  projects/industrial (`3×3`) have no multitile cells (only fixed square civic/plants were baked), so
+  they fall back to per-tile whole-building singles → "repeated." FIX: extend `generate-multitile.mjs`
+  to **non-square W×H** + bake kinds 16–21's grown footprints (the `2×1` commercial is the bulk → needs
+  non-square). Renderer already prefers `footprintCellKey(kind,w,h,…)`. Meaty bake. (Cheap stopgap
+  option: renderer draws one building scaled across the footprint — mild distortion, no bake.)
+- 🔴 **Shader as a SETTINGS TOGGLE under the menu bars (phase 5)** — fold the WebGL path into settings so
+  it can be A/B'd live; two-canvas stack (WebGL base ← Canvas2D sprites/UI on top). Needs phase 2 (atlas
+  albedo) so the shader keeps the baked identity. The CPU dynamics stay the permanent no-WebGL default
+  (NOT retired). See `docs/art/satellite-shader.md`.
+- 🔴 **Hybrid shader phase 2 — atlas albedo** — shader samples the baked tiles (not just procedural).
+  Prereq for phase 5 looking right. (Detailed below.)
+- 🔴 **Asphalt-ground = redline / healing de-paves** — on-theme ground-material mechanic (detailed below).
+- 🟡 **Peds + cyclists wiring** (feature) — sprites baked + validated; drop into the ped draw loop like
+  the cars (rotate by heading; ped vs cyclist by `TravelMode`). `public/sprites/ambient/{peds,cyclists}`.
+- 🟡 **Building variety** — 2 variants/1×1 kind shipped; want 5–10 per kind eventually.
+- 🟡 **More bake validation** — `validate.mjs` (LMStudio gemma vision) gates top-down geometry; could
+  also gate "building intact, not floodfilled" + run over the whole baked set, not just ambient.
+
+### Done this session (2026-06-19 → 06-20, satellite polish)
+
+Complete tileset bake (216 buildings + multitile, 0 fail); building variety; terrain dihedral anti-plaid;
+softened glyphs under tileset; ambient sprites (cars + smog plumes riding the wind + flora canopies);
+**bake validator** (vision-model top-down check) + all cars re-baked top-down (side-van fixed); satellite
+grade (darker/desaturated terrain, de-cyaned water); **hybrid sloshy water** (baked texture + stochastic
+per-tile rotation/scale + wind-driven slosh, non-row-major O(1)); **wavy grass/canopy** (same technique);
+precinct + clinic re-bakes; input fixes (Cmd+R no longer hijacked, drag-pan release). Shader foundation
+(bridge + procedural pass + `?shader`/`?shaderdemo`). ~29 commits.
+
 ## HYBRID SATELLITE SHADER — diffusion tiles × WebGL2 (Maddy, 2026-06-19) — GROUND BROKEN
 
 Real-time procedural satellite renderer that HYBRIDIZES the baked diffusion tileset (base albedo,
@@ -67,17 +103,14 @@ black outlines, SC2000-era, top-down (not iso), Oakland architectural cues. Plan
   - 🟡 **Live-playtest feedback (Maddy, 2026-06-19)** — first live look at the baked satellite skin:
     - ✅ **Parking lots = tiling asphalt surface** — were alpha objects with a yellow border that didn't
       tile; now `SURFACE_KINDS` → txt2img + SeamlessTile, opaque, "no yellow lines" prompt. Re-baked.
-    - 🔴 **Multi-tile plots must render at W·16 × H·16** — police/plants are a tiny building repeated on
-      each cell of a 2×2/3×3/4×4 plot. Generate ONE image per (kind,tier[,variant]) at footprint res,
-      slice into cells → `footprintCellKey` (renderer already tries it first). Footprints in
-      `src/tools/tools.ts` (1×1/2×2/3×3/4×4). Also fixes "buildings don't fill the frame."
-    - 🔴 **Building variety per category (esp. residential)** — want 5–10 variants per kind; needs the
-      variety-pick seam (renderer picks variant N per parcel via a `tieHash` of the parcel anchor →
-      `…-v{n}` key) + N× the per-kind bake. (Plan §6.1.)
-    - 🔴 **Streams/rivers are directional** — a single river tile tiled along a diagonal stream makes a
-      sawtooth; rivers need flow-direction awareness (rotate/align per a river connection mask, the
-      water dual of the road `transportMask`) — a renderer feature (or the hybrid shader handles it via
-      the adjacency channel).
+    - ✅ **Multi-tile plots render at W·16 × H·16** (2026-06-19/20) — `generate-multitile.mjs` bakes ONE
+      image per (kind,tier) at footprint res, sliced into `footprintCellKey` cells. Civic/plants done;
+      precinct (31) added after it rendered as 4 tiles. ⚠️ R/C/I follow-up below (non-square footprints).
+    - 🟡 **Building variety per category** — 2 baked variants per 1×1 kind (16–21,55) shipped
+      (`generate-variants.mjs` → `…#{n}` keys, renderer picks per parcel anchor). Want 5–10 eventually.
+    - ✅ **Streams/rivers directional sawtooth** (2026-06-20) — rivers aliased to the clean water texture
+      + the hybrid water (stochastic per-tile rotation kills the stripe); the WebGL shader's continuous
+      water is the full fix (phase 5). The baked directional river tile is no longer drawn.
   - ✅ **Roads (Maddy's call: generate texture, paint lines on top)** — committed asphalt SURFACE
     (3 tone-consistent variants, `public/tilesets/satellite/surfaces/asphalt-{0,1,2}.png`); renderer
     paints connection-mask markings over them (`@surface/road#n` ingredient seam). `satellite` skins
