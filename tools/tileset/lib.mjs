@@ -259,7 +259,7 @@ export function buildTxt2imgGraph({ prompt, seed, tiling = false }) {
  * region (flat, top-down); white is kept → alpha. `gen` = latent px (512 single tile, w·256 plot),
  * `pixel` = PixelOE size (gen/pixel = output px). Low BUILDING_LORA kills the iso game-sprite bias.
  */
-export function buildBuildingGraph({ initName, prompt, seed, gen = 512, pixel = 32 }) {
+export function buildBuildingGraph({ initName, prompt, seed, gen = 512, genW = gen, genH = gen, pixel = 32 }) {
   return {
     1: { class_type: 'UNETLoader', inputs: { unet_name: 'z_image_turbo_bf16.safetensors', weight_dtype: 'default' } },
     2: { class_type: 'ZImageLoraAutoLoader', inputs: { lora_name: 'pixel_art_style_z_image_turbo.safetensors', global_strength: BUILDING_LORA, model: ['1', 0] } },
@@ -269,7 +269,7 @@ export function buildBuildingGraph({ initName, prompt, seed, gen = 512, pixel = 
     7: { class_type: 'CLIPTextEncode', inputs: { text: prompt, clip: ['5', 0] } },
     8: { class_type: 'CLIPTextEncode', inputs: { text: NEGATIVE_PROMPT, clip: ['5', 0] } }, // real negative (cfg>1)
     17: { class_type: 'LoadImage', inputs: { image: initName } },
-    18: { class_type: 'ImageScale', inputs: { upscale_method: 'bilinear', width: gen, height: gen, crop: 'disabled', image: ['17', 0] } },
+    18: { class_type: 'ImageScale', inputs: { upscale_method: 'bilinear', width: genW, height: genH, crop: 'disabled', image: ['17', 0] } },
     21: { class_type: 'VAEEncode', inputs: { pixels: ['18', 0], vae: ['6', 0] } },
     10: { class_type: 'KSampler', inputs: { seed, steps: 8, cfg: BUILDING_CFG, sampler_name: 'res_multistep', scheduler: 'simple', denoise: BUILDING_DENOISE, model: ['4', 0], positive: ['7', 0], negative: ['8', 0], latent_image: ['21', 0] } },
     11: { class_type: 'VAEDecode', inputs: { samples: ['10', 0], vae: ['6', 0] } },
@@ -278,10 +278,11 @@ export function buildBuildingGraph({ initName, prompt, seed, gen = 512, pixel = 
   };
 }
 
-/** Render + upload a creative black-footprint silhouette init for a building (kind,tier) at `size`px. */
-export async function uploadFootprint(kind, seed, size) {
+/** Render + upload a creative black-footprint silhouette init for a building (kind,tier) at `w`×`h`px
+ *  (h defaults to w — square; non-square for plots like a 2×1 commercial strip). */
+export async function uploadFootprint(kind, seed, w, h = w) {
   const shape = pickShape(seed);
-  return uploadImage(footprintPng(shape, size), `fp-${kind}-${size}.png`);
+  return uploadImage(footprintPng(shape, w, h), `fp-${kind}-${w}x${h}.png`);
 }
 
 // ── ComfyUI REST helpers ──────────────────────────────────────────────────────────────────────
@@ -376,15 +377,16 @@ export async function generateTile({ key, category, tiling, controlBuf, controlN
  * only the background-connected white is cleared (interior white survives). Lets a building composite
  * over the ground tile (asphalt / grass / whatever — Maddy 2026-06-19). Original on any magick error.
  */
-export function whiteToAlpha(buf, size = 16) {
-  const e = size - 1;
+export function whiteToAlpha(buf, w = 16, h = w) {
+  const ex = w - 1;
+  const ey = h - 1;
   const fuzz = `${process.env.TS_FUZZ ?? 12}%`; // lower fuzz = less of the building eaten away
   try {
     return execFileSync(
       'magick',
       ['png:-', '-alpha', 'set', '-fuzz', fuzz, '-fill', 'none',
-        '-draw', 'alpha 0,0 floodfill', '-draw', `alpha ${e},0 floodfill`,
-        '-draw', `alpha 0,${e} floodfill`, '-draw', `alpha ${e},${e} floodfill`, 'png:-'],
+        '-draw', 'alpha 0,0 floodfill', '-draw', `alpha ${ex},0 floodfill`,
+        '-draw', `alpha 0,${ey} floodfill`, '-draw', `alpha ${ex},${ey} floodfill`, 'png:-'],
       { input: buf, maxBuffer: 32 * 1024 * 1024 },
     );
   } catch {

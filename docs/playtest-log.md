@@ -47,7 +47,7 @@ Running capture of Maddy's playtest reports so they're absorbed without thrashin
 
 - [x] **Wavy grass / canopy restored** — removed with the row-major loop; restoring via the non-row-major
   technique (tileable wind-streak sheen scrolled over a cached grass mask, wind-aligned, subtle).
-- [ ] **Multitile R/C/I blocks render as repeated single tiles.** DIAGNOSED: R/C/I parcels GROW to
+- [x] **Multitile R/C/I blocks render as repeated single tiles** — FIXED (non-square multitile baker + baked 18/19/20/21 grown footprints). DIAGNOSED: R/C/I parcels GROW to
   dynamic rectangular footprints (observed 19=2×1, 20=2×2, 18/21=3×3; vary by seed). Only the FIXED
   square civic/plant footprints were baked as multitile (`b-{kind}-{w}x{w}-…`), so grown R/C/I have no
   cell key and fall back to per-tile `b-{kind}-{pos}-{tier}` singles — each a *whole centered building*
@@ -62,3 +62,11 @@ Running capture of Maddy's playtest reports so they're absorbed without thrashin
 - [x] **Bake VALIDATORS via LMStudio vision (gemma)** — https://lmstudio.tailea7e08.ts.net/v1/models —
   check each baked tile/sprite for correct geometry (e.g. "is this top-down?", "is the building intact
   not floodfilled?") and flag/reject failures. Would've caught the side-van, the floodfilled clinic/cars.
+
+## 2026-06-20 — batch 4
+
+- [x] **Civic center renders single-tile** — FIXED (worldgen 3×3 not baked; non-square multitile baker + civic 3×3 plot) (kind 23 is a 2×2, IS baked as multitile b-23-2x2 + in
+  manifest). Investigate: bake cells compose to one building, or renderer not using cellKey for it?
+- [ ] **Yellow/orange (taxi/van) drives BACKWARDS** — sprite faces the wrong way for travel. The
+  vehicle/ped/cyclist validator must also check FACING: the vehicle's FRONT should be at the TOP of the
+  sprite (the renderer rotates assuming north-facing). Reject/normalize sprites whose front is elsewhere.

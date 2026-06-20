@@ -27,16 +27,18 @@ const SHAPES = {
 
 export const SHAPE_NAMES = Object.keys(SHAPES);
 
-/** Render shape `name` as a black-on-white silhouette PNG buffer at `size`px. */
-export function footprintPng(name, size = 512) {
+/** Render shape `name` as a black-on-white silhouette PNG buffer at `w`×`h` px (h defaults to w —
+ *  square; pass h for non-square plots like a 2×1 commercial strip). */
+export function footprintPng(name, w = 512, h = w) {
   const rects = SHAPES[name] ?? SHAPES.block;
-  const args = ['-size', `${size}x${size}`, 'xc:white', '-fill', 'black'];
+  const args = ['-size', `${w}x${h}`, 'xc:white', '-fill', 'black'];
   let fill = 'black';
-  const px = (f) => Math.round(f * (size - 1));
-  for (const [x0, y0, x1, y1, w] of rects) {
-    const want = w ? 'white' : 'black';
+  const pxX = (f) => Math.round(f * (w - 1));
+  const pxY = (f) => Math.round(f * (h - 1));
+  for (const [x0, y0, x1, y1, ww] of rects) {
+    const want = ww ? 'white' : 'black';
     if (want !== fill) { args.push('-fill', want); fill = want; }
-    args.push('-draw', `rectangle ${px(x0)},${px(y0)},${px(x1)},${px(y1)}`);
+    args.push('-draw', `rectangle ${pxX(x0)},${pxY(y0)},${pxX(x1)},${pxY(y1)}`);
   }
   args.push('png:-');
   return execFileSync('magick', args, { maxBuffer: 16 * 1024 * 1024 });

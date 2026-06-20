@@ -12,7 +12,7 @@ Status: 🔴 open · 🟡 in progress · ✅ fixed (note the PR)
 
 Open, in priority-ish order. Branch `playtest/overnight-batch` (sequential, one branch).
 
-- 🔴 **R/C/I multi-tile blocks render as repeated singles** — grown commercial (`2×1`), offices (`2×2`),
+- ✅ **R/C/I + civic multi-tile blocks** (FIXED 2026-06-20) — non-square multitile baker (PLOTS list) + baked civic 3×3, projects/industrial 3×3, offices 2×2, commercial 2×1. Was: ~~repeated singles~~ — grown commercial (`2×1`), offices (`2×2`),
   projects/industrial (`3×3`) have no multitile cells (only fixed square civic/plants were baked), so
   they fall back to per-tile whole-building singles → "repeated." FIX: extend `generate-multitile.mjs`
   to **non-square W×H** + bake kinds 16–21's grown footprints (the `2×1` commercial is the bulk → needs
