@@ -88,10 +88,35 @@ export function makeGrassSheen(size: number): CanvasImageSource | null {
   return canvas;
 }
 
+// Tileable value noise: a hash value at each integer lattice point, WRAPPED at `period` so the field
+// repeats seamlessly; smoothstep-interpolated. Products of sines make a regular lattice ("chain-link
+// fence", Maddy) — real noise gives organic, irregular clumps.
+function vhash(ix: number, iy: number, period: number): number {
+  const x = ((ix % period) + period) % period;
+  const y = ((iy % period) + period) % period;
+  let h = Math.imul((x ^ 0x9e3779b1) >>> 0, 0x85ebca6b);
+  h = Math.imul((h ^ (y + 0x27d4eb2f)) >>> 0, 0xc2b2ae35);
+  h ^= h >>> 15;
+  return (h >>> 0) / 4294967296;
+}
+function vnoise(fx: number, fy: number, period: number): number {
+  const ix = Math.floor(fx);
+  const iy = Math.floor(fy);
+  const tx = fx - ix;
+  const ty = fy - iy;
+  const sx = tx * tx * (3 - 2 * tx);
+  const sy = ty * ty * (3 - 2 * ty);
+  const a = vhash(ix, iy, period);
+  const b = vhash(ix + 1, iy, period);
+  const c = vhash(ix, iy + 1, period);
+  const d = vhash(ix + 1, iy + 1, period);
+  return (a * (1 - sx) + b * sx) * (1 - sy) + (c * (1 - sx) + d * sx) * sy;
+}
+
 /**
- * A tileable soft CLOUD-SHADOW texture — sparse cool-dark blobs on transparency. The renderer scrolls
- * it with the prevailing wind over the whole viewport at low alpha, darkening ground + ambient props
- * (an invisible cloud layer casting moving shadows, Maddy). Integer wave numbers → seamless tiling.
+ * A tileable soft CLOUD-SHADOW texture — sparse organic cool-dark blobs on transparency, from tileable
+ * fBm value noise (NOT sine products, which read as a chain-link fence — Maddy). The renderer scrolls
+ * it with the prevailing wind over the viewport at low alpha (an invisible cloud layer casting shadows).
  */
 export function makeCloudShadow(size: number): CanvasImageSource | null {
   if (typeof document === 'undefined') return null;
@@ -101,18 +126,19 @@ export function makeCloudShadow(size: number): CanvasImageSource | null {
   const ctx = canvas.getContext('2d');
   if (!ctx) return null;
   const id = ctx.createImageData(size, size);
+  const P = 3; // base lattice cells across the texture (low freq = big clouds); wraps → tileable
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = (y * size + x) * 4;
-      // Low-frequency blobs (products of integer-freq sines → tileable, organic clumps).
-      const n =
-        Math.sin((x / size) * TAU) * Math.sin((y / size) * TAU) +
-        0.6 * Math.sin((x / size) * TAU * 2 + 0.7) * Math.sin((y / size) * TAU * 2 + 1.9);
-      const a = Math.max(0, n - 0.12); // only the peaks → sparse, soft cloud cover
+      const fx = (x / size) * P;
+      const fy = (y / size) * P;
+      // two octaves of tileable noise → organic clumps
+      const n = vnoise(fx, fy, P) * 0.66 + vnoise(fx * 2, fy * 2, P * 2) * 0.34;
+      const a = Math.max(0, n - 0.5) * 2; // threshold + gain → sparse soft cloud cover, lots of clear sky
       id.data[i] = 16;
       id.data[i + 1] = 18;
       id.data[i + 2] = 26; // cool dark shadow
-      id.data[i + 3] = Math.min(255, a * 170);
+      id.data[i + 3] = Math.min(255, a * 200);
     }
   }
   ctx.putImageData(id, 0, 0);
