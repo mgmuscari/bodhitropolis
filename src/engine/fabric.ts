@@ -786,6 +786,26 @@ export function roadCurbMask(map: GameMap, x: number, y: number): number {
 }
 
 /**
+ * Level-crossing mask for an at-grade RAIL or STREETCAR tile at (x, y): bit N=1/E=2/S=4/W=8 set on
+ * each 4-neighbour edge a ROAD approaches from — i.e. where a road crosses the track at grade. Rail
+ * and road never share a tile (they don't merge), so a crossing reads as a rail tile flanked by road
+ * on the road's axis; cars cross it via `canDrive`'s level-crossing rule. The renderer draws crossing
+ * markings (stop bands + hazard) on these edges (Maddy: rail crossings should show graphically). Only
+ * at-grade lines cross — elevated rail is grade-separated (a deck), so it is excluded. Render-only. */
+export function railCrossingMask(map: GameMap, x: number, y: number): number {
+  const self = map.getBuilt(x, y);
+  if (self !== BuiltKind.Rail && self !== BuiltKind.Streetcar) return 0;
+  let mask = 0;
+  for (const [dx, dy, bit] of MASK_DIRS) {
+    const nx = x + dx;
+    const ny = y + dy;
+    if (!map.inBounds(nx, ny)) continue;
+    if (isRoadKind(map.getBuilt(nx, ny))) mask |= bit; // a road approaches → a crossing edge
+  }
+  return mask;
+}
+
+/**
  * The MARKING mask for a RoadRamp tile (a street overlaid on a freeway tile): only the edges toward
  * the FREEWAY band (RoadHighway / RoadRamp neighbours). Used instead of the full connection mask so
  * the ramp's dashed line runs STRAIGHT THROUGH along the freeway, instead of forming a + cross with

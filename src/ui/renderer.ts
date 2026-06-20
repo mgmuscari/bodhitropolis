@@ -9,7 +9,7 @@
 // condition-aware building tiles.
 
 import { GameMap, Water, LandCover } from '../engine/map';
-import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, rampMarkingMask, freewayMedianAxis, freewayAxis, freewayLaneBoundaryMask, freewayCenterLaneAxis } from '../engine/fabric';
+import { BuiltKind, isTransportKind, transportMask, isRoadKind, deckMask, roadDividerMask, roadCurbMask, railCrossingMask, rampMarkingMask, freewayMedianAxis, freewayAxis, freewayLaneBoundaryMask, freewayCenterLaneAxis } from '../engine/fabric';
 import type { WorldState } from '../worldgen/pipeline';
 import { Camera, BASE_TILE } from './camera';
 import {
@@ -919,6 +919,15 @@ export class Renderer {
           if (this.roadVariants > 1 && builtKey.startsWith('road-')) {
             builtKey = variantKey(builtKey, surfaceVariantIndex(tx, ty, this.roadVariants));
           }
+          // LEVEL CROSSING: where a road crosses an at-grade rail/tram tile, pave a road band ACROSS
+          // the track UNDER the rails (so the rails read as running through the asphalt — drawn before
+          // the rail tile). The white stop lines go on top, after. Structural — procedural + tileset.
+          const xMask = isT ? railCrossingMask(map, tx, ty) : 0;
+          if (xMask !== 0) {
+            ctx.fillStyle = '#3a3833'; // asphalt of the crossing roadway
+            if (xMask & (N | S)) ctx.fillRect(dx + ts * 0.28, dy, Math.ceil(ts * 0.44), Math.ceil(ts)); // road runs N–S
+            if (xMask & (E | W)) ctx.fillRect(dx, dy + ts * 0.28, Math.ceil(ts), Math.ceil(ts * 0.44)); // road runs E–W
+          }
           const builtTile = this.atlas.get(builtKey);
           if (builtTile) ctx.drawImage(builtTile, 0, 0, BASE_TILE, BASE_TILE, dx, dy, ts, ts);
           // Road-class value (Maddy): streets read lighter than avenues lighter than freeways. The
@@ -973,6 +982,17 @@ export class Renderer {
               if (curb & S) { ctx.fillStyle = walk; ctx.fillRect(dx, dy + ts - sw, ts, sw); ctx.fillStyle = gutter; ctx.fillRect(dx, dy + ts - sw, ts, 1); }
               if (curb & W) { ctx.fillStyle = walk; ctx.fillRect(dx, dy, sw, ts); ctx.fillStyle = gutter; ctx.fillRect(dx + sw - 1, dy, 1, ts); }
               if (curb & E) { ctx.fillStyle = walk; ctx.fillRect(dx + ts - sw, dy, sw, ts); ctx.fillStyle = gutter; ctx.fillRect(dx + ts - sw, dy, 1, ts); }
+            }
+
+            // Level-crossing PAINT: the white stop line a road has at a rail/tram crossing, on each
+            // road-approach edge (the asphalt band + rails are already laid below/in the rail tile).
+            if (xMask !== 0) {
+              ctx.fillStyle = '#f2efe6';
+              const lw = Math.max(1, Math.round(ts * 0.11));
+              if (xMask & N) ctx.fillRect(dx + ts * 0.26, dy + Math.round(ts * 0.10), Math.ceil(ts * 0.48), lw);
+              if (xMask & S) ctx.fillRect(dx + ts * 0.26, dy + ts - Math.round(ts * 0.10) - lw, Math.ceil(ts * 0.48), lw);
+              if (xMask & W) ctx.fillRect(dx + Math.round(ts * 0.10), dy + ts * 0.26, lw, Math.ceil(ts * 0.48));
+              if (xMask & E) ctx.fillRect(dx + ts - Math.round(ts * 0.10) - lw, dy + ts * 0.26, lw, Math.ceil(ts * 0.48));
             }
 
             // Freeway lane markings — ONLY on a WIDE (multi-lane) freeway (a 1-wide highway keeps its

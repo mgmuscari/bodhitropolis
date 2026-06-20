@@ -17,6 +17,7 @@ import {
   roadDividerMask,
   isLimitedAccessBoundary,
   roadCurbMask,
+  railCrossingMask,
   rampMarkingMask,
   freewayMedianAxis,
   freewayAxis,
@@ -1203,6 +1204,41 @@ describe('roadCurbMask (curb/sidewalk where a surface road meets non-road)', () 
     map.setBuilt(1, 2, BuiltKind.RoadStreet); // west road — no curb
     map.setBuilt(3, 2, BuiltKind.None); // east land — curb
     expect(roadCurbMask(map, 2, 2)).toBe(E);
+  });
+});
+
+describe('railCrossingMask (level crossing where a road meets a rail/tram tile)', () => {
+  it('is 0 on a non-rail tile', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.RoadStreet);
+    map.setBuilt(2, 1, BuiltKind.Rail);
+    expect(railCrossingMask(map, 2, 2)).toBe(0); // the ROAD tile carries no crossing mark; the rail does
+  });
+
+  it('marks the road-approach edges of a rail tile a road crosses', () => {
+    const map = new GameMap(5, 5);
+    // A horizontal rail line with a vertical street crossing it at (2,2).
+    map.setBuilt(1, 2, BuiltKind.Rail);
+    map.setBuilt(2, 2, BuiltKind.Rail);
+    map.setBuilt(3, 2, BuiltKind.Rail);
+    map.setBuilt(2, 1, BuiltKind.RoadStreet); // road approaches from the north
+    map.setBuilt(2, 3, BuiltKind.RoadStreet); // ...and the south → the crossing
+    expect(railCrossingMask(map, 2, 2)).toBe(N | S);
+  });
+
+  it('is 0 for a rail tile with no road neighbour (open track)', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(1, 2, BuiltKind.Rail);
+    map.setBuilt(2, 2, BuiltKind.Rail);
+    map.setBuilt(3, 2, BuiltKind.Rail);
+    expect(railCrossingMask(map, 2, 2)).toBe(0);
+  });
+
+  it('also marks a streetcar (tram) crossing', () => {
+    const map = new GameMap(5, 5);
+    map.setBuilt(2, 2, BuiltKind.Streetcar);
+    map.setBuilt(1, 2, BuiltKind.RoadAvenue); // a cross avenue to the west
+    expect(railCrossingMask(map, 2, 2)).toBe(W);
   });
 });
 
