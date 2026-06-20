@@ -61,8 +61,13 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   (head advances tile-to-tile via `nextRailStep`, U-turn at dead-ends → shuttles; cars trace the
   track); one per 26 rail tiles (cap 6), despawns if the line vanishes. Red locomotive + silver cars
   oriented along the track. Heavy rail (`Rail`) only — elevated rail/trams are a follow-up.
-- 🔵 **Multi-tile plots get built-in parking** — ≥2×2 plots reserve a `ParkingLot` edge tile facing a
-  drivable neighbour; the STRUCTURAL fix for walled-off-job churn. `docs/design/multitile-parking.md`.
+- 🟡 **Multi-tile plots get built-in parking** — LIVE HALF DONE (`06173826`): `canDrive` now lets a car
+  enter/exit a `ParkingLot` from an adjacent freeway both ways (NJ-style frontage lots), so existing
+  worldgen 2×2 lots are freeway-accessible. REMAINING (worldgen auto-reservation) needs DESIGN, not a
+  blind edit: a parcel is a uniform-kind rectangle, so a `ParkingLot` tile INSIDE an Industrial/Civic
+  footprint violates `checkParcelAgreement` — must place an ADJACENT 1-tile lot (space contention +
+  changes worldgen golden tests). The live "drove-there-enters" safety net already covers the churn.
+  `docs/design/multitile-parking.md`.
 - ✅ **Smog diffusion + rain→runoff** (`10742864`) — `diffusePollution` (isotropic conservative spread,
   run with the wind drift so a plume streaks AND fattens) + `applyRain` (a RAIN_CADENCE storm washes
   smog→ground, then ground→adjacent-water/downhill, diluted per hop → harm relocates toward the low
