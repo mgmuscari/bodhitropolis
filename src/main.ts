@@ -103,6 +103,14 @@ export function main(): void {
     [terrainStage(), mosesCenturyStage(), ecoSeedStage()],
   );
 
+  // Dev route: ?shader renders the REAL seed world via the procedural pass (phase 5; bake-independent)
+  // — proves the data bridge + shader on actual worldgen output. Returns before the live game mounts.
+  if (params.has('shader')) {
+    const handle = mountSatelliteDemo(canvas, { map: world.map });
+    (window as unknown as { __satDemo?: unknown }).__satDemo = handle;
+    return;
+  }
+
   // Tech-tree state: communal effort accrues into it each sim tick (see below).
   const tech = createTechState(TECH_TREE);
 

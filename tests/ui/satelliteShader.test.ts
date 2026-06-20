@@ -31,6 +31,14 @@ describe('satelliteShader: fragment contract', () => {
     expect(f).toContain('fragColor');
   });
 
+  it('maps screen UV through a camera region (origin + view), not the full grid', () => {
+    // u_grid stays the texture size; u_origin/u_view are the visible window so the
+    // shader can render a panned/zoomed slice of the live world (phase 5).
+    expect(f).toContain('u_origin');
+    expect(f).toContain('u_view');
+    expect(f).toMatch(/u_origin\s*\+\s*v_uv\s*\*\s*u_view/);
+  });
+
   it('carries the single-pass raymarched shadow loop', () => {
     expect(f).toMatch(/for\s*\(\s*int\s+i\s*=\s*1/); // step loop along the sun ray
     expect(f).toContain('shadow');

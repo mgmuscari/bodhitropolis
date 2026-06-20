@@ -42,7 +42,9 @@ precision highp float;
 ${glslDefines()}
 
 uniform sampler2D u_data; // packed world: R=type G=height/band/class B=adjacency A=sim
-uniform vec2 u_grid;      // grid dimensions in cells
+uniform vec2 u_grid;      // data-texture size in cells (for sampling normalization)
+uniform vec2 u_origin;    // top-left visible world cell (camera pan)
+uniform vec2 u_view;      // visible window size in cells (camera zoom)
 uniform float u_time;     // seconds, for animated water
 uniform vec2 u_sun;       // sun direction in tile space (shadows trace toward it)
 uniform float u_shadow;   // shadow strength 0..1
@@ -69,7 +71,11 @@ float fbm(vec2 p) {
 vec4 cell(vec2 c) { return texture(u_data, (c + 0.5) / u_grid); }
 
 void main() {
-  vec2 g = v_uv * u_grid;
+  vec2 g = u_origin + v_uv * u_view; // screen UV → world cell space (camera pan/zoom)
+  if (g.x < 0.0 || g.y < 0.0 || g.x >= u_grid.x || g.y >= u_grid.y) {
+    fragColor = vec4(0.04, 0.05, 0.06, 1.0); // letterbox backdrop outside the world
+    return;
+  }
   vec2 ci = floor(g);
   vec2 lf = fract(g);
   vec4 d = cell(ci);
@@ -101,11 +107,16 @@ void main() {
     vec3 bare = vec3(0.46, 0.39, 0.28), meadow = vec3(0.55, 0.55, 0.31);
     vec3 grass = vec3(0.30, 0.46, 0.22), forest = vec3(0.16, 0.31, 0.15);
     vec3 base = band == 0 ? bare : band == 1 ? meadow : band == 2 ? grass : forest;
-    float n = fbm(g * 1.8 + h * 10.0);
+    // wavy grass: vegetated bands ripple in the wind (bare earth stays still)
+    float veg = band == 0 ? 0.0 : 1.0;
+    vec2 wind = veg * vec2(sin(u_time * 0.8 + g.y * 1.5), cos(u_time * 0.6 + g.x * 1.3)) * 0.05;
+    float n = fbm(g * 1.8 + h * 10.0 + wind);
     col = base * (0.78 + 0.44 * n);
+    col += base * veg * 0.07 * sin(dot(g, vec2(0.6, 0.8)) - u_time * 1.2); // moving wind gust sheen
     col *= 0.72 + 0.56 * elev; // relief shading from packed elevation
   } else if (type == SAT_GREEN) {
-    col = vec3(0.20, 0.44, 0.19) * (0.8 + 0.4 * fbm(g * 2.0 + h * 7.0));
+    vec2 wind = vec2(sin(u_time * 0.9 + g.y * 1.6), cos(u_time * 0.7 + g.x * 1.4)) * 0.06;
+    col = vec3(0.20, 0.44, 0.19) * (0.8 + 0.4 * fbm(g * 2.0 + h * 7.0 + wind));
   } else {
     vec3 roof;
     if (type == SAT_RESIDENTIAL) roof = vec3(0.46, 0.23, 0.18);
@@ -156,6 +167,8 @@ export class SatelliteShader {
   private readonly vao: WebGLVertexArrayObject;
   private readonly tex: WebGLTexture;
   private readonly uGrid: WebGLUniformLocation | null;
+  private readonly uOrigin: WebGLUniformLocation | null;
+  private readonly uView: WebGLUniformLocation | null;
   private readonly uTime: WebGLUniformLocation | null;
   private readonly uSun: WebGLUniformLocation | null;
   private readonly uShadow: WebGLUniformLocation | null;
@@ -181,6 +194,8 @@ export class SatelliteShader {
     gl.useProgram(program);
     gl.uniform1i(gl.getUniformLocation(program, 'u_data'), 0);
     this.uGrid = gl.getUniformLocation(program, 'u_grid');
+    this.uOrigin = gl.getUniformLocation(program, 'u_origin');
+    this.uView = gl.getUniformLocation(program, 'u_view');
     this.uTime = gl.getUniformLocation(program, 'u_time');
     this.uSun = gl.getUniformLocation(program, 'u_sun');
     this.uShadow = gl.getUniformLocation(program, 'u_shadow');
@@ -215,14 +230,25 @@ export class SatelliteShader {
     gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
   }
 
-  /** Draw the full-screen procedural pass. `sun` is a 2-vector (need not be normalized). */
-  render(opts: { time: number; sun: readonly [number, number]; shadow?: number }): void {
+  /**
+   * Draw the full-screen procedural pass. `origin`/`view` are the visible world window in cells
+   * (camera pan/zoom); both default to the full grid. `sun` need not be normalized.
+   */
+  render(opts: {
+    time: number;
+    sun: readonly [number, number];
+    shadow?: number;
+    origin?: readonly [number, number];
+    view?: readonly [number, number];
+  }): void {
     const gl = this.gl;
     gl.useProgram(this.program);
     gl.bindVertexArray(this.vao);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     if (this.uGrid) gl.uniform2f(this.uGrid, this.gridW, this.gridH);
+    if (this.uOrigin) gl.uniform2f(this.uOrigin, opts.origin?.[0] ?? 0, opts.origin?.[1] ?? 0);
+    if (this.uView) gl.uniform2f(this.uView, opts.view?.[0] ?? this.gridW, opts.view?.[1] ?? this.gridH);
     if (this.uTime) gl.uniform1f(this.uTime, opts.time);
     if (this.uSun) gl.uniform2f(this.uSun, opts.sun[0], opts.sun[1]);
     if (this.uShadow) gl.uniform1f(this.uShadow, opts.shadow ?? 0.45);
@@ -355,16 +381,36 @@ export function mountSatelliteDemo(
   let fpsWindowStart = t0;
   let fps = 0;
 
+  // Pin the canvas to the viewport so its DISPLAY size is independent of the drawing-buffer
+  // attribute — otherwise setting canvas.width feeds back into clientWidth and the view "zooms"
+  // into a degenerate buffer (the all-zero texture reads as flat bare-terrain beige). Size the
+  // buffer from innerWidth, never from clientWidth.
+  canvas.style.position = 'fixed';
+  canvas.style.inset = '0';
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+  canvas.style.display = 'block';
+
   const frame = (now: number) => {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
-    const hgt = Math.max(1, Math.round(canvas.clientHeight * dpr));
+    const w = Math.max(1, Math.round(window.innerWidth * dpr));
+    const hgt = Math.max(1, Math.round(window.innerHeight * dpr));
     if (canvas.width !== w || canvas.height !== hgt) {
       canvas.width = w;
       canvas.height = hgt;
     }
     gl.viewport(0, 0, canvas.width, canvas.height);
-    shader.render({ time: (now - t0) / 1000, sun, shadow });
+
+    // Fit the grid to the viewport keeping cells square (letterbox by widening the view on the
+    // longer axis), centred — so the world isn't stretched and you see all of it.
+    const aspect = w / hgt;
+    let viewW = map.width;
+    let viewH = map.height;
+    if (aspect >= 1) viewW = map.height * aspect;
+    else viewH = map.width / aspect;
+    const origin: [number, number] = [(map.width - viewW) / 2, (map.height - viewH) / 2];
+
+    shader.render({ time: (now - t0) / 1000, sun, shadow, origin, view: [viewW, viewH] });
 
     frames++;
     if (now - fpsWindowStart >= 500) {
