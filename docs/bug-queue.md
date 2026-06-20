@@ -27,7 +27,9 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   ambient validator (vehicle FRONT must be at the TOP; renderer rotates assuming north-facing);
   reject/normalize + re-bake offenders. Most cars re-baked top-down already, but facing is unverified.
   (Bake-tool change — needs the LMStudio vision server up to re-bake.)
-- 🔴 **Rail crossings should render** where rail crosses road (renderer).
+- ✅ **Rail crossings render** (`af4df58f`) — `railCrossingMask` (pure, fabric.ts) marks the road-
+  approach edges of an at-grade rail/tram tile; renderer paves an asphalt band across the track under
+  the rails + white stop lines on each approach edge. Procedural + tileset; elevated rail excluded.
 
 ### 2 — Agent destination model (DECIDED — Maddy 2026-06-20) — ✅ DONE
 - ✅ **No ambient stroller pool — EVERY agent paths to a real destination** (`80b56fdb`, `a6e42ddc`).
@@ -49,8 +51,9 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   trees, bike racks), per-corridor lane lines on wide roads. (Plan §5.5; curbs/median/ramps already done.)
 
 ### 4 — Agent / sim features (spec'd, not built)
-- 🟡 **Peds + cyclists wiring** — sprites baked + validated; drop into the draw loop like cars (rotate by
-  heading; ped vs cyclist by `TravelMode`). `public/sprites/ambient/{peds,cyclists}`.
+- ✅ **Peds + cyclists wiring** (`59831488`) — baked walk(4-frame)/cyclist(2-frame) sprites wired into
+  the (now injectable, unit-tested) ambient loader + the ped draw loop: under a tileset they render as
+  tiny sprites rotated to heading + gait-animated, phase-offset per ped; procedural keeps mode dots.
 - 🔵 **Trains on rails** — ambient trains running on rail.
 - 🔵 **Multi-tile plots get built-in parking** — ≥2×2 plots reserve a `ParkingLot` edge tile facing a
   drivable neighbour; the STRUCTURAL fix for walled-off-job churn. `docs/design/multitile-parking.md`.

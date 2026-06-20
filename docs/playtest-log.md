@@ -29,7 +29,7 @@ Running capture of Maddy's playtest reports so they're absorbed without thrashin
 
 ### Feature requests (logged — build when prioritized)
 
-- (feat) **Pedestrians + cyclists as sprites** (like the cars, which look GREAT). Sprites BAKED
+- [x] **Pedestrians + cyclists as sprites** (`59831488`) — baked walk/cyclist sprites, rotated to heading + gait-animated. Sprites BAKED
   (`public/sprites/ambient/peds`, `/cyclists`); wiring into the ped draw loop is NOT done — awaiting priority.
 - (feat) **Shader as a settings toggle, rendered UNDER the menu bars** (phase 5) so the shader path can be
   A/B'd live. The CPU dynamics stay as the permanent no-WebGL default.
@@ -87,7 +87,7 @@ Renderer/look:
   drift drawn from a normal distribution (richer slosh than the current linear scroll).
 - [x] **"Cloud shadows"** — an invisible cloud layer following prevailing wind casts moving soft shadows
   over ALL ground tiles + ambient props (NOT the effects/overlay layers).
-- [ ] **Rail crossings should show graphically** (where rail crosses road).
+- [x] **Rail crossings show graphically** (`af4df58f`) — railCrossingMask + renderer asphalt band under rails + white stop lines.
 - [x] **Planted median (11): has a building in it + doesn't form a nice line** — should read as a clean
   green median strip, no building.
 Sim/agents:
