@@ -33,10 +33,10 @@ const CATALOG = {
   cars: [
     ['sedan-red', 'a red sedan car, roof and windshield visible'],
     ['hatchback-blue', 'a small blue hatchback car'],
-    ['pickup-white', 'a white pickup truck with an open bed'],
+    ['pickup-white', 'a teal pickup truck with an open cargo bed'], // not white — white floodfills to alpha
     ['taxi-yellow', 'a yellow taxi cab'],
     ['suv-green', 'a dark green SUV'],
-    ['van-silver', 'a silver delivery van'],
+    ['van-silver', 'a dark blue delivery van'], // not silver/white — light tones floodfill to alpha
     ['bus-city', 'a long city transit bus'],
     ['boxtruck', 'a brown box delivery truck'],
   ],
@@ -61,6 +61,16 @@ const CATALOG = {
     ['dog', 'a small brown dog'],
     ['gull', 'a white seagull'],
     ['cat', 'an orange cat'],
+  ],
+  peds: [
+    ['walk-1', 'a single person walking, just the head and shoulders from directly above'],
+    ['walk-2', 'a single pedestrian in a red coat, head and shoulders from directly above'],
+    ['walk-3', 'a single person in a blue jacket, head and shoulders from directly above'],
+    ['walk-4', 'a single person in a yellow shirt, head and shoulders from directly above'],
+  ],
+  cyclists: [
+    ['cyclist-1', 'a person riding a bicycle, rider and bike frame from directly above'],
+    ['cyclist-2', 'a cyclist on a bicycle in a green jersey, from directly above'],
   ],
   smog: [
     ['smoke-gray', 'a soft puff of light gray smoke'],
