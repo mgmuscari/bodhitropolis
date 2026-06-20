@@ -413,6 +413,18 @@ describe('agent substrate invariants (Maddy: cars park on freeways, peds cross w
     expect(canDrive(m, 4, 4, 3, 4)).toBe(false);
   });
 
+  it('a freeway-frontage parking lot is enterable from a multi-lane freeway both ways (NJ-style, Maddy)', () => {
+    const m = new GameMap(12, 12);
+    // a 3-wide (limited-access) vertical freeway at x=3,4,5
+    for (let y = 1; y <= 9; y++) for (let x = 3; x <= 5; x++) m.built[m.idx(x, y)] = BuiltKind.RoadHighway;
+    m.built[m.idx(6, 4)] = BuiltKind.ParkingLot; // a frontage lot east of the east outer lane
+    expect(canDrive(m, 6, 4, 5, 4)).toBe(true); // lot → freeway (merge back on — otherwise blocked)
+    expect(canDrive(m, 5, 4, 6, 4)).toBe(true); // freeway → lot (exit into the frontage lot)
+    // scoped: a plain street still can't merge onto the limited-access freeway perpendicular
+    m.built[m.idx(6, 5)] = BuiltKind.RoadStreet;
+    expect(canDrive(m, 6, 5, 5, 5)).toBe(false); // street → freeway outer lane, against the gate
+  });
+
   it('nextRailStep follows a straight rail line and reverses at a dead end', () => {
     const m = new GameMap(12, 4);
     for (let x = 1; x <= 10; x++) m.built[m.idx(x, 2)] = BuiltKind.Rail;

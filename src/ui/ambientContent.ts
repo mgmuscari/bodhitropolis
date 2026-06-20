@@ -1235,7 +1235,18 @@ export function canDrive(map: GameMap, fx: number, fy: number, tx: number, ty: n
     }
     return false;
   }
-  const fromHwy = map.built[map.idx(fx, fy)] === BuiltKind.RoadHighway;
+  const fromKind = map.built[map.idx(fx, fy)]!;
+  // NJ-style freeway frontage lot (Maddy): a car may move between a freeway and an adjacent PARKING
+  // LOT in BOTH directions — the lot is a limited-access on/off, bypassing the lane-direction gate
+  // (the kind of freeway-side lot you see in northern NJ). Scoped to lot↔highway so it doesn't
+  // reopen general limited-access crossing.
+  if (
+    (fromKind === BuiltKind.ParkingLot && toKind === BuiltKind.RoadHighway) ||
+    (toKind === BuiltKind.ParkingLot && fromKind === BuiltKind.RoadHighway)
+  ) {
+    return true;
+  }
+  const fromHwy = fromKind === BuiltKind.RoadHighway;
   const toHwy = map.built[map.idx(tx, ty)] === BuiltKind.RoadHighway;
   if (!fromHwy && !toHwy) {
     // At-grade. A divided AVENUE's outer lane is one-way (like a freeway lane) so committed routes
