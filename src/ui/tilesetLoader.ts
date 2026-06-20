@@ -124,9 +124,21 @@ export async function loadTilesetAssets(
     }),
   );
 
-  // NOTE: river tiles (and all water) are replaced by the renderer with a GOOD procedural water tile
-  // (waterAnimation.makeWaterFrames), so the bad baked water/river textures are never drawn — no alias
-  // needed here. (The grade above on ocean/lake is now moot but harmless; left for the non-tileset path.)
+  // River tiles bake with a directional flow stripe; alias each river-{band} to the clean de-cyaned
+  // OCEAN texture of the same band. The renderer then draws all water with a per-tile random
+  // rotation/scale (waterTileTransform), so the stripe is gone and the sea reads varied, not plaid.
+  const oceanByBand = new Map<string, CanvasImageSource>();
+  for (const [key, src] of overrides) {
+    const m = /^ocean-(\d+)$/.exec(key);
+    if (m) oceanByBand.set(m[1]!, src);
+  }
+  if (oceanByBand.size > 0) {
+    const anyOcean = oceanByBand.values().next().value!;
+    for (const key of [...overrides.keys()]) {
+      const m = /^river-(\d+)$/.exec(key);
+      if (m) overrides.set(key, oceanByBand.get(m[1]!) ?? anyOcean);
+    }
+  }
   return overrides;
 }
 

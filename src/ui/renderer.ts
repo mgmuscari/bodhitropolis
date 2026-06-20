@@ -19,6 +19,7 @@ import {
   variantKey,
   surfaceVariantIndex,
   terrainTileTransform,
+  waterTileTransform,
   type FootprintPos,
 } from './renderKey';
 import { surfaceKey } from './tileset';
@@ -83,9 +84,10 @@ const POLE_WIRE_REACH = 4;
 // glyph is stamped per footprint, centered, with a dark halo for contrast.
 const GLYPH_MIN_TS = 16;
 
-// Procedural water frames: frame 0 is the good static water tile baked into the base; the rest are
-// the flipbook for the (future, non-row-major) animated twinkle.
+// Procedural water frames: frame 0 is the static base (baked into the atlas); the set is the sloshy
+// flipbook cycled in the low-alpha overlay (the surface undulates) while it scrolls with the wind.
 const WATER_FRAMES = 16;
+const WATER_FPS = 12;
 
 // Kinds that get a sparse flora-canopy accent under a tileset (the vegetated greens).
 const GREEN_FLORA_KINDS: ReadonlySet<number> = new Set([
@@ -703,14 +705,11 @@ export class Renderer {
     this.hasTileset = (overrides?.size ?? 0) > 0;
     this.roadVariants = overrides ? collectRoadSurfaces(overrides).length : 0;
     this.buildingVariants = overrides ? collectBuildingVariants(overrides) : 0;
-    this.waterFrames = this.hasTileset ? makeWaterFrames(WATER_FRAMES, BASE_TILE) : [];
-    // Replace every water tile (ocean/lake/river) in the cached base with the GOOD procedural water
-    // (frame 0) — the baked water tiles read cyan / striped (rivers), so they're never drawn. Static +
-    // cached (drawBase), so no per-frame, no row-major antipattern; the bad tile is gone entirely.
-    if (this.waterFrames.length > 0) {
-      const w0 = this.waterFrames[0]!;
-      for (const k of [...this.atlas.keys()]) if (/^(ocean|lake|river)-/.test(k)) this.atlas.set(k, w0);
-    }
+    // Sloshy water overlay frames, mutated FROM the baked water tile (hybrid). The base water tiles
+    // stay the baked textures (drawn per-tile rotated/scaled/cropped in drawBase for anti-plaid).
+    this.waterFrames = this.hasTileset
+      ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
+      : [];
   }
 
   /**
@@ -724,14 +723,11 @@ export class Renderer {
     this.hasTileset = (overrides?.size ?? 0) > 0;
     this.roadVariants = overrides ? collectRoadSurfaces(overrides).length : 0;
     this.buildingVariants = overrides ? collectBuildingVariants(overrides) : 0;
-    this.waterFrames = this.hasTileset ? makeWaterFrames(WATER_FRAMES, BASE_TILE) : [];
-    // Replace every water tile (ocean/lake/river) in the cached base with the GOOD procedural water
-    // (frame 0) — the baked water tiles read cyan / striped (rivers), so they're never drawn. Static +
-    // cached (drawBase), so no per-frame, no row-major antipattern; the bad tile is gone entirely.
-    if (this.waterFrames.length > 0) {
-      const w0 = this.waterFrames[0]!;
-      for (const k of [...this.atlas.keys()]) if (/^(ocean|lake|river)-/.test(k)) this.atlas.set(k, w0);
-    }
+    // Sloshy water overlay frames, mutated FROM the baked water tile (hybrid). The base water tiles
+    // stay the baked textures (drawn per-tile rotated/scaled/cropped in drawBase for anti-plaid).
+    this.waterFrames = this.hasTileset
+      ? makeWaterFrames(this.atlas.get('ocean-0') ?? this.atlas.get('lake-0') ?? null, WATER_FRAMES, BASE_TILE)
+      : [];
     this.invalidateBase();
   }
 
@@ -839,10 +835,23 @@ export class Renderer {
 
         const tkind = kindOf(map, i);
         const terrain = this.atlas.get(`${tkind}-${bandOf(map.elevation[i]!)}`)!;
-        // Under a tileset, rotate/mirror ISOTROPIC terrain per-tile (a deterministic dihedral hash)
-        // to break the baked tile's repeated-texture plaid. River is directional — leave it untouched.
-        // The procedural path (hasTileset false) keeps the plain 1:1 blit, byte-identical.
-        if (this.hasTileset && tkind !== 'river') {
+        const isWater = tkind === 'ocean' || tkind === 'lake' || tkind === 'river';
+        if (this.hasTileset && isWater) {
+          // Water HYBRID: draw the baked water texture with a per-tile RANDOM rotation + scale, clipped
+          // to the tile (stochastic tiling) so the sea never reads as plaid; the sloshy wang animates
+          // over it (drawSprites). Scale ≥ √2 so the rotated tile still covers its clipped square.
+          const wt = waterTileTransform(tx, ty);
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(dx, dy, ts, ts);
+          ctx.clip();
+          ctx.translate(dx + ts / 2, dy + ts / 2);
+          ctx.rotate(wt.rot * Math.PI * 2);
+          ctx.scale(wt.scale, wt.scale);
+          ctx.drawImage(terrain, 0, 0, BASE_TILE, BASE_TILE, -ts / 2, -ts / 2, ts, ts);
+          ctx.restore();
+        } else if (this.hasTileset) {
+          // Non-water terrain: a deterministic dihedral (90° rot + mirror) to break the repeated plaid.
           const t = terrainTileTransform(tx, ty);
           ctx.save();
           ctx.translate(dx + ts / 2, dy + ts / 2);
@@ -1186,8 +1195,9 @@ export class Renderer {
     if (this.hasTileset && this.waterFrames.length > 0 && ts >= 4) {
       const path = this.waterMask(world, camera);
       if (path) {
-        const tex = this.waterFrames[0]!;
         const t = performance.now() / 1000;
+        // Cycle the sloshy flipbook so the surface UNDULATES (sloshes), not just translates.
+        const tex = this.waterFrames[Math.floor(t * WATER_FPS) % this.waterFrames.length]!;
         const o = camera.worldToScreen(0, 0);
         const wx = ambient.wind.dx;
         const wy = ambient.wind.dy;

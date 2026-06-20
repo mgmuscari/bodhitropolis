@@ -299,3 +299,26 @@ describe('terrainTileTransform: dihedral anti-plaid for isotropic terrain', () =
     expect(matches).toBeLessThan((N * (N - 1)) / 4);
   });
 });
+
+import { waterTileTransform } from '../../src/ui/renderKey';
+
+describe('waterTileTransform: stochastic baked-tile hybrid (anti-plaid)', () => {
+  it('rot in [0,1) turns; scale in [√2, 1.74] so rotation always covers the clipped tile', () => {
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        const t = waterTileTransform(x, y);
+        expect(t.rot).toBeGreaterThanOrEqual(0);
+        expect(t.rot).toBeLessThan(1);
+        expect(t.scale).toBeGreaterThanOrEqual(Math.SQRT2);
+        expect(t.scale).toBeLessThanOrEqual(1.75);
+      }
+    }
+  });
+
+  it('is deterministic and varies across tiles', () => {
+    expect(waterTileTransform(3, 4)).toEqual(waterTileTransform(3, 4));
+    const rots = new Set<number>();
+    for (let i = 0; i < 20; i++) rots.add(Math.round(waterTileTransform(i, i * 3).rot * 100));
+    expect(rots.size).toBeGreaterThan(8); // genuinely varied, not banded
+  });
+});

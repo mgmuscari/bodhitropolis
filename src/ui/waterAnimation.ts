@@ -22,11 +22,17 @@ export function mutateWaterFrame(
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = (y * size + x) * 4;
-      // Two crossing wave trains. Spatial frequencies are INTEGER (wrap at `size` → seamless tiling);
-      // time advances by integer multiples of phase (1×, 2×) → frame count loops back to frame 0.
+      // DOMAIN WARP for a "sloshy" liquid look: bend the sample coords by crossing waves so the swell
+      // is curvy/organic, not straight sine bands. The warp waves use integer spatial freqs (wrap at
+      // `size`) and integer time multiples → the whole field stays seamlessly tileable AND loops.
+      const warp = size * 0.14;
+      const u = x + Math.sin(((y * 2) / size) * TAU + phase) * warp;
+      const v = y + Math.sin(((x * 2) / size) * TAU - 2 * phase) * warp;
+      // Two crossing wave trains over the warped coords. INTEGER spatial freqs + integer time multiples
+      // (1×, 2×) → seamless tiling + frame `count` loops back to frame 0.
       const w =
-        Math.sin(((x * 1 + y * 2) / size) * TAU + phase) +
-        0.7 * Math.sin(((x * 2 - y * 1) / size) * TAU - 2 * phase);
+        Math.sin(((u * 1 + v * 2) / size) * TAU + phase) +
+        0.7 * Math.sin(((u * 2 - v * 1) / size) * TAU - 2 * phase);
       const bright = 1 + w * 0.15; // strong, visible swell — this IS the water surface, not an overlay
       let r = base[i]! * bright;
       let g = base[i + 1]! * bright;
@@ -50,24 +56,34 @@ export function mutateWaterFrame(
   return out;
 }
 
-/** A good deep satellite-water base colour (muted blue-teal) — the frames are generated FROM this, so
- *  the bad baked ocean/river tiles are never used (they read cyan / striped). Tunable. */
+/** Fallback deep satellite-water colour if no baked tile is supplied (muted blue-teal). */
 const WATER_BASE: readonly [number, number, number] = [30, 60, 82];
 
 /**
- * Bake `frameCount` animated water frames procedurally from {@link WATER_BASE} (NOT the baked tile,
- * which is no good). Frame 0 is the renderer's static water tile; the set is the flipbook for the
- * (low-alpha) animated twinkle. Returns [] headless. Browser IO.
+ * Bake `frameCount` sloshy water frames by mutating the BAKED water tile (hybrid: the baked texture
+ * carries the identity, the warp/foam adds the slosh). The renderer cycles these in a low-alpha
+ * overlay over the baked base, so the surface undulates. Falls back to {@link WATER_BASE} if no baked
+ * tile. Returns [] headless. Browser IO.
  */
-export function makeWaterFrames(frameCount: number, size: number): CanvasImageSource[] {
+export function makeWaterFrames(
+  base: CanvasImageSource | null,
+  frameCount: number,
+  size: number,
+): CanvasImageSource[] {
   if (typeof document === 'undefined') return [];
-  const baseData = new Uint8ClampedArray(size * size * 4);
-  for (let i = 0; i < baseData.length; i += 4) {
-    baseData[i] = WATER_BASE[0];
-    baseData[i + 1] = WATER_BASE[1];
-    baseData[i + 2] = WATER_BASE[2];
-    baseData[i + 3] = 255;
+  const src = document.createElement('canvas');
+  src.width = size;
+  src.height = size;
+  const sctx = src.getContext('2d');
+  if (!sctx) return [];
+  sctx.imageSmoothingEnabled = false;
+  if (base) {
+    sctx.drawImage(base, 0, 0, size, size);
+  } else {
+    sctx.fillStyle = `rgb(${WATER_BASE[0]}, ${WATER_BASE[1]}, ${WATER_BASE[2]})`;
+    sctx.fillRect(0, 0, size, size);
   }
+  const baseData = sctx.getImageData(0, 0, size, size).data;
 
   const frames: CanvasImageSource[] = [];
   for (let f = 0; f < frameCount; f++) {

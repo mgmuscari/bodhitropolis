@@ -185,6 +185,29 @@ export function terrainTileTransform(x: number, y: number): DihedralTransform {
   return { rot: (h >>> 0) & 3, flip: ((h >>> 3) & 1) === 1 };
 }
 
+/** A continuous per-tile texture transform: `rot` in turns [0,1), `scale` ≥ √2 so any rotation still
+ *  covers the tile when clipped to its bounds. */
+export interface TileStochastic {
+  rot: number;
+  scale: number;
+}
+
+/**
+ * Stochastic per-tile transform for HYBRIDIZING a baked texture with itself across cells — a random
+ * rotation + scale (deterministic by tile), drawn clipped to the tile, so the same baked water tile
+ * never reads twice the same way (kills the plaid). Scale stays in [√2, …] so a rotated tile always
+ * covers its clipped square (no empty corners). Integer hashing only (allowlist-safe); the caller
+ * turns `rot` into radians.
+ */
+export function waterTileTransform(x: number, y: number): TileStochastic {
+  let h = Math.imul((x | 0) ^ 0x9e3779b1, 0x85ebca6b);
+  h = Math.imul(h ^ ((y | 0) + 0x27d4eb2f), 0xc2b2ae35);
+  h ^= h >>> 13;
+  const rot = (h >>> 0) / 4294967296; // 0..1 turns
+  const scale = 1.42 + (((h >>> 8) & 0xff) / 255) * 0.32; // 1.42..1.74 (≥ √2)
+  return { rot, scale };
+}
+
 /**
  * The exhaustive, deterministic enumeration of every key {@link builtRenderKey}
  * can return. Order is stable (road kinds × masks, then each transport prefix ×
