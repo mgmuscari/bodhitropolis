@@ -224,6 +224,12 @@ export class GpuRenderer {
     // else a small radial pool (taillight / roof bar). Points are in sprite-local space, rotated to the
     // mover's heading. `mul` scales intensity (e.g. cruiser flash). Falls back to one nose cone.
     const nCars = this.carRects.length;
+    // A forward "beam" = a few radial pools stepped AHEAD along travel from the headlight, fading with
+    // distance. Direction is unambiguous (pools are placed at light_pos + fwd*d), no cone-quad geometry.
+    const beam = (hx: number, hy: number, fwd: { dx: number; dy: number }, r: number, g: number, b: number, inten: number): void => {
+      const steps: readonly [number, number, number][] = [[0.5, 0.5, 1.0], [1.1, 0.62, 0.6], [1.8, 0.72, 0.32]]; // [dist, radius, weight]
+      for (const [d, rad, wgt] of steps) radial(hx + fwd.dx * d, hy + fwd.dy * d, rad, r, g, b, inten * wgt);
+    };
     const mover = (bx: number, by: number, fwd: { dx: number; dy: number }, size: number, pts: LightPoint[] | null, mul: number): void => {
       const rot = Math.atan2(fwd.dx, -fwd.dy);
       const cs = Math.cos(rot);
@@ -232,11 +238,11 @@ export class GpuRenderer {
         for (const p of pts) {
           const wx = bx + (p.ox * cs - p.oy * sn) * size;
           const wy = by + (p.ox * sn + p.oy * cs) * size;
-          if (p.oy < -0.05) cone(wx, wy, fwd.dx, fwd.dy, 1.9, 0.3, p.r, p.g, p.b, 0.13 * mul); // headlight → forward cone
+          if (p.oy < -0.05) beam(wx, wy, fwd, p.r, p.g, p.b, 0.13 * mul); // headlight → forward beam
           else radial(wx, wy, 0.5, p.r, p.g, p.b, 0.16 * mul); // taillight / roof bar → small pool
         }
       } else {
-        cone(bx + fwd.dx * 0.3, by + fwd.dy * 0.3, fwd.dx, fwd.dy, 2.0, 0.55, 1.0, 0.9, 0.72, 0.13 * mul);
+        beam(bx, by, fwd, 1.0, 0.9, 0.72, 0.13 * mul);
       }
     };
     if (night > 0.02) {
