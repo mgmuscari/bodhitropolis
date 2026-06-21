@@ -3,7 +3,7 @@
 // images to draw over the live layer: smog plumes over polluted tiles, flora on green parcels, cars,
 // props. Resilient like the tileset loader — any sprite that fails to load is skipped, so a partial
 // set still runs (the renderer just draws fewer).
-const FILES: Readonly<Record<Exclude<keyof AmbientSprites, 'emission'>, readonly string[]>> = {
+const FILES: Readonly<Record<Exclude<keyof AmbientSprites, 'emission' | 'carLights' | 'cyclistLights'>, readonly string[]>> = {
   cars: ['sedan-red', 'hatchback-blue', 'pickup-white', 'taxi-yellow', 'suv-green', 'van-silver', 'bus-city', 'boxtruck'],
   // Walkers (a 4-frame walk cycle) + cyclists — drawn like the cars (rotated to heading), so the modal
   // shift the player engineers reads on the street (Maddy: "cars look GREAT, now do peds + cyclists").
@@ -42,8 +42,13 @@ export interface AmbientSprites {
   encampments: CanvasImageSource[];
   junk: CanvasImageSource[];
   police: CanvasImageSource[];
-  /** Emission light-maps keyed `cat/slug` (e.g. 'police/cruiser'); absent if the map 404s. */
+  /** Emission light-maps keyed `cat/slug` (e.g. 'police/cruiser') or `building/<kind>[/blink]`; absent
+   *  if the map 404s. For singleton/keyed overlays (cruiser, building footprints). */
   emission: Record<string, CanvasImageSource>;
+  /** Per-vehicle emission maps, index-ALIGNED with `cars`/`cyclists` (null where no `-lights` map).
+   *  Drawn night-gated over the moving sprite (warm headlights / red taillights / lit bus windows). */
+  carLights: (CanvasImageSource | null)[];
+  cyclistLights: (CanvasImageSource | null)[];
 }
 
 /** Loads one sprite URL, resolving to the decoded image or null on any failure (never rejects). */
@@ -64,11 +69,25 @@ export async function loadAmbientSprites(
   base = '/',
   loadImage: SpriteLoader = domImageLoader,
 ): Promise<AmbientSprites> {
-  const out: AmbientSprites = { cars: [], peds: [], cyclists: [], flora: [], smog: [], props: [], encampments: [], junk: [], police: [], emission: {} };
+  const out: AmbientSprites = { cars: [], peds: [], cyclists: [], flora: [], smog: [], props: [], encampments: [], junk: [], police: [], emission: {}, carLights: [], cyclistLights: [] };
+  // Vehicle categories load sprite + `-lights` as PAIRS so the light arrays stay index-aligned with
+  // the sprite arrays after null-filtering (the renderer picks `cars[tint % len]` and the matching light).
+  const ALIGNED = new Set<keyof typeof FILES>(['cars', 'cyclists']);
   await Promise.all([
-    ...(Object.keys(FILES) as (keyof typeof FILES)[]).map(async (cat) => {
+    ...(Object.keys(FILES) as (keyof typeof FILES)[]).filter((c) => !ALIGNED.has(c)).map(async (cat) => {
       const imgs = await Promise.all(FILES[cat].map((n) => loadImage(`${base}sprites/ambient/${cat}/${n}.png`)));
       out[cat] = imgs.filter((i): i is CanvasImageSource => i !== null);
+    }),
+    ...([...ALIGNED] as ('cars' | 'cyclists')[]).map(async (cat) => {
+      const pairs = await Promise.all(FILES[cat].map(async (n) => ({
+        sprite: await loadImage(`${base}sprites/ambient/${cat}/${n}.png`),
+        light: await loadImage(`${base}sprites/ambient/${cat}/${n}-lights.png`),
+      })));
+      const kept = pairs.filter((p) => p.sprite !== null);
+      out[cat] = kept.map((p) => p.sprite as CanvasImageSource);
+      const lights = kept.map((p) => p.light); // aligned; null where no -lights map
+      if (cat === 'cars') out.carLights = lights;
+      else out.cyclistLights = lights;
     }),
     ...Object.entries(EMISSION_FILES).map(async ([key, path]) => {
       const img = await loadImage(`${base}${path}`);

@@ -1871,6 +1871,69 @@ export class Renderer {
       }
     }
 
+    // Vehicle headlights/taillights + lit bus windows — STATIC emission maps over the moving sprite,
+    // NIGHT-GATED (off at midday, ramping on at dusk) and evading shading (drawn here, after the sprite
+    // lighting pass). Aligned to the sprite arrays by the SAME index the sprite draw uses.
+    const nightT = performance.now() / 1000;
+    const night = Math.min(1, Math.max(0, (0.8 - dayNightBrightness(nightT)) / 0.3));
+    const carLights = this.hasTileset ? this.ambientSprites?.carLights : undefined;
+    if (night > 0.02 && carLights && carLights.length > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.imageSmoothingEnabled = false;
+      ctx.globalAlpha = night;
+      for (const c of ambient.cars) {
+        const li = carLights[(c.tint ?? 0) % carLights.length];
+        if (!li) continue;
+        const off = c.parked ? { dx: 0, dy: 0 } : laneOffset(c.dir);
+        const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
+        if (!onScreen(sx, sy)) continue;
+        const size = c.parked ? parkedSize : carSize;
+        const headingDir = c.parked && c.curbDir !== undefined ? (c.curbDir % 2 === 0 ? 1 : 0) : c.dir;
+        const hv = dirVector(headingDir);
+        const angle = Math.atan2(hv.dx, -hv.dy);
+        const ss = size * 1.7;
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(angle);
+        ctx.drawImage(li, -ss / 2, -ss / 2, ss, ss);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+    const cyclistLights = this.hasTileset ? this.ambientSprites?.cyclistLights : undefined;
+    if (night > 0.02 && cyclistLights && cyclistLights.length > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.imageSmoothingEnabled = false;
+      ctx.globalAlpha = night;
+      for (const p of ambient.peds) {
+        if (p.phase === 'inside' || p.phase === 'driving') continue;
+        if ((p.mode ?? TravelMode.Walk) !== TravelMode.Bike) continue;
+        const seed = (p.homeTile ?? p.carId ?? Math.round(p.x) * 131 + Math.round(p.y)) >>> 0;
+        const li = cyclistLights[(Math.imul(seed, 2654435761) >>> 0) % cyclistLights.length];
+        if (!li) continue;
+        let ox = 0.5;
+        let oy = 0.5;
+        if (isRoadKind(world.map.built[world.map.idx(Math.round(p.x), Math.round(p.y))]!)) {
+          const o = pedCurbOffset(p.dir);
+          ox += o.dx;
+          oy += o.dy;
+        }
+        const { sx, sy } = camera.worldToScreen(p.x + ox, p.y + oy);
+        if (!onScreen(sx, sy)) continue;
+        const hv = dirVector(p.dir);
+        const angle = Math.atan2(hv.dx, -hv.dy);
+        const ss = ts * 0.46;
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(angle);
+        ctx.drawImage(li, -ss / 2, -ss / 2, ss, ss);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+
     // Light-bearing BUILDINGS (collected in drawBase): overlay the emission map additively over the
     // whole footprint, evading shading. Two layers — the STATIC glow (furnace/windows) draws steady;
     // the BLINK layer (red aviation/hazard beacons) draws only on the on-phase, so the glow no longer
