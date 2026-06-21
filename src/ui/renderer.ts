@@ -721,6 +721,10 @@ export class Renderer {
   // Anchor tiles of POWERED consumer parcels (the live power grid). A consumer not
   // in this set draws an "unpowered" pip. null = grid unknown (no marks).
   private powered: Set<number> | null = null;
+  // Light-bearing building footprints (WORLD coords) collected during drawBase, redrawn each frame in
+  // drawSprites: an emission map (e.g. coal aviation beacons) overlaid additively over the footprint,
+  // blinking + evading shading (the building twin of the cruiser's emissive bar).
+  private emissiveBuildings: { x: number; y: number; w: number; h: number; key: string }[] = [];
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -892,6 +896,7 @@ export class Renderer {
     // loop and drawn in a second pass below — a multi-tile footprint's later tiles
     // would otherwise paint over a mark drawn at the anchor tile (z-order fix).
     const marks: { dx: number; dy: number; w: number; h: number; kind: number; density: number; unpowered: boolean }[] = [];
+    this.emissiveBuildings.length = 0; // re-collected this pass (refreshed on every base rebuild)
     for (let ty = range.y0; ty <= range.y1; ty++) {
       for (let tx = range.x0; tx <= range.x1; tx++) {
         const i = map.idx(tx, ty);
@@ -1179,6 +1184,12 @@ export class Renderer {
               const unpowered =
                 this.powered !== null && isPowerConsumer(pp.kind) && !this.powered.has(i);
               marks.push({ dx, dy, w: pp.width, h: pp.height, kind: pp.kind, density: pp.density, unpowered });
+              // Light-bearing building? Collect its footprint (world coords) for the per-frame emissive
+              // overlay (drawSprites). Keyed `building/<kind>`; absent key → no map → not collected.
+              const ekey = `building/${pp.kind}`;
+              if (this.ambientSprites?.emission[ekey]) {
+                this.emissiveBuildings.push({ x: pp.x, y: pp.y, w: pp.width, h: pp.height, key: ekey });
+              }
             }
           }
         }
@@ -1858,6 +1869,27 @@ export class Renderer {
         ctx.globalAlpha = 1;
         ctx.fillRect(Math.floor(sx - lb / 2), Math.floor(sy - lb / 2), Math.ceil(lb), Math.ceil(lb * 0.7));
       }
+    }
+
+    // Light-bearing BUILDINGS (collected in drawBase): overlay the emission map additively over the
+    // whole footprint, evading shading. Blinks like aviation/emergency lights — a ~1 Hz pulse between a
+    // steady glow floor and full bright (the furnace stays lit, the red beacons read as blinking).
+    if (this.emissiveBuildings.length > 0) {
+      const beaconOn = Math.floor(performance.now() / 500) % 2 === 0;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.imageSmoothingEnabled = false;
+      for (const b of this.emissiveBuildings) {
+        const img = this.ambientSprites?.emission[b.key];
+        if (!img) continue;
+        const { sx, sy } = camera.worldToScreen(b.x, b.y);
+        const w = b.w * ts;
+        const h = b.h * ts;
+        if (!onScreen(sx + w / 2, sy + h / 2)) continue;
+        ctx.globalAlpha = beaconOn ? 1 : 0.5;
+        ctx.drawImage(img, sx, sy, w, h);
+      }
+      ctx.restore();
     }
   }
 }

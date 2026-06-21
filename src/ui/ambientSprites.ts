@@ -23,8 +23,10 @@ const FILES: Readonly<Record<Exclude<keyof AmbientSprites, 'emission'>, readonly
 // the albedo to evade day/night shading (Maddy 2026-06-20: "diffusion-based lighting"). Keyed
 // `cat/slug` (index-free, so it scales as more assets get a `<slug>-lights.png`). Each fetches
 // `sprites/ambient/<cat>/<slug>-lights.png`; a 404 just leaves the key absent.
-const EMISSION_FILES: Readonly<Record<string, readonly [cat: string, slug: string]>> = {
-  'police/cruiser': ['police', 'cruiser'],
+const EMISSION_FILES: Readonly<Record<string, string>> = {
+  'police/cruiser': 'sprites/ambient/police/cruiser-lights.png',
+  // Buildings keyed `building/<BuiltKind>` — the renderer overlays these on the footprint anchor.
+  'building/24': 'tilesets/satellite/buildings/b-24-3x3-lights.png', // coal plant: aviation beacons + furnace glow
 };
 
 export interface AmbientSprites {
@@ -65,8 +67,8 @@ export async function loadAmbientSprites(
       const imgs = await Promise.all(FILES[cat].map((n) => loadImage(`${base}sprites/ambient/${cat}/${n}.png`)));
       out[cat] = imgs.filter((i): i is CanvasImageSource => i !== null);
     }),
-    ...Object.entries(EMISSION_FILES).map(async ([key, [cat, slug]]) => {
-      const img = await loadImage(`${base}sprites/ambient/${cat}/${slug}-lights.png`);
+    ...Object.entries(EMISSION_FILES).map(async ([key, path]) => {
+      const img = await loadImage(`${base}${path}`);
       if (img) out.emission[key] = img; // a 404 leaves the key absent (resilient like the base loader)
     }),
   ]);
