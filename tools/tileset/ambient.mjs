@@ -16,7 +16,11 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { submit, awaitOutput, fetchImage, buildTxt2imgGraph, whiteToAlpha, seedFor, COMFY_URL } from './lib.mjs';
-import { isTopDown, facesForward, isIntact } from './validate.mjs';
+import { isTopDown, facesForward, isIntact, overallOpacity } from './validate.mjs';
+
+// A keyed sprite must have removed SOME background (object on transparency). Above this mean alpha it's
+// a SOLID BOX — the floodfill keyed nothing out (a framed block, not a subject, e.g. the white-box ped).
+const MAX_SPRITE_OPACITY = 0.85;
 
 // Categories the renderer rotates to a travel heading, so the sprite's FRONT must point UP (north).
 // These get the extra forward-facing check on top of top-down (Maddy: taxi/van drove backwards).
@@ -68,7 +72,7 @@ const CATALOG = {
     ['cat', 'an orange cat'],
   ],
   peds: [
-    ['walk-1', 'a single person walking, just the head and shoulders from directly above'],
+    ['walk-1', 'a single person in a dark green coat, just the head and shoulders seen from directly above'],
     ['walk-2', 'a single pedestrian in a red coat, head and shoulders from directly above'],
     ['walk-3', 'a single person in a blue jacket, head and shoulders from directly above'],
     ['walk-4', 'a single person in a yellow shirt, head and shoulders from directly above'],
@@ -153,9 +157,11 @@ async function worker(queue) {
         if (v.ok && directional) v = await facesForward(raw, subject);
         // INTACTNESS: the white→alpha floodfill must not have eaten the (light-coloured) subject — check
         // the FINAL png, not the raw, so a floodfilled-away sprite (e.g. a white mattress) retries.
+        // Also reject a SOLID BOX (nothing keyed out → a framed block, not a subject — the white-box ped).
         const intact = isIntact(png);
-        ok = v.ok && intact;
-        note = !intact ? 'floodfilled — retrying' : v.text.split('\n')[0];
+        const keyed = overallOpacity(png) < MAX_SPRITE_OPACITY;
+        ok = v.ok && intact && keyed;
+        note = !intact ? 'floodfilled — retrying' : !keyed ? 'solid box — retrying' : v.text.split('\n')[0];
         if (ok) break;
       }
       mkdirSync(join(OUT, cat), { recursive: true });

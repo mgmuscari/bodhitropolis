@@ -126,6 +126,17 @@ export function centerOpacity(pngBuffer) {
   return Number(out.toString().trim()) || 0;
 }
 
+/** Mean alpha over the WHOLE sprite (0..1). A keyed sprite (object on transparency) has lots of
+ *  removed background → a modest mean; a SOLID BOX where the floodfill removed nothing (a framed
+ *  block, not a subject — e.g. the white-box pedestrian) reads near 1. Used to reject solid boxes. */
+export function overallOpacity(pngBuffer) {
+  const out = execFileSync('magick', ['png:-', '-format', '%[fx:mean.a]', 'info:'], {
+    input: pngBuffer,
+    maxBuffer: 32 * 1024 * 1024,
+  });
+  return Number(out.toString().trim()) || 0;
+}
+
 /** Is a CENTER-position ('c') building tile intact (its body wasn't floodfilled away)? True when the
  *  central region has at least `min` mean alpha. The default catches only EGREGIOUS floodfill (a body
  *  erased to near-empty, like the original white-roof/white-car bug ≈ 0) — a small building still has

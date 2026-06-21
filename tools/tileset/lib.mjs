@@ -379,15 +379,34 @@ export async function generateTile({ key, category, tiling, controlBuf, controlN
  * over the ground tile (asphalt / grass / whatever — Maddy 2026-06-19). Original on any magick error.
  */
 export function whiteToAlpha(buf, w = 16, h = w) {
-  const ex = w - 1;
-  const ey = h - 1;
+  void w; void h; // size no longer needed (the flood seeds from an added white border, not the corners)
   const fuzz = `${process.env.TS_FUZZ ?? 12}%`; // lower fuzz = less of the building eaten away
+  // The floodfill must NOT leak through narrow channels into interior white regions (the bug that ate
+  // the bus's windows / clinic roof / light cars — Maddy: "flood fill needs to be unable to pass thru
+  // narrow channels"). Build the removal mask so a thin neck connecting the exterior bg to an interior
+  // white pocket is SEVERED before flooding:
+  //   1. white mask — bg-ish white → white, subject → gray.
+  //   2. ERODE the white by `neck` → channels ≤ ~2·neck px pinch off (interior pockets disconnect).
+  //   3. flood from an added white BORDER → only the TRUE exterior white is marked (red); pockets stay.
+  //   4. red → transparent, everything else (pockets + subject) → opaque.
+  //   5. ERODE the keep region by `neck` → regrows the removal into the eroded ring (no white halo).
+  // Then copy that mask into the original's alpha. Pure ImageMagick; falls back to the raw on error.
+  const neck = process.env.TS_NECK ?? '1';
   try {
     return execFileSync(
       'magick',
-      ['png:-', '-alpha', 'set', '-fuzz', fuzz, '-fill', 'none',
-        '-draw', 'alpha 0,0 floodfill', '-draw', `alpha ${ex},0 floodfill`,
-        '-draw', `alpha 0,${ey} floodfill`, '-draw', `alpha ${ex},${ey} floodfill`, 'png:-'],
+      ['png:-',
+        '(', '+clone', '-alpha', 'off',
+          '-fuzz', fuzz, '-fill', 'white', '-opaque', 'white', '-fill', 'gray(50%)', '+opaque', 'white',
+          '-morphology', 'Erode', `Disk:${neck}`,
+          '-bordercolor', 'white', '-border', '1',
+          '-fuzz', '0', '-fill', 'red', '-draw', 'color 0,0 floodfill',
+          '-shave', '1x1',
+          '-fuzz', '0', '-fill', 'black', '-opaque', 'red',
+          '-fill', 'white', '+opaque', 'black',
+          '-morphology', 'Erode', `Disk:${neck}`,
+        ')',
+        '-alpha', 'off', '-compose', 'CopyOpacity', '-composite', 'png:-'],
       { input: buf, maxBuffer: 32 * 1024 * 1024 },
     );
   } catch {
