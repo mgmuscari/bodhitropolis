@@ -56,9 +56,7 @@ export class GpuRenderer {
   private instData = new Float32Array(0);
   private glow: GlowBatch | null = null;
   private glowData = new Float32Array(0);
-  // Emissive light POINTS (the actual lit pixels) per asset, so glow casts from real lights not centers.
-  private carPoints: (LightPoint[] | null)[] = [];
-  private cruiserPoints: LightPoint[] = [];
+  // Building emissive light POINTS (the actual lit window/beacon pixels) so glow casts from real lights.
   private buildingPoints = new Map<string, { lights: LightPoint[]; blink: LightPoint[] }>();
 
   constructor(private readonly map: GameMap) {
@@ -107,10 +105,9 @@ export class GpuRenderer {
     this.cycLightRects = sprites.cyclists.map((_, i) => atlas.rects.get(`cycL${i}`) ?? null);
     this.cruiserRect = atlas.rects.get('cruiser') ?? null;
     this.cruiserLightRect = atlas.rects.get('cruiserL') ?? null;
-    // Extract the bright light POINTS so glow casts from the real lit pixels (Maddy: movers get forward
-    // cones for their static headlights; buildings get radial glow from the light map).
-    this.carPoints = sprites.cars.map((_, i) => { const im = sprites.carLights[i]; return im ? extractLightPoints(im) : null; });
-    this.cruiserPoints = sprites.emission['police/cruiser'] ? extractLightPoints(sprites.emission['police/cruiser']) : [];
+    // Extract the bright light POINTS from each BUILDING light map so glow casts from the real lit
+    // window/beacon pixels (Maddy: buildings get radial glow from the light map). Movers use geometric
+    // sprite-relative cones (their headlights are static at the front), so they need no extraction.
     this.buildingPoints.clear();
     for (const [key, img] of Object.entries(sprites.emission)) {
       if (!key.startsWith('building/')) continue;
@@ -220,44 +217,34 @@ export class GpuRenderer {
       n++;
     };
     const radial = (x: number, y: number, radius: number, r: number, gr: number, b: number, inten: number): void => cone(x, y, 0, 0, 0, radius, r, gr, b, inten);
-    // A MOVER's lights: each light-point becomes a forward CONE if it's near the FRONT (a headlight),
-    // else a small radial pool (taillight / roof bar). Points are in sprite-local space, rotated to the
-    // mover's heading. `mul` scales intensity (e.g. cruiser flash). Falls back to one nose cone.
-    const nCars = this.carRects.length;
-    // A forward "beam" = a few radial pools stepped AHEAD along travel from the headlight, fading with
-    // distance. Direction is unambiguous (pools are placed at light_pos + fwd*d), no cone-quad geometry.
-    const beam = (hx: number, hy: number, fwd: { dx: number; dy: number }, r: number, g: number, b: number, inten: number): void => {
-      const steps: readonly [number, number, number][] = [[0.5, 0.5, 1.0], [1.1, 0.62, 0.6], [1.8, 0.72, 0.32]]; // [dist, radius, weight]
-      for (const [d, rad, wgt] of steps) radial(hx + fwd.dx * d, hy + fwd.dy * d, rad, r, g, b, inten * wgt);
-    };
-    const mover = (bx: number, by: number, fwd: { dx: number; dy: number }, size: number, pts: LightPoint[] | null, mul: number): void => {
-      const rot = Math.atan2(fwd.dx, -fwd.dy);
-      const cs = Math.cos(rot);
-      const sn = Math.sin(rot);
-      if (pts && pts.length) {
-        for (const p of pts) {
-          const wx = bx + (p.ox * cs - p.oy * sn) * size;
-          const wy = by + (p.ox * sn + p.oy * cs) * size;
-          if (p.oy < -0.05) beam(wx, wy, fwd, p.r, p.g, p.b, 0.13 * mul); // headlight → forward beam
-          else radial(wx, wy, 0.5, p.r, p.g, p.b, 0.16 * mul); // taillight / roof bar → small pool
-        }
-      } else {
-        beam(bx, by, fwd, 1.0, 0.9, 0.72, 0.13 * mul);
-      }
+    // A MOVER's lights, SPRITE-RELATIVE: two warm CONES cast forward from the front headlights along the
+    // travel direction, + a red taillight pool at the rear. `cx,cy` is the sprite centre (lane-offset
+    // included), `fwd` the travel unit, `side` its perpendicular. `mul` scales intensity (cruiser flash).
+    const carGlow = (cx: number, cy: number, fwd: { dx: number; dy: number }, mul: number): void => {
+      const sx = -fwd.dy;
+      const sy = fwd.dx; // perpendicular (the car's lateral axis)
+      const fxC = cx + fwd.dx * 0.18;
+      const fyC = cy + fwd.dy * 0.18; // front bumper
+      cone(fxC + sx * 0.13, fyC + sy * 0.13, fwd.dx, fwd.dy, 1.7, 0.22, 1.0, 0.92, 0.74, 0.12 * mul);
+      cone(fxC - sx * 0.13, fyC - sy * 0.13, fwd.dx, fwd.dy, 1.7, 0.22, 1.0, 0.92, 0.74, 0.12 * mul);
+      radial(cx - fwd.dx * 0.24, cy - fwd.dy * 0.24, 0.4, 1.0, 0.18, 0.12, 0.16 * mul); // red taillight at the rear
     };
     if (night > 0.02) {
       for (const c of ambient.cars) {
         if (c.parked) continue;
-        const ci = (((c.tint ?? 0) % nCars) + nCars) % nCars;
-        const off = laneOffset(c.dir);
-        mover(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, dirVector(c.dir), 0.58, this.carPoints[ci] ?? null, night);
+        const lo = laneOffset(c.dir);
+        carGlow(c.x + 0.5 + lo.dx, c.y + 0.5 + lo.dy, dirVector(c.dir), night);
       }
     }
-    // Cruisers: emergency lights flash, so the roof-bar pools pulse (always on, not night-gated).
-    const flash = Math.floor(timeSec * 1000 / 180) % 2 === 0 ? 1 : 0.4;
+    // Cruisers: headlights + taillight always, PLUS a flashing red/blue roof-bar pool (emergency).
+    const blue = Math.floor(timeSec * 1000 / 180) % 2 === 0;
     for (const c of ambient.cruisers) {
-      const off = laneOffset(c.dir);
-      mover(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, dirVector(c.dir), 0.55, this.cruiserPoints, flash);
+      const lo = laneOffset(c.dir);
+      const cx = c.x + 0.5 + lo.dx;
+      const cy = c.y + 0.5 + lo.dy;
+      carGlow(cx, cy, dirVector(c.dir), Math.max(night, 0.5));
+      if (blue) radial(cx, cy, 0.75, 0.3, 0.45, 1.0, 0.5);
+      else radial(cx, cy, 0.75, 1.0, 0.25, 0.2, 0.5);
     }
     // Buildings: RADIAL glow from the light map's actual lit pixels (windows / beacons), not the center.
     for (const bld of buildings) {
