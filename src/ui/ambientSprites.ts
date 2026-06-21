@@ -3,7 +3,7 @@
 // images to draw over the live layer: smog plumes over polluted tiles, flora on green parcels, cars,
 // props. Resilient like the tileset loader — any sprite that fails to load is skipped, so a partial
 // set still runs (the renderer just draws fewer).
-const FILES: Readonly<Record<keyof AmbientSprites, readonly string[]>> = {
+const FILES: Readonly<Record<Exclude<keyof AmbientSprites, 'emission'>, readonly string[]>> = {
   cars: ['sedan-red', 'hatchback-blue', 'pickup-white', 'taxi-yellow', 'suv-green', 'van-silver', 'bus-city', 'boxtruck'],
   // Walkers (a 4-frame walk cycle) + cyclists — drawn like the cars (rotated to heading), so the modal
   // shift the player engineers reads on the street (Maddy: "cars look GREAT, now do peds + cyclists").
@@ -19,6 +19,14 @@ const FILES: Readonly<Record<keyof AmbientSprites, readonly string[]>> = {
   police: ['cruiser'],
 };
 
+// Diffusion EMISSION maps (tools/tileset/lights.mjs) — a parallel light layer drawn ADDITIVELY over
+// the albedo to evade day/night shading (Maddy 2026-06-20: "diffusion-based lighting"). Keyed
+// `cat/slug` (index-free, so it scales as more assets get a `<slug>-lights.png`). Each fetches
+// `sprites/ambient/<cat>/<slug>-lights.png`; a 404 just leaves the key absent.
+const EMISSION_FILES: Readonly<Record<string, readonly [cat: string, slug: string]>> = {
+  'police/cruiser': ['police', 'cruiser'],
+};
+
 export interface AmbientSprites {
   cars: CanvasImageSource[];
   peds: CanvasImageSource[];
@@ -29,6 +37,8 @@ export interface AmbientSprites {
   encampments: CanvasImageSource[];
   junk: CanvasImageSource[];
   police: CanvasImageSource[];
+  /** Emission light-maps keyed `cat/slug` (e.g. 'police/cruiser'); absent if the map 404s. */
+  emission: Record<string, CanvasImageSource>;
 }
 
 /** Loads one sprite URL, resolving to the decoded image or null on any failure (never rejects). */
@@ -49,12 +59,16 @@ export async function loadAmbientSprites(
   base = '/',
   loadImage: SpriteLoader = domImageLoader,
 ): Promise<AmbientSprites> {
-  const out: AmbientSprites = { cars: [], peds: [], cyclists: [], flora: [], smog: [], props: [], encampments: [], junk: [], police: [] };
-  await Promise.all(
-    (Object.keys(FILES) as (keyof AmbientSprites)[]).map(async (cat) => {
+  const out: AmbientSprites = { cars: [], peds: [], cyclists: [], flora: [], smog: [], props: [], encampments: [], junk: [], police: [], emission: {} };
+  await Promise.all([
+    ...(Object.keys(FILES) as (keyof typeof FILES)[]).map(async (cat) => {
       const imgs = await Promise.all(FILES[cat].map((n) => loadImage(`${base}sprites/ambient/${cat}/${n}.png`)));
       out[cat] = imgs.filter((i): i is CanvasImageSource => i !== null);
     }),
-  );
+    ...Object.entries(EMISSION_FILES).map(async ([key, [cat, slug]]) => {
+      const img = await loadImage(`${base}sprites/ambient/${cat}/${slug}-lights.png`);
+      if (img) out.emission[key] = img; // a 404 leaves the key absent (resilient like the base loader)
+    }),
+  ]);
   return out;
 }

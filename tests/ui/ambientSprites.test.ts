@@ -28,4 +28,18 @@ describe('loadAmbientSprites (peds + cyclists wired in — Maddy: cars look GREA
     expect(sprites.peds.length).toBe(0); // all peds failed → empty, not a throw
     expect(sprites.cyclists.length).toBeGreaterThan(0); // others still load
   });
+
+  // Diffusion light maps (Maddy 2026-06-20): a parallel EMISSION layer keyed `cat/slug`, drawn
+  // additively over the albedo to evade day/night shading. Index-free so it scales as assets gain maps.
+  it('loads emission light-maps keyed by cat/slug, dropping any that 404', async () => {
+    const seen: string[] = [];
+    const sprites = await loadAmbientSprites('/', stubLoader(seen));
+    expect(sprites.emission['police/cruiser']).toBeTruthy();
+    expect(seen.some((u) => u.includes('sprites/ambient/police/cruiser-lights.png'))).toBe(true);
+
+    const missing: AmbientSprites = await loadAmbientSprites('/', (url) =>
+      Promise.resolve(url.includes('-lights.png') ? null : ({ url } as unknown as CanvasImageSource)),
+    );
+    expect(missing.emission['police/cruiser']).toBeUndefined(); // 404 → absent, not a throw
+  });
 });

@@ -1826,16 +1826,38 @@ export class Renderer {
     // folded into the streetlight light-pollution system.)
     const flashRed = Math.floor(performance.now() / 180) % 2 === 0;
     const lb = Math.max(1, ts * 0.2);
+    // The diffusion EMISSION map (red/blue bar + headlights, baked aligned to the albedo). Drawn
+    // additively so it GLOWS over the body and evades shading; the red/blue BLINK is the bar's two
+    // halves (red left / blue right of the 16px map) emphasized in alternation.
+    const cruiserLights = this.ambientSprites?.emission['police/cruiser'];
+    const HALF = 8, SRCH = 16; // the light map is the 16px sprite grid
     for (const c of ambient.cruisers) {
       const off = laneOffset(c.dir);
       const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
       if (!onScreen(sx, sy)) continue;
-      // a soft glow + the bright bar (the glow sells "emissive" even in daylight)
-      ctx.globalAlpha = 0.35;
-      ctx.fillStyle = flashRed ? '#ff3b30' : '#3b6bff';
-      ctx.fillRect(Math.floor(sx - lb), Math.floor(sy - lb), Math.ceil(lb * 2), Math.ceil(lb * 2));
-      ctx.globalAlpha = 1;
-      ctx.fillRect(Math.floor(sx - lb / 2), Math.floor(sy - lb / 2), Math.ceil(lb), Math.ceil(lb * 0.7));
+      if (cruiserLights) {
+        const hv = dirVector(c.dir);
+        const angle = Math.atan2(hv.dx, -hv.dy); // match the body sprite's heading rotation
+        const ss = ts * 0.55;
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(angle);
+        ctx.globalCompositeOperation = 'lighter'; // additive → emissive glow (evades shading)
+        ctx.imageSmoothingEnabled = false;
+        ctx.globalAlpha = 0.5; // baseline: both lights glow softly
+        ctx.drawImage(cruiserLights, -ss / 2, -ss / 2, ss, ss);
+        ctx.globalAlpha = 1; // blink: emphasize the active half brighter
+        if (flashRed) ctx.drawImage(cruiserLights, 0, 0, HALF, SRCH, -ss / 2, -ss / 2, ss / 2, ss);
+        else ctx.drawImage(cruiserLights, HALF, 0, HALF, SRCH, 0, -ss / 2, ss / 2, ss);
+        ctx.restore(); // restores compositeOp/alpha/smoothing
+      } else {
+        // procedural fallback: a soft glow + the bright bar (the glow sells "emissive" even in daylight)
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = flashRed ? '#ff3b30' : '#3b6bff';
+        ctx.fillRect(Math.floor(sx - lb), Math.floor(sy - lb), Math.ceil(lb * 2), Math.ceil(lb * 2));
+        ctx.globalAlpha = 1;
+        ctx.fillRect(Math.floor(sx - lb / 2), Math.floor(sy - lb / 2), Math.ceil(lb), Math.ceil(lb * 0.7));
+      }
     }
   }
 }
