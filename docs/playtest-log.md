@@ -118,3 +118,15 @@ Sim/agents:
   peds fresh (validated top-down + intact).
 - [~] **Blue vehicle orthogonal to travel, not car-like** — re-baking hatchback-blue + van-silver with
   top-down + FACING + intact validation.
+
+## 2026-06-20 — batch 8 (look/perf hardening)
+
+- [x] batch-7 re-bakes landed: tents overhead, walk-4 black spots gone, blue cars (hatchback/van) top-down+facing.
+- [x] **Bus corrupted by floodfill** (`d0d64c31`) — floodfill leaked through a narrow channel into the bus
+  interior; whiteToAlpha now SEVERS narrow necks (erode→border-flood→regrow). Verified on a synthetic.
+- [x] **walk-1 was a white box** (`d0d64c31`,`282bc2ac`) — solid-box guard (`overallOpacity<0.85`) + re-bake.
+- [x] **walk-1 then baked big/boxy** (`925ec541`) — small-figure guard (`centerOpacity<=0.55`) + re-bake small.
+- [x] **Water FPS over large seas** (`925ec541`) — memoized world-anchored offscreen water layer; re-render
+  only on slosh-frame advance / zoom / pan-past-margin; panning re-blits at offset (no per-frame N-tile pass).
+- [~] **Cyclist sprites small/indistinct** — borderline; awaiting Maddy's call on re-bake.
+- NOTE: a background audit is running to recover any bugs dropped across compactions → folding results into THE BACKLOG.
