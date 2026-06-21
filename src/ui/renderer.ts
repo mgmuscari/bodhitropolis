@@ -692,6 +692,7 @@ export class Renderer {
   // still draw on top. CPU path stays the no-WebGL fallback. (Hybrid shader, Maddy 2026-06-20.)
   private gpuMode = false;
   private baseTexVersion = 0; // bumped each base rebuild so the GPU path knows to re-upload the base texture
+  private spriteLightingDim = 1; // GPU mode: day/night brightness applied to the sprite layer (1 = full day)
   // Cached screen-space clip masks (Path2D per kind: 'water', 'grass') so the animated overlays are
   // O(1) draws/frame (clip + pattern fill) instead of a per-tile row-major loop (the antipattern).
   private maskCache = new Map<string, { key: string; path: Path2D | null }>();
@@ -798,6 +799,12 @@ export class Renderer {
    *  changes (camera move / built-layer edit), not every frame. */
   baseVersion(): number {
     return this.baseTexVersion;
+  }
+
+  /** GPU mode: the day/night brightness (0.45..1) to dim the sprite layer with, so cars/peds are lit by
+   *  the same global illumination as the GPU ground (not flat). 1 = full day / CPU mode (no dim). */
+  setSpriteLighting(dim: number): void {
+    this.spriteLightingDim = dim;
   }
 
   /** A cached screen-space clip path of the visible tiles matching `want`, rebuilt only when the screen
@@ -1762,6 +1769,18 @@ export class Renderer {
         ctx.drawImage(smogSprites[tile % smogSprites.length]!, sx - sz / 2, sy - sz / 2, sz, sz);
       }
       ctx.globalAlpha = 1;
+    }
+
+    // GPU mode global illumination on the sprite layer: dim the agents by the SAME day/night brightness
+    // the shader applies to the ground, so cars/peds/etc. aren't flat-lit at night (Maddy). source-atop
+    // darkens ONLY the drawn sprite pixels (transparent areas stay transparent → the GPU shows through).
+    if (this.gpuMode && this.spriteLightingDim < 0.999) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = 'source-atop';
+      ctx.fillStyle = `rgba(8, 11, 26, ${1 - this.spriteLightingDim})`;
+      ctx.fillRect(0, 0, this.base.width, this.base.height);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     }
   }
 }
