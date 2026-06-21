@@ -1553,8 +1553,11 @@ export class Renderer {
     const parkedSize = Math.max(2, ts * 0.3);
     // Under a tileset, cars are tiny rotated car SPRITES ("micro machines"); procedural keeps the
     // tone-coded squares. Sprite is drawn a touch larger than the square so the little body reads.
-    const carSprites = this.hasTileset ? this.ambientSprites?.cars : undefined;
+    // In GPU mode the moving cars are drawn by the GPU sprite batch (lit by the shared base pass), so
+    // skip the CPU car draw to avoid double-rendering (Maddy: move sprites to GPU for matched lighting).
+    const carSprites = !this.gpuMode && this.hasTileset ? this.ambientSprites?.cars : undefined;
     for (const c of ambient.cars) {
+      if (this.gpuMode) break; // cars rendered on GPU
       // A PARKED car (lot bay or kerb slot) carries its exact stall position in c.x/c.y, so it draws
       // ON the stall (+0.5) — never warped to the lane centre. A MOVING car rides its lane (laneOffset,
       // right of heading) so opposing traffic separates. Parked cars use the smaller size.
@@ -1878,7 +1881,7 @@ export class Renderer {
     // lighting pass). Aligned to the sprite arrays by the SAME index the sprite draw uses.
     const nightT = performance.now() / 1000;
     const night = Math.min(1, Math.max(0, (0.8 - dayNightBrightness(nightT)) / 0.3));
-    const carLights = this.hasTileset ? this.ambientSprites?.carLights : undefined;
+    const carLights = !this.gpuMode && this.hasTileset ? this.ambientSprites?.carLights : undefined; // GPU draws car emission in gpuMode
     if (night > 0.02 && carLights && carLights.length > 0) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';

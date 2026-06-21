@@ -148,11 +148,13 @@ export function main(): void {
   // live camera. mountGpu falls back to CPU (returns false) if WebGL2 is unavailable. The CPU path
   // stays the default + fallback. Toggled via ?shader now (settings toggle next).
   let gpuRenderer: GpuRenderer | null = null;
+  let loadedSprites: Awaited<ReturnType<typeof loadAmbientSprites>> | null = null;
   const mountGpu = (): boolean => {
     try {
       gpuRenderer = new GpuRenderer(world.map);
       gpuRenderer.mount();
       gpuRenderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
+      if (loadedSprites) gpuRenderer.setAgentSprites(loadedSprites); // re-apply atlas on (re)mount
       renderer.setGpuMode(true);
       return true;
     } catch (e) {
@@ -170,7 +172,11 @@ export function main(): void {
 
   // Ambient sprites (cars/flora/smog/props): load once, drawn under a tileset (micro-machine cars,
   // smog plumes). Resilient — a missing sprite just isn't drawn; never blocks the render loop.
-  void loadAmbientSprites().then((sprites) => renderer.setAmbientSprites(sprites));
+  void loadAmbientSprites().then((sprites) => {
+    loadedSprites = sprites;
+    renderer.setAmbientSprites(sprites);
+    gpuRenderer?.setAgentSprites(sprites); // GPU agent atlas (cars lit by the shared base pass)
+  });
 
   // Tileset skin: the procedural look paints instantly (above); a non-procedural skin loads its
   // committed PNGs async and hot-swaps in when ready (applyTileset invalidates the cached base →
@@ -979,6 +985,8 @@ export function main(): void {
     // GPU hybrid: render the WebGL map EVERY frame (animates via u_time), AFTER the CPU base pass so
     // it samples the freshest baked tiles. The base re-uploads only when its version changed.
     gpuRenderer?.render(camera, cssWidth, cssHeight, now / 1000, renderer.baseCanvas(), renderer.baseVersion());
+    // GPU agents: the moving sprites lit by the SAME pass as the ground (drawn over the base, under UI).
+    if (gpuRenderer && ambientOn) gpuRenderer.renderAgents(ambientState, camera, cssWidth, cssHeight, now / 1000);
     // Sim-gated (Y5): re-derive the dock/panel signatures + refresh on change ONLY
     // when a sim tick has run since the last sync — not every rAF frame.
     if (simChanged) {
