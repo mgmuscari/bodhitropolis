@@ -1606,8 +1606,9 @@ export class Renderer {
     // lit normally (dims at night). The flashing red/blue light bar is drawn LATER, after the lighting
     // buffer, so the LIGHTS evade shading (a flasher glows full-bright; the car doesn't — Maddy).
     const cruiserSize = Math.max(2, ts * 0.26);
-    const policeSprites = this.hasTileset ? this.ambientSprites?.police : undefined;
+    const policeSprites = !this.gpuMode && this.hasTileset ? this.ambientSprites?.police : undefined;
     for (const c of ambient.cruisers) {
+      if (this.gpuMode) break; // cruisers rendered on GPU in gpuMode
       const off = laneOffset(c.dir);
       const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
       if (!onScreen(sx, sy)) continue;
@@ -1685,6 +1686,7 @@ export class Renderer {
     const cyclistSprites = this.hasTileset ? this.ambientSprites?.cyclists : undefined;
     const pedSize = Math.max(1, ts * 0.16);
     for (const p of ambient.peds) {
+      if (this.gpuMode) break; // peds/cyclists rendered on GPU in gpuMode
       if (p.phase === 'inside' || p.phase === 'driving') continue; // inside a building, or riding its car
       let ox = 0.5;
       let oy = 0.5;
@@ -1845,9 +1847,10 @@ export class Renderer {
     // The diffusion EMISSION map (red/blue bar + headlights, baked aligned to the albedo). Drawn
     // additively so it GLOWS over the body and evades shading; the red/blue BLINK is the bar's two
     // halves (red left / blue right of the 16px map) emphasized in alternation.
-    const cruiserLights = this.ambientSprites?.emission['police/cruiser'];
+    const cruiserLights = !this.gpuMode ? this.ambientSprites?.emission['police/cruiser'] : undefined;
     const HALF = 8, SRCH = 16; // the light map is the 16px sprite grid
     for (const c of ambient.cruisers) {
+      if (this.gpuMode) break; // cruiser emission rendered on GPU in gpuMode
       const off = laneOffset(c.dir);
       const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
       if (!onScreen(sx, sy)) continue;
@@ -1907,7 +1910,7 @@ export class Renderer {
       }
       ctx.restore();
     }
-    const cyclistLights = this.hasTileset ? this.ambientSprites?.cyclistLights : undefined;
+    const cyclistLights = !this.gpuMode && this.hasTileset ? this.ambientSprites?.cyclistLights : undefined; // GPU draws cyclist emission in gpuMode
     if (night > 0.02 && cyclistLights && cyclistLights.length > 0) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';

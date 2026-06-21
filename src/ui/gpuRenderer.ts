@@ -10,7 +10,9 @@ import { GridTextureBridge } from './gridTextureBridge';
 import { SatelliteShader } from './satelliteShader';
 import { SpriteBatch, buildSpriteAtlas, FLOATS_PER_INSTANCE } from './spriteBatch';
 import { DAYSPEED, dayNightBrightness } from './lighting';
-import { laneOffset, dirVector } from './ambientContent';
+import { laneOffset, dirVector, pedCurbOffset } from './ambientContent';
+import { isRoadKind } from '../engine/fabric';
+import { TravelMode } from '../citizens/modes';
 import type { AmbientState } from './ambientContent';
 import type { AmbientSprites } from './ambientSprites';
 import type { GameMap } from '../engine/map';
@@ -42,6 +44,11 @@ export class GpuRenderer {
   private batch: SpriteBatch | null = null;
   private carRects: (Rect | null)[] = [];
   private carLightRects: (Rect | null)[] = [];
+  private pedRects: (Rect | null)[] = [];
+  private cycRects: (Rect | null)[] = [];
+  private cycLightRects: (Rect | null)[] = [];
+  private cruiserRect: Rect | null = null;
+  private cruiserLightRect: Rect | null = null;
   private instData = new Float32Array(0);
 
   constructor(private readonly map: GameMap) {
@@ -74,11 +81,21 @@ export class GpuRenderer {
     const entries: { name: string; img: CanvasImageSource }[] = [];
     sprites.cars.forEach((img, i) => entries.push({ name: `car${i}`, img }));
     sprites.carLights.forEach((img, i) => { if (img) entries.push({ name: `carL${i}`, img }); });
+    sprites.peds.forEach((img, i) => entries.push({ name: `ped${i}`, img }));
+    sprites.cyclists.forEach((img, i) => entries.push({ name: `cyc${i}`, img }));
+    sprites.cyclistLights.forEach((img, i) => { if (img) entries.push({ name: `cycL${i}`, img }); });
+    if (sprites.police[0]) entries.push({ name: 'cruiser', img: sprites.police[0] });
+    if (sprites.emission['police/cruiser']) entries.push({ name: 'cruiserL', img: sprites.emission['police/cruiser'] });
     if (entries.length === 0) return;
     const atlas = buildSpriteAtlas(entries);
     this.batch.setAtlas(atlas.canvas);
     this.carRects = sprites.cars.map((_, i) => atlas.rects.get(`car${i}`) ?? null);
     this.carLightRects = sprites.cars.map((_, i) => atlas.rects.get(`carL${i}`) ?? null);
+    this.pedRects = sprites.peds.map((_, i) => atlas.rects.get(`ped${i}`) ?? null);
+    this.cycRects = sprites.cyclists.map((_, i) => atlas.rects.get(`cyc${i}`) ?? null);
+    this.cycLightRects = sprites.cyclists.map((_, i) => atlas.rects.get(`cycL${i}`) ?? null);
+    this.cruiserRect = atlas.rects.get('cruiser') ?? null;
+    this.cruiserLightRect = atlas.rects.get('cruiserL') ?? null;
   }
 
   /** Draw the moving agents as instanced quads in the base canvas (AFTER render()), lit by the shared
@@ -87,32 +104,67 @@ export class GpuRenderer {
     const gl = this.gl;
     if (!gl || !this.batch || this.carRects.length === 0) return;
     const night = Math.min(1, Math.max(0, (0.8 - dayNightBrightness(timeSec)) / 0.3));
-    const n = ambient.cars.length;
-    if (this.instData.length < n * FLOATS_PER_INSTANCE) this.instData = new Float32Array(n * FLOATS_PER_INSTANCE);
+    const map = this.map;
+    const total = ambient.cars.length + ambient.peds.length + ambient.cruisers.length;
+    if (this.instData.length < total * FLOATS_PER_INSTANCE) this.instData = new Float32Array(total * FLOATS_PER_INSTANCE);
     const data = this.instData;
     let count = 0;
+    const push = (px: number, py: number, rot: number, sz: number, rect: Rect, er: Rect, emit: number): void => {
+      const o = count * FLOATS_PER_INSTANCE;
+      data[o] = px; data[o + 1] = py; data[o + 2] = rot; data[o + 3] = sz; data[o + 4] = sz;
+      data[o + 5] = rect[0]; data[o + 6] = rect[1]; data[o + 7] = rect[2]; data[o + 8] = rect[3];
+      data[o + 9] = er[0]; data[o + 10] = er[1]; data[o + 11] = er[2]; data[o + 12] = er[3];
+      data[o + 13] = emit;
+      count++;
+    };
+    // Cars: headlights/taillights emission, night-gated; parked = off.
     const nCars = this.carRects.length;
     for (const c of ambient.cars) {
-      const ci = ((c.tint ?? 0) % nCars + nCars) % nCars;
+      const ci = (((c.tint ?? 0) % nCars) + nCars) % nCars;
       const rect = this.carRects[ci];
       if (!rect) continue;
       const off = c.parked ? { dx: 0, dy: 0 } : laneOffset(c.dir);
       const headingDir = c.parked && c.curbDir !== undefined ? (c.curbDir % 2 === 0 ? 1 : 0) : c.dir;
       const hv = dirVector(headingDir);
+      const lr = c.parked ? null : this.carLightRects[ci];
+      push(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, Math.atan2(hv.dx, -hv.dy), 0.58, rect, lr ?? rect, lr ? night : 0);
+    }
+    // Pedestrians + cyclists (cyclists = bike-mode peds): a STABLE per-person sprite pick; cyclists get
+    // a small headlight (night). Skip those inside a building / riding a car.
+    const nPed = this.pedRects.length;
+    const nCyc = this.cycRects.length;
+    for (const p of ambient.peds) {
+      if (p.phase === 'inside' || p.phase === 'driving') continue;
+      const seed = ((p.homeTile ?? p.carId ?? Math.round(p.x) * 131 + Math.round(p.y)) >>> 0);
+      const isBike = (p.mode ?? TravelMode.Walk) === TravelMode.Bike;
+      let ox = 0.5;
+      let oy = 0.5;
+      if (isRoadKind(map.built[map.idx(Math.round(p.x), Math.round(p.y))]!)) {
+        const o = pedCurbOffset(p.dir); ox += o.dx; oy += o.dy;
+      }
+      const hv = dirVector(p.dir);
       const rot = Math.atan2(hv.dx, -hv.dy);
-      const lightRect = c.parked ? null : this.carLightRects[ci];
-      const emit = lightRect ? night : 0;
-      const er = lightRect ?? rect;
-      const o = count * FLOATS_PER_INSTANCE;
-      data[o] = c.x + 0.5 + off.dx;
-      data[o + 1] = c.y + 0.5 + off.dy;
-      data[o + 2] = rot;
-      data[o + 3] = 0.58;
-      data[o + 4] = 0.58;
-      data[o + 5] = rect[0]; data[o + 6] = rect[1]; data[o + 7] = rect[2]; data[o + 8] = rect[3];
-      data[o + 9] = er[0]; data[o + 10] = er[1]; data[o + 11] = er[2]; data[o + 12] = er[3];
-      data[o + 13] = emit;
-      count++;
+      if (isBike && nCyc > 0) {
+        const i = (Math.imul(seed, 2654435761) >>> 0) % nCyc;
+        const rect = this.cycRects[i];
+        if (!rect) continue;
+        const lr = this.cycLightRects[i];
+        push(p.x + ox, p.y + oy, rot, 0.46, rect, lr ?? rect, lr ? night : 0);
+      } else if (nPed > 0) {
+        const rect = this.pedRects[(Math.imul(seed, 2654435761) >>> 0) % nPed];
+        if (!rect) continue;
+        push(p.x + ox, p.y + oy, rot, 0.4, rect, rect, 0);
+      }
+    }
+    // Cruisers: a black car (rotated to heading) with an ALWAYS-on flashing red/blue bar (emergency).
+    if (this.cruiserRect) {
+      const flash = Math.floor(timeSec * 1000 / 180) % 2 === 0 ? 1 : 0.45;
+      for (const c of ambient.cruisers) {
+        const off = laneOffset(c.dir);
+        const hv = dirVector(c.dir);
+        const lr = this.cruiserLightRect;
+        push(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, Math.atan2(hv.dx, -hv.dy), 0.55, this.cruiserRect, lr ?? this.cruiserRect, lr ? flash : 0);
+      }
     }
     if (count === 0) return;
     gl.enable(gl.BLEND);
