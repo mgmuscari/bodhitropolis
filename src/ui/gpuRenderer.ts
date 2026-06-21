@@ -8,7 +8,8 @@
 // IO module (touches WebGL/DOM) — not on the pure-ui allowlist.
 import { GridTextureBridge } from './gridTextureBridge';
 import { SatelliteShader } from './satelliteShader';
-import { SpriteBatch, buildSpriteAtlas, FLOATS_PER_INSTANCE, GlowBatch, GLOW_FLOATS } from './spriteBatch';
+import { SpriteBatch, buildSpriteAtlas, FLOATS_PER_INSTANCE, GlowBatch, GLOW_FLOATS, extractLightPoints } from './spriteBatch';
+import type { LightPoint } from './spriteBatch';
 import { DAYSPEED, dayNightBrightness } from './lighting';
 import { laneOffset, dirVector, pedCurbOffset } from './ambientContent';
 import { isRoadKind } from '../engine/fabric';
@@ -55,6 +56,10 @@ export class GpuRenderer {
   private instData = new Float32Array(0);
   private glow: GlowBatch | null = null;
   private glowData = new Float32Array(0);
+  // Emissive light POINTS (the actual lit pixels) per asset, so glow casts from real lights not centers.
+  private carPoints: (LightPoint[] | null)[] = [];
+  private cruiserPoints: LightPoint[] = [];
+  private buildingPoints = new Map<string, { lights: LightPoint[]; blink: LightPoint[] }>();
 
   constructor(private readonly map: GameMap) {
     this.bridge = new GridTextureBridge(map.width, map.height);
@@ -102,6 +107,20 @@ export class GpuRenderer {
     this.cycLightRects = sprites.cyclists.map((_, i) => atlas.rects.get(`cycL${i}`) ?? null);
     this.cruiserRect = atlas.rects.get('cruiser') ?? null;
     this.cruiserLightRect = atlas.rects.get('cruiserL') ?? null;
+    // Extract the bright light POINTS so glow casts from the real lit pixels (Maddy: movers get forward
+    // cones for their static headlights; buildings get radial glow from the light map).
+    this.carPoints = sprites.cars.map((_, i) => { const im = sprites.carLights[i]; return im ? extractLightPoints(im) : null; });
+    this.cruiserPoints = sprites.emission['police/cruiser'] ? extractLightPoints(sprites.emission['police/cruiser']) : [];
+    this.buildingPoints.clear();
+    for (const [key, img] of Object.entries(sprites.emission)) {
+      if (!key.startsWith('building/')) continue;
+      const isBlink = key.endsWith('/blink');
+      const stem = key.slice('building/'.length).replace(/\/blink$/, '');
+      const e = this.buildingPoints.get(stem) ?? { lights: [], blink: [] };
+      const pts = extractLightPoints(img, 8, 0.26, 8); // buildings: more windows
+      if (isBlink) e.blink = pts; else e.lights = pts;
+      this.buildingPoints.set(stem, e);
+    }
   }
 
   /** Draw the moving agents as instanced quads in the base canvas (AFTER render()), lit by the shared
@@ -201,34 +220,59 @@ export class GpuRenderer {
       n++;
     };
     const radial = (x: number, y: number, radius: number, r: number, gr: number, b: number, inten: number): void => cone(x, y, 0, 0, 0, radius, r, gr, b, inten);
+    // A MOVER's lights: each light-point becomes a forward CONE if it's near the FRONT (a headlight),
+    // else a small radial pool (taillight / roof bar). Points are in sprite-local space, rotated to the
+    // mover's heading. `mul` scales intensity (e.g. cruiser flash). Falls back to one nose cone.
+    const nCars = this.carRects.length;
+    const mover = (bx: number, by: number, fwd: { dx: number; dy: number }, size: number, pts: LightPoint[] | null, mul: number): void => {
+      const rot = Math.atan2(fwd.dx, -fwd.dy);
+      const cs = Math.cos(rot);
+      const sn = Math.sin(rot);
+      if (pts && pts.length) {
+        for (const p of pts) {
+          const wx = bx + (p.ox * cs - p.oy * sn) * size;
+          const wy = by + (p.ox * sn + p.oy * cs) * size;
+          if (p.oy < -0.05) cone(wx, wy, fwd.dx, fwd.dy, 1.9, 0.3, p.r, p.g, p.b, 0.13 * mul); // headlight → forward cone
+          else radial(wx, wy, 0.5, p.r, p.g, p.b, 0.16 * mul); // taillight / roof bar → small pool
+        }
+      } else {
+        cone(bx + fwd.dx * 0.3, by + fwd.dy * 0.3, fwd.dx, fwd.dy, 2.0, 0.55, 1.0, 0.9, 0.72, 0.13 * mul);
+      }
+    };
     if (night > 0.02) {
       for (const c of ambient.cars) {
         if (c.parked) continue;
+        const ci = (((c.tint ?? 0) % nCars) + nCars) % nCars;
         const off = laneOffset(c.dir);
-        const fwd = dirVector(c.dir);
-        // a forward CONE cast from the car's nose along travel — subtle so dense traffic doesn't blow out
-        cone(c.x + 0.5 + off.dx + fwd.dx * 0.3, c.y + 0.5 + off.dy + fwd.dy * 0.3, fwd.dx, fwd.dy, 2.2, 0.7, 1.0, 0.92, 0.72, night * 0.13);
+        mover(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, dirVector(c.dir), 0.58, this.carPoints[ci] ?? null, night);
       }
     }
-    const blue = Math.floor(timeSec * 1000 / 180) % 2 === 0;
+    // Cruisers: emergency lights flash, so the roof-bar pools pulse (always on, not night-gated).
+    const flash = Math.floor(timeSec * 1000 / 180) % 2 === 0 ? 1 : 0.4;
     for (const c of ambient.cruisers) {
       const off = laneOffset(c.dir);
-      if (blue) radial(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, 1.0, 0.3, 0.45, 1.0, 0.35);
-      else radial(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, 1.0, 1.0, 0.28, 0.22, 0.35);
+      mover(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, dirVector(c.dir), 0.55, this.cruiserPoints, flash);
     }
-    // Building windows + hazard beacons cast a FAINT glow onto their surroundings.
+    // Buildings: RADIAL glow from the light map's actual lit pixels (windows / beacons), not the center.
     for (const bld of buildings) {
-      const cx = bld.x + bld.w / 2;
-      const cy = bld.y + bld.h / 2;
       const span = Math.max(bld.w, bld.h);
       const isPower = bld.kind >= 24 && bld.kind <= 30;
-      if (isPower) {
-        radial(cx, cy, span * 0.5, 1.0, 0.62, 0.38, 0.07); // faint warm machinery glow (always)
+      const pts = this.buildingPoints.get(`b-${bld.kind}-${bld.w === 1 && bld.h === 1 ? 'c' : `${bld.w}x${bld.h}`}`);
+      const at = (p: LightPoint): [number, number] => [bld.x + (0.5 + p.ox) * bld.w, bld.y + (0.5 + p.oy) * bld.h];
+      if (pts && (isPower || night > 0.02)) {
+        for (const p of pts.lights) {
+          const [wx, wy] = at(p);
+          radial(wx, wy, 0.9, p.r, p.g, p.b, (isPower ? 0.12 : night * 0.16)); // window / furnace glow
+        }
+      }
+      if (pts && isPower) { // blinking red beacon glow, per-building phase
         const hash = (((bld.x * 73856093) ^ (bld.y * 19349663)) >>> 0);
         const period = 420 + (hash % 6) * 90;
-        if ((timeSec * 1000 + (hash % period)) % period < period * 0.45) radial(cx, cy, span * 0.55, 1.0, 0.2, 0.16, 0.28); // red beacon glow
-      } else if (night > 0.02) {
-        radial(cx, cy, span * 0.6, 1.0, 0.86, 0.62, night * 0.1); // faint warm window glow (night)
+        if ((timeSec * 1000 + (hash % period)) % period < period * 0.45) {
+          for (const p of pts.blink) { const [wx, wy] = at(p); radial(wx, wy, 1.0, p.r, p.g, p.b, 0.32); }
+        }
+      } else if (!pts && night > 0.02 && !isPower) {
+        radial(bld.x + bld.w / 2, bld.y + bld.h / 2, span * 0.6, 1.0, 0.86, 0.62, night * 0.1); // fallback center glow
       }
     }
     if (n === 0) return;

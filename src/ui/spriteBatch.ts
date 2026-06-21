@@ -177,6 +177,46 @@ void main(){
   }
 }
 
+/** A bright emissive point in a light map, in sprite-LOCAL offset space (ox,oy ∈ [-0.5,0.5] from the
+ *  sprite/footprint center; oy<0 = toward the FRONT/top) with its colour. */
+export interface LightPoint { ox: number; oy: number; r: number; g: number; b: number; }
+
+/** Extract the bright emissive points from a light map so glow can be cast from the ACTUAL lit pixels
+ *  (headlights, windows, beacons) rather than the tile center (Maddy). Downsamples to `grid`², keeps the
+ *  brightest cells above `threshold` with non-max suppression (so two headlights → two points). */
+export function extractLightPoints(img: CanvasImageSource, grid = 8, threshold = 0.32, maxPts = 4): LightPoint[] {
+  try {
+    const c = document.createElement('canvas');
+    c.width = grid; c.height = grid;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return [];
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, 0, 0, grid, grid);
+    const d = ctx.getImageData(0, 0, grid, grid).data;
+    const cells: { i: number; j: number; b: number; r: number; g: number; bl: number }[] = [];
+    for (let j = 0; j < grid; j++) {
+      for (let i = 0; i < grid; i++) {
+        const o = (j * grid + i) * 4;
+        const a = d[o + 3]! / 255;
+        const bright = (Math.max(d[o]!, d[o + 1]!, d[o + 2]!) / 255) * a;
+        if (bright >= threshold) cells.push({ i, j, b: bright, r: d[o]!, g: d[o + 1]!, bl: d[o + 2]! });
+      }
+    }
+    cells.sort((p, q) => q.b - p.b);
+    const pts: LightPoint[] = [];
+    const taken: { i: number; j: number }[] = [];
+    for (const cell of cells) {
+      if (pts.length >= maxPts) break;
+      if (taken.some((t) => Math.abs(t.i - cell.i) <= 1 && Math.abs(t.j - cell.j) <= 1)) continue; // non-max suppress
+      taken.push({ i: cell.i, j: cell.j });
+      pts.push({ ox: (cell.i + 0.5) / grid - 0.5, oy: (cell.j + 0.5) / grid - 0.5, r: cell.r / 255, g: cell.g / 255, b: cell.bl / 255 });
+    }
+    return pts;
+  } catch {
+    return [];
+  }
+}
+
 /** A packed sprite atlas: one canvas + normalized UV rects keyed by name. */
 export interface SpriteAtlas {
   canvas: HTMLCanvasElement;
