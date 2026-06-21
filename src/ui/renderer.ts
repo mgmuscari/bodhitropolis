@@ -1774,7 +1774,8 @@ export class Renderer {
 
     // Smog plumes — TOP layer (above cars/peds, Maddy): translucent puffs over polluted tiles, streaming
     // downwind along the prevailing wind (loop + triangle fade so they don't pop), billowing as they go.
-    const smogSprites = this.hasTileset ? this.ambientSprites?.smog : undefined;
+    // In GPU mode the smog is a WebGL overlay above the sprites (smogOverlay), so skip the CPU plumes.
+    const smogSprites = !this.gpuMode && this.hasTileset ? this.ambientSprites?.smog : undefined;
     if (smogSprites && smogSprites.length > 0) {
       const drift = performance.now() / 1000;
       for (const [tile, amt] of ambient.pollution) {

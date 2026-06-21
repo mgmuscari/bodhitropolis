@@ -22,6 +22,7 @@ import { Camera } from './ui/camera';
 import { Renderer, exportProceduralTiles } from './ui/renderer';
 import { mountSatelliteDemo } from './ui/satelliteShader';
 import { GpuRenderer } from './ui/gpuRenderer';
+import { SmogOverlay } from './ui/smogOverlay';
 import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, setPlantEmitters, seedDecay, liveInspectLine, applyLiveCaps } from './ui/ambientContent';
 import { loadSettings, saveSettings } from './ui/settingsStore';
 import { mountSettingsPanel } from './ui/settingsPanel';
@@ -148,6 +149,7 @@ export function main(): void {
   // live camera. mountGpu falls back to CPU (returns false) if WebGL2 is unavailable. The CPU path
   // stays the default + fallback. Toggled via ?shader now (settings toggle next).
   let gpuRenderer: GpuRenderer | null = null;
+  let smogOverlay: SmogOverlay | null = null;
   let loadedSprites: Awaited<ReturnType<typeof loadAmbientSprites>> | null = null;
   const mountGpu = (): boolean => {
     try {
@@ -155,17 +157,26 @@ export function main(): void {
       gpuRenderer.mount();
       gpuRenderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
       if (loadedSprites) gpuRenderer.setAgentSprites(loadedSprites); // re-apply atlas on (re)mount
+      // GPU smog overlay (z2, above the sprite canvas) — the atmospheric haze on top of everything.
+      smogOverlay = new SmogOverlay(world.map.width, world.map.height);
+      smogOverlay.mount();
+      smogOverlay.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
       renderer.setGpuMode(true);
       return true;
     } catch (e) {
       console.warn('WebGL2 unavailable — staying on the CPU renderer:', e);
+      gpuRenderer?.dispose();
+      smogOverlay?.dispose();
       gpuRenderer = null;
+      smogOverlay = null;
       return false;
     }
   };
   const unmountGpu = (): void => {
     gpuRenderer?.dispose();
+    smogOverlay?.dispose();
     gpuRenderer = null;
+    smogOverlay = null;
     renderer.setGpuMode(false);
   };
   if (gpuParam || settings.renderer === 'gpu') mountGpu();
@@ -889,6 +900,7 @@ export function main(): void {
     camera.setViewport(cssWidth, cssHeight);
     renderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
     gpuRenderer?.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
+    smogOverlay?.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
     gpuRenderer?.invalidateBase(); // base canvas resized → re-upload it next frame
     markDirty();
   });
@@ -987,6 +999,8 @@ export function main(): void {
     gpuRenderer?.render(camera, cssWidth, cssHeight, now / 1000, renderer.baseCanvas(), renderer.baseVersion());
     // GPU agents: the moving sprites lit by the SAME pass as the ground (drawn over the base, under UI).
     if (gpuRenderer && ambientOn) gpuRenderer.renderAgents(ambientState, camera, cssWidth, cssHeight, now / 1000);
+    // GPU smog overlay (z2, above sprites): the atmospheric haze, now on the GPU instead of CPU plumes.
+    if (smogOverlay && ambientOn) smogOverlay.render(camera, cssWidth, cssHeight, now / 1000, ambientState.pollution, ambientState.wind);
     // Sim-gated (Y5): re-derive the dock/panel signatures + refresh on change ONLY
     // when a sim tick has run since the last sync — not every rAF frame.
     if (simChanged) {
