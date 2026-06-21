@@ -28,7 +28,7 @@ const EMIT = ' Emission map at night on a pure solid black background: ONLY the 
   'everything else is pure black. High-contrast points of colored light with soft glow halos. isometric';
 const TOPDOWN_CAR = 'seen from directly above, top-down, orthographic. The FRONT of the vehicle points UP.';
 const TOPDOWN_GEN = 'seen from directly above, top-down, orthographic.';
-const WINDOWS = `A building ${TOPDOWN_GEN} Many small warm-yellow and pale-white lit windows scattered across the rooftop and facade edges.${EMIT}`;
+const WINDOWS = `A building ${TOPDOWN_GEN} BRIGHT glowing warm-yellow and pale-white lit windows in rows across the whole rooftop and facade, many lights, strongly lit.${EMIT}`;
 const POWER_GLOW = `An industrial power plant ${TOPDOWN_GEN} A warm orange machinery glow and a few dim lit windows, NO red lights.${EMIT}`;
 const POWER_BLINK = `An industrial power plant with tall structures ${TOPDOWN_GEN} Two or more bright glowing RED aviation warning lights on the tall structures, NOTHING else lit (no orange, no windows).${EMIT}`;
 
@@ -93,8 +93,10 @@ function buildingAlbedo(fp, stem) {
 // White-on-black shape mask from the albedo's alpha (the inpaint region).
 const shapeMask = (albedoBuf, gw, gh) => mg(['png:-', '-alpha', 'extract', '-resize', `${gw}x${gh}!`, '-threshold', '20%', 'png:-'], albedoBuf);
 // Emission → alpha: saturation boost, then alpha from MAX-channel brightness with a level black-point.
-const emissionToAlpha = (buf) => mg(['png:-', '-modulate', '100,140,100',
-  '(', '+clone', '-separate', '-evaluate-sequence', 'max', '-level', '22%,88%', ')',
+// `black` is the level black-point — lower keeps DIMMER lights (small 1×1 buildings need this or their
+// tiny windows get keyed away to nothing).
+const emissionToAlpha = (buf, black = '22%') => mg(['png:-', '-modulate', '100,140,100',
+  '(', '+clone', '-separate', '-evaluate-sequence', 'max', '-level', `${black},90%`, ')',
   '-alpha', 'off', '-compose', 'CopyOpacity', '-composite', 'png:-'], buf);
 
 function lightGraph({ initName, maskName, prompt, seed, pixel }) {
@@ -146,9 +148,10 @@ for (const job of LIGHTS) {
     mkdirSync(dirname(r.base), { recursive: true });
     const maskName = await uploadImage(shapeMask(r.albedo, r.gw, r.gh), `lm-${job.slug}-mask.png`);
     const initName = await uploadImage(mg(['-size', `${r.gw}x${r.gh}`, 'xc:black', 'png:-']), `lm-${job.slug}-init.png`);
+    const black = job.type === 'building' ? '9%' : '22%'; // buildings: keep dim windows (esp. tiny 1×1)
     for (const layer of layers) {
       const out = await awaitOutput(await submit(lightGraph({ initName, maskName, prompt: layer.prompt, seed: layer.seed, pixel: r.pixel })), { timeoutMs: 180000 });
-      writeFileSync(`${r.base}-${layer.out}.png`, emissionToAlpha(await fetchImage(out)));
+      writeFileSync(`${r.base}-${layer.out}.png`, emissionToAlpha(await fetchImage(out), black));
       console.log(`✓ ${r.label}-${layer.out}`);
       done++;
     }
