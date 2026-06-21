@@ -76,6 +76,89 @@ function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLSh
   return s;
 }
 
+// ── Glow pass: emissive lights cast a soft ADDITIVE pool onto surrounding tiles (Maddy: "car
+//    headlights illuminating road in front"; emissive lights casting glow). Each source is a colored
+//    radial falloff quad, blended ONE,ONE over the scene so it brightens the ground + sprites around it.
+export const GLOW_FLOATS = 8; // pos(2) radius(1) color(3) intensity(1) [+1 pad]
+
+export class GlowBatch {
+  private program: WebGLProgram;
+  private vao: WebGLVertexArrayObject;
+  private quad: WebGLBuffer;
+  private inst: WebGLBuffer;
+  private cap = 0;
+  private readonly u: Record<string, WebGLUniformLocation | null> = {};
+
+  constructor(private readonly gl: WebGL2RenderingContext) {
+    const vs = `#version 300 es
+layout(location=0) in vec2 a_corner;     // unit quad [-1,1]
+layout(location=1) in vec2 a_pos;        // world cell
+layout(location=2) in float a_radius;    // glow radius in cells
+layout(location=3) in vec3 a_color;
+layout(location=4) in float a_intensity;
+uniform vec2 u_origin; uniform vec2 u_view;
+out vec2 v_local; out vec3 v_color; out float v_int;
+void main(){
+  vec2 world = a_pos + a_corner * a_radius;
+  vec2 ndc = ((world - u_origin)/u_view)*2.0 - 1.0;
+  gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0);
+  v_local = a_corner; v_color = a_color; v_int = a_intensity;
+}`;
+    const fs = `#version 300 es
+precision highp float;
+in vec2 v_local; in vec3 v_color; in float v_int;
+out vec4 fragColor;
+void main(){
+  float d = length(v_local);
+  float fall = smoothstep(1.0, 0.0, d);
+  fall *= fall; // softer core-to-edge
+  fragColor = vec4(v_color * v_int * fall, 1.0);
+}`;
+    const program = gl.createProgram()!;
+    const v = compile(gl, gl.VERTEX_SHADER, vs);
+    const f = compile(gl, gl.FRAGMENT_SHADER, fs);
+    gl.attachShader(program, v); gl.attachShader(program, f); gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(`glow link: ${gl.getProgramInfoLog(program)}`);
+    gl.deleteShader(v); gl.deleteShader(f);
+    this.program = program;
+    for (const n of ['u_origin', 'u_view']) this.u[n] = gl.getUniformLocation(program, n);
+    this.vao = gl.createVertexArray()!;
+    this.quad = gl.createBuffer()!;
+    this.inst = gl.createBuffer()!;
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.inst);
+    const stride = GLOW_FLOATS * 4;
+    const ptr = (loc: number, size: number, off: number): void => { gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride, off * 4); gl.vertexAttribDivisor(loc, 1); };
+    ptr(1, 2, 0); ptr(2, 1, 2); ptr(3, 3, 3); ptr(4, 1, 6);
+    gl.bindVertexArray(null);
+  }
+
+  render(data: Float32Array, count: number, origin: readonly [number, number], view: readonly [number, number]): void {
+    if (count <= 0) return;
+    const gl = this.gl;
+    gl.useProgram(this.program);
+    gl.bindVertexArray(this.vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.inst);
+    if (count > this.cap) { this.cap = Math.ceil(count * 1.5); gl.bufferData(gl.ARRAY_BUFFER, this.cap * GLOW_FLOATS * 4, gl.DYNAMIC_DRAW); }
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, data.subarray(0, count * GLOW_FLOATS));
+    gl.uniform2f(this.u.u_origin!, origin[0], origin[1]);
+    gl.uniform2f(this.u.u_view!, view[0], view[1]);
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, count);
+    gl.bindVertexArray(null);
+  }
+
+  dispose(): void {
+    const gl = this.gl;
+    gl.deleteProgram(this.program);
+    gl.deleteVertexArray(this.vao);
+    gl.deleteBuffer(this.quad);
+    gl.deleteBuffer(this.inst);
+  }
+}
+
 /** A packed sprite atlas: one canvas + normalized UV rects keyed by name. */
 export interface SpriteAtlas {
   canvas: HTMLCanvasElement;

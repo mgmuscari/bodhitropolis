@@ -8,7 +8,7 @@
 // IO module (touches WebGL/DOM) — not on the pure-ui allowlist.
 import { GridTextureBridge } from './gridTextureBridge';
 import { SatelliteShader } from './satelliteShader';
-import { SpriteBatch, buildSpriteAtlas, FLOATS_PER_INSTANCE } from './spriteBatch';
+import { SpriteBatch, buildSpriteAtlas, FLOATS_PER_INSTANCE, GlowBatch, GLOW_FLOATS } from './spriteBatch';
 import { DAYSPEED, dayNightBrightness } from './lighting';
 import { laneOffset, dirVector, pedCurbOffset } from './ambientContent';
 import { isRoadKind } from '../engine/fabric';
@@ -50,6 +50,8 @@ export class GpuRenderer {
   private cruiserRect: Rect | null = null;
   private cruiserLightRect: Rect | null = null;
   private instData = new Float32Array(0);
+  private glow: GlowBatch | null = null;
+  private glowData = new Float32Array(0);
 
   constructor(private readonly map: GameMap) {
     this.bridge = new GridTextureBridge(map.width, map.height);
@@ -71,6 +73,7 @@ export class GpuRenderer {
     this.shader = new SatelliteShader(gl);
     this.shader.uploadFull(this.bridge);
     this.batch = new SpriteBatch(gl);
+    this.glow = new GlowBatch(gl);
     return canvas;
   }
 
@@ -166,11 +169,50 @@ export class GpuRenderer {
         push(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, Math.atan2(hv.dx, -hv.dy), 0.55, this.cruiserRect, lr ?? this.cruiserRect, lr ? flash : 0);
       }
     }
-    if (count === 0) return;
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     const { origin, view } = cameraToShaderView(camera, cssWidth, cssHeight);
-    this.batch.render(data, count, origin, view, timeSec, DAYSPEED);
+    if (count > 0) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      this.batch.render(data, count, origin, view, timeSec, DAYSPEED);
+    }
+    this.renderGlow(ambient, origin, view, timeSec, night);
+    gl.disable(gl.BLEND); // leave blend OFF so the next frame's opaque base pass isn't additive
+  }
+
+  /** Emissive GLOW: soft additive light pools cast onto the surrounding tiles (Maddy: "car headlights
+   *  illuminating road in front"; emissive lights casting glow). Car headlights pool AHEAD of the car
+   *  (night), cruiser bars flash red/blue. Additive (ONE,ONE) over the lit scene. */
+  private renderGlow(ambient: AmbientState, origin: readonly [number, number], view: readonly [number, number], timeSec: number, night: number): void {
+    const gl = this.gl;
+    if (!gl || !this.glow) return;
+    const cap = ambient.cars.length + ambient.cruisers.length;
+    if (this.glowData.length < cap * GLOW_FLOATS) this.glowData = new Float32Array(cap * GLOW_FLOATS);
+    const g = this.glowData;
+    let n = 0;
+    const put = (x: number, y: number, radius: number, r: number, gr: number, b: number, inten: number): void => {
+      const o = n * GLOW_FLOATS;
+      g[o] = x; g[o + 1] = y; g[o + 2] = radius; g[o + 3] = r; g[o + 4] = gr; g[o + 5] = b; g[o + 6] = inten;
+      n++;
+    };
+    if (night > 0.02) {
+      for (const c of ambient.cars) {
+        if (c.parked) continue;
+        const off = laneOffset(c.dir);
+        const fwd = dirVector(c.dir);
+        // a warm pool just AHEAD of the car (headlight throw)
+        put(c.x + 0.5 + off.dx + fwd.dx * 0.8, c.y + 0.5 + off.dy + fwd.dy * 0.8, 1.4, 1.0, 0.88, 0.62, night * 0.5);
+      }
+    }
+    const blue = Math.floor(timeSec * 1000 / 180) % 2 === 0;
+    for (const c of ambient.cruisers) {
+      const off = laneOffset(c.dir);
+      if (blue) put(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, 1.3, 0.3, 0.4, 1.0, 0.8);
+      else put(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, 1.3, 1.0, 0.25, 0.2, 0.8);
+    }
+    if (n === 0) return;
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE); // additive → glow brightens the ground/sprites around the source
+    this.glow.render(g, n, origin, view);
   }
 
   resize(cssWidth: number, cssHeight: number, dpr: number): void {
@@ -217,9 +259,11 @@ export class GpuRenderer {
   dispose(): void {
     this.shader?.dispose();
     this.batch?.dispose();
+    this.glow?.dispose();
     this.canvas?.remove();
     this.shader = null;
     this.batch = null;
+    this.glow = null;
     this.gl = null;
     this.canvas = null;
   }
