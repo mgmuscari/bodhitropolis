@@ -8,12 +8,12 @@
 // IO module (touches WebGL/DOM) — not on the pure-ui allowlist.
 import { GridTextureBridge } from './gridTextureBridge';
 import { SatelliteShader } from './satelliteShader';
+import { DAYSPEED } from './lighting';
 import type { GameMap } from '../engine/map';
 import type { Camera } from './camera';
 
 const SUN: readonly [number, number] = [0.65, 0.78]; // sun direction in tile space (shadows trace toward it)
 const SHADOW = 0.45;
-const DAYSPEED = 0.04; // slow sun rotation → a day/night shadow sweep (Maddy loved it); 0 = fixed
 
 /** The live world→shader view: the visible window in world cells (matches the Canvas2D camera). */
 export function cameraToShaderView(
@@ -95,15 +95,6 @@ export class GpuRenderer {
     this.lastBaseVersion = -1;
   }
 
-  /** The day/night brightness 0.45..1 at `timeSec` — the SAME factor the shader applies to the ground,
-   *  so the host can dim the Canvas2D sprite layer to match (sprites are lit by the global illumination
-   *  too, not flat). Mirrors the shader: alt=sin(day); mix(0.45,1, smoothstep(-0.2,0.3,alt)). */
-  dayNightDim(timeSec: number): number {
-    const alt = Math.sin(timeSec * DAYSPEED);
-    const t = Math.min(1, Math.max(0, (alt + 0.2) / 0.5)); // smoothstep(-0.2, 0.3, alt)
-    const ss = t * t * (3 - 2 * t);
-    return 0.45 + 0.55 * ss;
-  }
 
   dispose(): void {
     this.shader?.dispose();

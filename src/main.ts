@@ -962,8 +962,6 @@ export function main(): void {
     // sim (its FixedTickLoop clamp owns catch-up); never fold the ambient dt into it.
     sim.advance(now - last);
     last = now;
-    // GPU mode: light the sprite layer by the same day/night brightness as the shader ground.
-    renderer.setSpriteLighting(gpuRenderer ? gpuRenderer.dayNightDim(now / 1000) : 1);
     if (ambientOn && !document.hidden) {
       // Continuous ambient path: step the ambient sim on its OWN clock (its Task-1
       // clamp owns catch-up), then composite + sprites. The base rebuilds inside
