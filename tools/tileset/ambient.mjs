@@ -42,7 +42,7 @@ const CATALOG = {
     ['taxi-yellow', 'a yellow taxi cab'],
     ['suv-green', 'a dark green SUV'],
     ['van-silver', 'a dark blue delivery van'], // not silver/white — light tones floodfill to alpha
-    ['bus-city', 'a long city transit bus'],
+    ['bus-city', 'a city transit bus seen from straight overhead, a long rectangular blue-and-white roof, the windshield at the FRONT (top) end, wheels just visible at the sides'],
     ['boxtruck', 'a brown box delivery truck'],
   ],
   flora: [
@@ -85,9 +85,9 @@ const CATALOG = {
   // Encampments: tents/tarps that pop up on heavily demand-pathed empty tiles (the displaced made
   // visible — Maddy). Top-down shelters on white → alpha.
   encampments: [
-    ['tent-1', 'a small dome camping tent'],
-    ['tent-2', 'a makeshift blue tarp shelter'],
-    ['tent-3', 'a small orange pup tent'],
+    ['tent-1', 'the ROOF of a small green dome tent seen from straight overhead, aerial map view, only the curved top fabric visible'],
+    ['tent-2', 'a blue tarp shelter from straight overhead, aerial map view, a flat blue tarpaulin rectangle seen from above'],
+    ['tent-3', 'the ROOF of an orange A-frame pup tent from straight overhead, a ridge line down the centre seen from above'],
   ],
   // Junk: discarded mattresses + household debris on worn/empty ground (the neglect made visible).
   junk: [
