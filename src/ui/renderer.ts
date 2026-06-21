@@ -687,6 +687,10 @@ export class Renderer {
   private waterLayerCtx: CanvasRenderingContext2D | null = null;
   private waterLayerKey = '';
   private waterLayerOrigin = { sx: 0, sy: 0 }; // camera origin when the layer was rendered (for pan-offset blits)
+  // GPU mode: the WebGL hybrid path renders the MAP underneath, so the Canvas2D base goes transparent
+  // and the CPU water/grass/cloud animations are skipped (the GPU does them). Sprites/decorations/UI
+  // still draw on top. CPU path stays the no-WebGL fallback. (Hybrid shader, Maddy 2026-06-20.)
+  private gpuMode = false;
   // Cached screen-space clip masks (Path2D per kind: 'water', 'grass') so the animated overlays are
   // O(1) draws/frame (clip + pattern fill) instead of a per-tile row-major loop (the antipattern).
   private maskCache = new Map<string, { key: string; path: Path2D | null }>();
@@ -773,6 +777,14 @@ export class Renderer {
   setAmbientSprites(sprites: AmbientSprites): void {
     this.ambientSprites = sprites;
     this.invalidateBase(); // flora canopies are baked into the cached base — repaint once loaded
+  }
+
+  /** Toggle the GPU hybrid path: when on, the Canvas2D base goes transparent (the WebGL layer below
+   *  shows through) and the CPU water/grass/cloud animations are skipped (the GPU does them); sprites,
+   *  decorations, overlays + UI still draw on top. */
+  setGpuMode(on: boolean): void {
+    this.gpuMode = on;
+    this.invalidateBase();
   }
 
   /** A cached screen-space clip path of the visible tiles matching `want`, rebuilt only when the screen
@@ -1215,15 +1227,21 @@ export class Renderer {
    *     now, NOT the base — so a hover never invalidates the base).
    */
   private composite(world: WorldState, camera: Camera): void {
-    if (this.baseDirty) {
-      this.drawBase(world, camera);
-      this.baseDirty = false;
-    }
     const ctx = this.ctx;
-    // Identity blit: base is backing-store sized, so drawImage(base, 0, 0) is 1:1.
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(this.base, 0, 0);
+    if (this.gpuMode) {
+      // GPU hybrid: the WebGL canvas below renders the map → clear the Canvas2D surface TRANSPARENT
+      // (it shows through) instead of blitting the opaque base. Sprites/decorations/UI draw on top.
+      ctx.clearRect(0, 0, this.base.width, this.base.height);
+    } else {
+      if (this.baseDirty) {
+        this.drawBase(world, camera);
+        this.baseDirty = false;
+      }
+      // Identity blit: base is backing-store sized, so drawImage(base, 0, 0) is 1:1.
+      ctx.drawImage(this.base, 0, 0);
+    }
 
     // Preview overlay (composite, not base): translucent green/red tile tints, drawn
     // at the DPR transform in CSS-space coords so they read on top of the base blit.
@@ -1280,7 +1298,7 @@ export class Renderer {
     // on screen, so hundreds–thousands of per-tile blits/frame tank FPS — and the slosh is sub-pixel
     // there anyway. The static (cached) base water shows instead; slosh kicks in at zoom ≥ 2 where the
     // visible tile count is bounded (Maddy: water animation tanks perf zoomed out).
-    if (this.hasTileset && this.waterSlosh.size > 0 && camera.zoom >= 2) {
+    if (!this.gpuMode && this.hasTileset && this.waterSlosh.size > 0 && camera.zoom >= 2) {
       const path = this.tileMask(world, camera, 'water', (m, i) => m.water[i] !== 0);
       if (path) {
         const o = camera.worldToScreen(0, 0);
@@ -1364,7 +1382,7 @@ export class Renderer {
     // Wavy grass / canopy: scroll the wind-streak sheen over grass/meadow/forest along the prevailing
     // wind, clipped to the cached grass mask, at low alpha — a subtle wind ripple. Same non-row-major
     // pattern technique as the water (O(1) draws/frame), so no top-bar.
-    if (this.hasTileset && this.grassSheen && ts >= 6) {
+    if (!this.gpuMode && this.hasTileset && this.grassSheen && ts >= 6) {
       const path = this.tileMask(
         world,
         camera,
@@ -1670,7 +1688,7 @@ export class Renderer {
     // ground + ambient props (Maddy). Evaluated as NON-periodic fBm in WORLD space into a low-res buffer,
     // then upscaled smooth over the viewport — so it never tiles/tessellates and drifts with the wind.
     // Skipped when a DATA overlay is active so the viz reads clean.
-    if (this.hasTileset && this.overlay === null && this.liveOverlay === null) {
+    if (!this.gpuMode && this.hasTileset && this.overlay === null && this.liveOverlay === null) {
       const BW = 96;
       const BH = 60;
       if (!this.cloudBuf) {

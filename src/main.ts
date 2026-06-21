@@ -21,6 +21,7 @@ import { FixedTickLoop } from './engine/loop';
 import { Camera } from './ui/camera';
 import { Renderer, exportProceduralTiles } from './ui/renderer';
 import { mountSatelliteDemo } from './ui/satelliteShader';
+import { GpuRenderer } from './ui/gpuRenderer';
 import { createAmbientState, stepAmbient, setParkingLots, setHouseholds, setPlantEmitters, seedDecay, liveInspectLine, applyLiveCaps } from './ui/ambientContent';
 import { loadSettings, saveSettings } from './ui/settingsStore';
 import { mountSettingsPanel } from './ui/settingsPanel';
@@ -104,13 +105,10 @@ export function main(): void {
     [terrainStage(), mosesCenturyStage(), ecoSeedStage()],
   );
 
-  // Dev route: ?shader renders the REAL seed world via the procedural pass (phase 5; bake-independent)
-  // — proves the data bridge + shader on actual worldgen output. Returns before the live game mounts.
-  if (params.has('shader')) {
-    const handle = mountSatelliteDemo(canvas, { map: world.map });
-    (window as unknown as { __satDemo?: unknown }).__satDemo = handle;
-    return;
-  }
+  // ?shader boots the FULL game with the GPU hybrid path on (the WebGL map under the live Canvas2D
+  // sprites/UI, driven by the real camera) — so it zooms/pans and shows agents, unlike the bare
+  // ?shaderdemo mount. Safe to open in a scratch tab. (Will become a settings toggle.)
+  const gpuParam = params.has('shader');
 
   // Tech-tree state: communal effort accrues into it each sim tick (see below).
   const tech = createTechState(TECH_TREE);
@@ -143,6 +141,32 @@ export function main(): void {
 
   const renderer = new Renderer(canvas);
   renderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
+  if (canvas.style.position === '') canvas.style.position = 'relative'; // sit ABOVE the GPU canvas (z-index 0)
+  canvas.style.zIndex = '1';
+
+  // GPU hybrid path (Increment 1): a WebGL2 canvas under the Canvas2D sprite/UI layer, driven by the
+  // live camera. mountGpu falls back to CPU (returns false) if WebGL2 is unavailable. The CPU path
+  // stays the default + fallback. Toggled via ?shader now (settings toggle next).
+  let gpuRenderer: GpuRenderer | null = null;
+  const mountGpu = (): boolean => {
+    try {
+      gpuRenderer = new GpuRenderer(world.map);
+      gpuRenderer.mount();
+      gpuRenderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
+      renderer.setGpuMode(true);
+      return true;
+    } catch (e) {
+      console.warn('WebGL2 unavailable — staying on the CPU renderer:', e);
+      gpuRenderer = null;
+      return false;
+    }
+  };
+  const unmountGpu = (): void => {
+    gpuRenderer?.dispose();
+    gpuRenderer = null;
+    renderer.setGpuMode(false);
+  };
+  if (gpuParam) mountGpu();
 
   // Ambient sprites (cars/flora/smog/props): load once, drawn under a tileset (micro-machine cars,
   // smog plumes). Resilient — a missing sprite just isn't drawn; never blocks the render loop.
@@ -165,6 +189,7 @@ export function main(): void {
   const markDirty = (): void => {
     dirty = true;
     renderer.invalidateBase();
+    gpuRenderer?.invalidate(); // re-pack the world grid for the GPU path (cheap dirty-rect upload)
   };
   const markPreviewDirty = (): void => {
     dirty = true;
@@ -267,6 +292,17 @@ export function main(): void {
       camera.centerOn(wx, wy, zoom);
       markDirty();
     },
+    toggleGpu: (): boolean => {
+      if (gpuRenderer) {
+        unmountGpu();
+        markDirty();
+        return false;
+      }
+      const ok = mountGpu();
+      markDirty();
+      return ok;
+    },
+    gpuOn: (): boolean => gpuRenderer !== null,
     camera,
     world,
     ambient: ambientState,
@@ -836,6 +872,7 @@ export function main(): void {
     cssHeight = window.innerHeight;
     camera.setViewport(cssWidth, cssHeight);
     renderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
+    gpuRenderer?.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
     markDirty();
   });
 
@@ -914,6 +951,8 @@ export function main(): void {
     // sim (its FixedTickLoop clamp owns catch-up); never fold the ambient dt into it.
     sim.advance(now - last);
     last = now;
+    // GPU hybrid: render the WebGL map EVERY frame (it animates via u_time) — under the Canvas2D layer.
+    gpuRenderer?.render(camera, cssWidth, cssHeight, now / 1000);
     if (ambientOn && !document.hidden) {
       // Continuous ambient path: step the ambient sim on its OWN clock (its Task-1
       // clamp owns catch-up), then composite + sprites. The base rebuilds inside
