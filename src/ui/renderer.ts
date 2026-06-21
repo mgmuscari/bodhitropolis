@@ -691,6 +691,7 @@ export class Renderer {
   // and the CPU water/grass/cloud animations are skipped (the GPU does them). Sprites/decorations/UI
   // still draw on top. CPU path stays the no-WebGL fallback. (Hybrid shader, Maddy 2026-06-20.)
   private gpuMode = false;
+  private baseTexVersion = 0; // bumped each base rebuild so the GPU path knows to re-upload the base texture
   // Cached screen-space clip masks (Path2D per kind: 'water', 'grass') so the animated overlays are
   // O(1) draws/frame (clip + pattern fill) instead of a per-tile row-major loop (the antipattern).
   private maskCache = new Map<string, { key: string; path: Path2D | null }>();
@@ -785,6 +786,18 @@ export class Renderer {
   setGpuMode(on: boolean): void {
     this.gpuMode = on;
     this.invalidateBase();
+  }
+
+  /** The offscreen CPU base canvas (terrain + buildings + roads + all line/divider/marking rules) —
+   *  the GPU path uploads this as its albedo texture and jeuje's it with dynamics. Backing-store sized. */
+  baseCanvas(): HTMLCanvasElement {
+    return this.base;
+  }
+
+  /** Increments each time the base is rebuilt — the GPU path re-uploads the base texture only when this
+   *  changes (camera move / built-layer edit), not every frame. */
+  baseVersion(): number {
+    return this.baseTexVersion;
   }
 
   /** A cached screen-space clip path of the visible tiles matching `want`, rebuilt only when the screen
@@ -1227,18 +1240,21 @@ export class Renderer {
    *     now, NOT the base — so a hover never invalidates the base).
    */
   private composite(world: WorldState, camera: Camera): void {
+    // The CPU base (terrain + buildings + roads + ALL the line/divider/marking rules) is rendered the
+    // SAME in both modes — Maddy: "draw the base layer with CPU and jeuje it up by the shader." In GPU
+    // mode the shader samples this base canvas as its albedo and adds the dynamics (water/shadows/
+    // day-night/grass/clouds); the visible Canvas2D is cleared transparent so the shader shows through.
+    if (this.baseDirty) {
+      this.drawBase(world, camera);
+      this.baseDirty = false;
+      this.baseTexVersion++; // signals the GPU path to re-upload the base texture
+    }
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.imageSmoothingEnabled = false;
     if (this.gpuMode) {
-      // GPU hybrid: the WebGL canvas below renders the map → clear the Canvas2D surface TRANSPARENT
-      // (it shows through) instead of blitting the opaque base. Sprites/decorations/UI draw on top.
-      ctx.clearRect(0, 0, this.base.width, this.base.height);
+      ctx.clearRect(0, 0, this.base.width, this.base.height); // visible transparent; GPU draws the base
     } else {
-      if (this.baseDirty) {
-        this.drawBase(world, camera);
-        this.baseDirty = false;
-      }
       // Identity blit: base is backing-store sized, so drawImage(base, 0, 0) is 1:1.
       ctx.drawImage(this.base, 0, 0);
     }

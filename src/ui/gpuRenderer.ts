@@ -30,6 +30,7 @@ export class GpuRenderer {
   private gl: WebGL2RenderingContext | null = null;
   private shader: SatelliteShader | null = null;
   private canvas: HTMLCanvasElement | null = null;
+  private lastBaseVersion = -1;
   private readonly bridge: GridTextureBridge;
 
   constructor(private readonly map: GameMap) {
@@ -67,13 +68,31 @@ export class GpuRenderer {
     this.bridge.repackAll(this.map);
   }
 
-  render(camera: Camera, cssWidth: number, cssHeight: number, timeSec: number): void {
+  render(
+    camera: Camera,
+    cssWidth: number,
+    cssHeight: number,
+    timeSec: number,
+    base: TexImageSource,
+    baseVersion: number,
+  ): void {
     if (!this.shader || !this.gl) return;
     this.shader.uploadDirty(this.bridge);
+    // Re-upload the CPU base (the baked per-cell tiles) as the albedo ONLY when it changed (camera
+    // move / built edit) — not every frame. The animation runs on the GPU via u_time over this base.
+    if (baseVersion !== this.lastBaseVersion) {
+      this.shader.uploadBase(base);
+      this.lastBaseVersion = baseVersion;
+    }
     this.gl.clearColor(0.078, 0.071, 0.122, 1); // #14121f — matches the Canvas2D base bg out-of-map
     this.gl.clear(this.gl.COLOR_BUFFER_BIT);
     const { origin, view } = cameraToShaderView(camera, cssWidth, cssHeight);
     this.shader.render({ time: timeSec, sun: SUN, shadow: SHADOW, origin, view, dayspeed: DAYSPEED });
+  }
+
+  /** Force a base re-upload on the next render (e.g. after a resize changes the base canvas size). */
+  invalidateBase(): void {
+    this.lastBaseVersion = -1;
   }
 
   dispose(): void {

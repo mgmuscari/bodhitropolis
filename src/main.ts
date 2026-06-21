@@ -873,6 +873,7 @@ export function main(): void {
     camera.setViewport(cssWidth, cssHeight);
     renderer.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
     gpuRenderer?.resize(cssWidth, cssHeight, window.devicePixelRatio || 1);
+    gpuRenderer?.invalidateBase(); // base canvas resized → re-upload it next frame
     markDirty();
   });
 
@@ -951,8 +952,6 @@ export function main(): void {
     // sim (its FixedTickLoop clamp owns catch-up); never fold the ambient dt into it.
     sim.advance(now - last);
     last = now;
-    // GPU hybrid: render the WebGL map EVERY frame (it animates via u_time) — under the Canvas2D layer.
-    gpuRenderer?.render(camera, cssWidth, cssHeight, now / 1000);
     if (ambientOn && !document.hidden) {
       // Continuous ambient path: step the ambient sim on its OWN clock (its Task-1
       // clamp owns catch-up), then composite + sprites. The base rebuilds inside
@@ -961,12 +960,15 @@ export function main(): void {
       lastAmbient = now;
       renderer.renderFrame(world, camera, ambientState);
       dirty = false;
-    } else if (dirty) {
-      // Legacy ambient-OFF path: repaint only when something changed (byte-identical
-      // to today's render path).
-      renderer.render(world, camera);
+    } else if (dirty || gpuRenderer) {
+      // Legacy ambient-OFF path: repaint only when something changed. With GPU on we still run the
+      // composite (it produces/clears the base the GPU samples) each frame the base is dirty.
+      if (dirty) renderer.render(world, camera);
       dirty = false;
     }
+    // GPU hybrid: render the WebGL map EVERY frame (animates via u_time), AFTER the CPU base pass so
+    // it samples the freshest baked tiles. The base re-uploads only when its version changed.
+    gpuRenderer?.render(camera, cssWidth, cssHeight, now / 1000, renderer.baseCanvas(), renderer.baseVersion());
     // Sim-gated (Y5): re-derive the dock/panel signatures + refresh on change ONLY
     // when a sim tick has run since the last sync — not every rAF frame.
     if (simChanged) {

@@ -42,6 +42,7 @@ precision highp float;
 ${glslDefines()}
 
 uniform sampler2D u_data; // packed world: R=type G=height/band/class B=adjacency A=sim
+uniform sampler2D u_base; // the CPU-rendered base (terrain+buildings+roads+all markings) — the albedo
 uniform vec2 u_grid;      // data-texture size in cells (for sampling normalization)
 uniform vec2 u_origin;    // top-left visible world cell (camera pan)
 uniform vec2 u_view;      // visible window size in cells (camera zoom)
@@ -86,65 +87,53 @@ void main() {
   float G = d.g * 255.0;
   int mask = int(d.b * 255.0 + 0.5);
   float sim = d.a;
-  float h = hash21(ci + 0.5); // per-tile hash → anti-plaid jitter
+  float h = hash21(ci + 0.5); // per-tile hash → phase variety
 
-  vec3 col;
+  // ALBEDO = the CPU-baked per-cell tile (terrain + building + lines/dividers/markings/props already
+  // composited by the CPU base pass). The GPU is then free to do "affine nonsense + lighting" on it
+  // (Maddy). Water cells get an AFFINE slosh: displace the sample by flowing noise so the baked water
+  // tiles undulate — the wang-tiled base + this displacement = the slosh, now per-pixel on the GPU.
+  vec2 baseUv = v_uv;
   if (type == SAT_WATER) {
-    // two flowing octaves + a moving specular glint — the one thing a static tile can't do
+    vec2 flow = vec2(
+      fbm(g * 0.7 + vec2(u_time * 0.05, u_time * 0.04)),
+      fbm(g * 0.7 + vec2(40.0 - u_time * 0.04, 9.0 + u_time * 0.05))
+    ) - 0.5;
+    baseUv += (flow * 0.22) / u_view; // displacement in screen-UV, ~0.1 tile
+  }
+  vec3 col = texture(u_base, baseUv).rgb;
+
+  if (type == SAT_WATER) {
+    // animated swell + specular glint + an SDF-ish shoreline foam band, OVER the baked water albedo
     float wn = fbm(g * 0.6 + vec2(u_time * 0.04, u_time * 0.03));
     float wn2 = fbm(g * 1.7 - vec2(u_time * 0.07, u_time * 0.05));
     float spec = pow(max(wn, wn2), 4.0);
-    vec3 deep = vec3(0.05, 0.18, 0.32), shallow = vec3(0.11, 0.33, 0.45);
-    col = mix(deep, shallow, wn * 0.7 + wn2 * 0.3) + spec * 0.3;
-    // SDF-ish shoreline: an animated foam band wherever a 4-neighbour is land
+    col = mix(col, col * 1.22, wn * 0.6) + spec * 0.16;
     float land = isLand(ci + vec2(1, 0)) + isLand(ci + vec2(-1, 0)) + isLand(ci + vec2(0, 1)) + isLand(ci + vec2(0, -1));
     if (land > 0.0) {
       float foam = (0.5 + 0.5 * sin(u_time * 2.0 + (g.x + g.y) * 3.0)) * clamp(land, 0.0, 1.0);
-      col = mix(col, vec3(0.72, 0.85, 0.90), foam * 0.32);
+      col = mix(col, vec3(0.80, 0.88, 0.92), foam * 0.22);
     }
+  } else if (type == SAT_TERRAIN || type == SAT_GREEN) {
+    // grass sheen: a travelling wind-gust shimmer over the baked green (bare band 0 stays still)
+    int band = int(mod(G, 4.0));
+    float veg = (type == SAT_GREEN || band > 0) ? 1.0 : 0.0;
+    col += col * veg * 0.06 * sin(dot(g, vec2(0.6, 0.8)) - u_time * 1.2);
   } else if (type == SAT_ROAD) {
-    col = vec3(0.21, 0.21, 0.23) + (h - 0.5) * 0.03;
-    // centerlines branch on the B-channel adjacency mask (N=1 E=2 S=4 W=8)
-    vec2 cc = abs(lf - 0.5);
-    float line = 0.0;
-    if ((mask & 2) != 0 || (mask & 8) != 0) line = max(line, 1.0 - smoothstep(0.03, 0.05, cc.y));
-    if ((mask & 1) != 0 || (mask & 4) != 0) line = max(line, 1.0 - smoothstep(0.03, 0.05, cc.x));
-    col = mix(col, vec3(0.78, 0.66, 0.28), line * 0.7);
-    // traffic FLOW: a travelling pulse along the road axis, brightness scaled by density (A channel)
+    // traffic FLOW: a travelling headlight pulse along the road axis, scaled by density (A channel)
     vec2 dir = vec2((mask & 2) != 0 || (mask & 8) != 0 ? 1.0 : 0.0, (mask & 1) != 0 || (mask & 4) != 0 ? 1.0 : 0.0);
     float along = dot(g, normalize(dir + vec2(0.001)));
     float pulse = 0.5 + 0.5 * sin(along * 6.2832 - u_time * 3.0);
-    col += vec3(0.95, 0.78, 0.35) * sim * (0.25 + 0.6 * pulse); // headlight stream
-  } else if (type == SAT_TERRAIN) {
-    int band = int(mod(G, 4.0));
-    float elev = floor(G / 4.0) / 63.0;
-    vec3 bare = vec3(0.46, 0.39, 0.28), meadow = vec3(0.55, 0.55, 0.31);
-    vec3 grass = vec3(0.30, 0.46, 0.22), forest = vec3(0.16, 0.31, 0.15);
-    vec3 base = band == 0 ? bare : band == 1 ? meadow : band == 2 ? grass : forest;
-    // wavy grass: vegetated bands ripple in the wind (bare earth stays still)
-    float veg = band == 0 ? 0.0 : 1.0;
-    vec2 wind = veg * vec2(sin(u_time * 0.8 + g.y * 1.5), cos(u_time * 0.6 + g.x * 1.3)) * 0.05;
-    float n = fbm(g * 1.8 + h * 10.0 + wind);
-    col = base * (0.78 + 0.44 * n);
-    col += base * veg * 0.07 * sin(dot(g, vec2(0.6, 0.8)) - u_time * 1.2); // moving wind gust sheen
-    col *= 0.72 + 0.56 * elev; // relief shading from packed elevation
-  } else if (type == SAT_GREEN) {
-    vec2 wind = vec2(sin(u_time * 0.9 + g.y * 1.6), cos(u_time * 0.7 + g.x * 1.4)) * 0.06;
-    col = vec3(0.20, 0.44, 0.19) * (0.8 + 0.4 * fbm(g * 2.0 + h * 7.0 + wind));
-  } else {
-    vec3 roof;
-    if (type == SAT_RESIDENTIAL) roof = vec3(0.46, 0.23, 0.18);
-    else if (type == SAT_COMMERCIAL) roof = vec3(0.30, 0.37, 0.46);
-    else if (type == SAT_INDUSTRIAL) roof = vec3(0.41, 0.31, 0.20);
-    else if (type == SAT_CIVIC) roof = vec3(0.56, 0.51, 0.41);
-    else roof = vec3(0.27, 0.27, 0.30); // power
-    roof *= 0.82 + 0.34 * h;
-    float edge = step(0.07, min(min(lf.x, lf.y), min(1.0 - lf.x, 1.0 - lf.y)));
-    col = mix(roof * 0.6, roof, edge); // roof inset / parapet
+    col += vec3(0.95, 0.78, 0.35) * sim * (0.12 + 0.4 * pulse);
+  } else if (type >= SAT_RESIDENTIAL && type <= SAT_POWER) {
     // a slow specular glint sweeping across rooftops (HVAC/skylight catching the sun)
     float glint = pow(0.5 + 0.5 * sin((g.x + g.y) * 1.3 - u_time * 0.6 + h * 6.28), 8.0);
-    col += vec3(0.9, 0.88, 0.8) * glint * 0.18 * edge;
+    col += vec3(0.9, 0.88, 0.8) * glint * 0.12;
   }
+
+  // Clouds: non-repeating fBm drifting with time casts a soft moving shadow over the ground.
+  float cloud = fbm(g * 0.35 + vec2(u_time * 0.02, u_time * 0.015));
+  col *= 1.0 - smoothstep(0.55, 0.82, cloud) * 0.20;
 
   // Day/night: the sun ARCS east→west across the sky (NOT a full orbit around the map — that read as
   // flat-earth, Maddy). Altitude = sin(day): >0 daytime, <0 night. Azimuth sweeps via cos(day), with a
@@ -202,6 +191,7 @@ export class SatelliteShader {
   private readonly program: WebGLProgram;
   private readonly vao: WebGLVertexArrayObject;
   private readonly tex: WebGLTexture;
+  private readonly baseTex: WebGLTexture;
   private readonly uGrid: WebGLUniformLocation | null;
   private readonly uOrigin: WebGLUniformLocation | null;
   private readonly uView: WebGLUniformLocation | null;
@@ -228,8 +218,10 @@ export class SatelliteShader {
     this.program = program;
     this.vao = gl.createVertexArray()!;
     this.tex = gl.createTexture()!;
+    this.baseTex = gl.createTexture()!;
     gl.useProgram(program);
     gl.uniform1i(gl.getUniformLocation(program, 'u_data'), 0);
+    gl.uniform1i(gl.getUniformLocation(program, 'u_base'), 1); // the CPU base albedo on texture unit 1
     this.uGrid = gl.getUniformLocation(program, 'u_grid');
     this.uOrigin = gl.getUniformLocation(program, 'u_origin');
     this.uView = gl.getUniformLocation(program, 'u_view');
@@ -244,6 +236,7 @@ export class SatelliteShader {
     const gl = this.gl;
     this.gridW = bridge.width;
     this.gridH = bridge.height;
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
@@ -258,6 +251,7 @@ export class SatelliteShader {
     const rect = bridge.consumeDirty();
     if (!rect) return;
     const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.pixelStorei(gl.UNPACK_ROW_LENGTH, bridge.width);
     gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, rect.x);
@@ -268,9 +262,24 @@ export class SatelliteShader {
     gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
   }
 
+  /** Upload the CPU base canvas (the baked per-cell tiles) as the albedo texture (unit 1). Call only
+   *  when the base changed (camera move / built edit) — not every frame. Canvas row 0 (top) → texture
+   *  row 0, matching v_uv.y=0=top (no Y-flip). LINEAR so the water affine-displacement samples smooth. */
+  uploadBase(src: TexImageSource): void {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.baseTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+  }
+
   /**
-   * Draw the full-screen procedural pass. `origin`/`view` are the visible world window in cells
-   * (camera pan/zoom); both default to the full grid. `sun` need not be normalized.
+   * Draw the full-screen pass: sample the CPU base albedo (unit 1) + jeuje it (water/grass/traffic/
+   * glints/clouds/shadows). `origin`/`view` are the visible world window in cells (camera pan/zoom);
+   * both default to the full grid. `sun` need not be normalized.
    */
   render(opts: {
     time: number;
@@ -285,6 +294,8 @@ export class SatelliteShader {
     gl.bindVertexArray(this.vao);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.baseTex);
     if (this.uGrid) gl.uniform2f(this.uGrid, this.gridW, this.gridH);
     if (this.uOrigin) gl.uniform2f(this.uOrigin, opts.origin?.[0] ?? 0, opts.origin?.[1] ?? 0);
     if (this.uView) gl.uniform2f(this.uView, opts.view?.[0] ?? this.gridW, opts.view?.[1] ?? this.gridH);
