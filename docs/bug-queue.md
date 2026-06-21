@@ -82,12 +82,18 @@ of each group. Branch `playtest/overnight-batch` (sequential, one branch).
   tents on heavily demand-pathed empty tiles + discarded junk on worn ground). REMAINING: per-event
   displacement, shelter-anchored daily rounds, dedicated shelter kinds. `docs/design/unhoused-residents.md`.
 
-### 5 — Hybrid satellite shader (cold track)
-- 🔴 **Phase 2 — atlas albedo** — shader samples the baked tiles (not just procedural); prereq for phase 5
-  looking right. Detailed under HYBRID SATELLITE SHADER below + `docs/art/satellite-shader.md`.
-- 🔴 **Phase 5 — settings toggle under the menu bars** — fold the WebGL path into settings for live A/B;
-  two-canvas stack (WebGL base ← Canvas2D sprites/UI on top). CPU dynamics stay the permanent no-WebGL
-  default (NOT retired).
+### 5 — Hybrid satellite shader (ACTIVE — Maddy 2026-06-20: CPU water anim still hits perf, move animations to GPU)
+DECISION: **full hybrid path** — WebGL2 renders the MAP (baked-tile albedo + GPU water/grass/clouds/
+shadows); Canvas2D draws sprites + UI on top; a settings toggle (GPU⇄CPU) under the menu bars; CPU stays
+the no-WebGL fallback. Shippable increments (each verifiable via `?shader`):
+- 🟡 **Inc 1 — two-canvas stack + toggle plumbing** — WebGL canvas under the Canvas2D sprite/UI canvas;
+  `renderer: cpu|gpu` setting (WebGL2-gated); when GPU on, skip the Canvas2D base + CPU water/grass/cloud
+  overlays; sync camera/dpr/resize. (In progress.)
+- 🔴 **Inc 2 — phase 2 baked-tile ALBEDO** — shader samples the baked atlas so it keeps the Oakland look;
+  pack a per-cell atlas index/uv into the data texture (mirror the renderer's tile selection on the CPU
+  at invalidation). The hard part (multitile cells, road masks, variants, dihedral terrain).
+- 🔴 **Inc 3 — animations on GPU** — water (waves/shear/foam), grass sheen, non-repeating clouds, shadows
+  over the baked albedo. (Foundation already has procedural water/grass/glints/shadows.)
 
 ### 6 — Theme mechanic
 - ✅ **Asphalt-ground = redline / healing de-paves** (`be377120`) — `depaveAsphalt` (pure): redlined OPEN
