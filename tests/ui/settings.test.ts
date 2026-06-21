@@ -29,6 +29,13 @@ describe('settings defaults reproduce today’s game', () => {
   it('default tileset is the permanent procedural look', () => {
     expect(DEFAULT_SETTINGS.tileset).toBe('procedural');
   });
+
+  it('default renderer is gpu (falls back to cpu when WebGL2 is unavailable)', () => {
+    expect(DEFAULT_SETTINGS.renderer).toBe('gpu');
+    expect(clampSettings({ renderer: 'cpu' }).renderer).toBe('cpu');
+    expect(clampSettings({ renderer: 'gpu' }).renderer).toBe('gpu');
+    expect(clampSettings({ renderer: 'bogus' } as unknown as Partial<Settings>).renderer).toBe('gpu');
+  });
 });
 
 describe('CAP_PRESETS order from slow→fast machine', () => {

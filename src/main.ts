@@ -166,7 +166,7 @@ export function main(): void {
     gpuRenderer = null;
     renderer.setGpuMode(false);
   };
-  if (gpuParam) mountGpu();
+  if (gpuParam || settings.renderer === 'gpu') mountGpu();
 
   // Ambient sprites (cars/flora/smog/props): load once, drawn under a tileset (micro-machine cars,
   // smog plumes). Resilient — a missing sprite just isn't drawn; never blocks the render loop.
@@ -496,6 +496,16 @@ export function main(): void {
       saveSettings(settings);
       // Hot-swap the skin live (no regen): load its PNGs, then rebuild the atlas + invalidate base.
       void loadTileset(settings.tileset).then((overrides) => renderer.applyTileset(overrides));
+    },
+    onRendererChange: (mode): void => {
+      settings = clampSettings({ ...settings, renderer: mode });
+      saveSettings(settings);
+      if (mode === 'gpu') {
+        if (!gpuRenderer) mountGpu();
+      } else {
+        unmountGpu();
+      }
+      markDirty();
     },
   });
 

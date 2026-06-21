@@ -28,7 +28,12 @@ export interface Settings {
   world: WorldSettings;
   /** Render skin; `procedural` is the permanent default (generated tilesets are an optional skin). */
   tileset: string;
+  /** Render path: `gpu` = the WebGL2 hybrid (shader jeuje's the CPU base — water/shadows/day-night/
+   *  clouds); `cpu` = the Canvas2D path (the no-WebGL fallback). GPU falls back to CPU if unavailable. */
+  renderer: RendererMode;
 }
+
+export type RendererMode = 'cpu' | 'gpu';
 
 export type PresetTier = 'low' | 'medium' | 'high';
 export type MapSizeKey = 'small' | 'medium' | 'large' | 'huge';
@@ -54,6 +59,7 @@ export const DEFAULT_SETTINGS: Settings = {
   live: { ...CAP_PRESETS.medium },
   world: { mapWidth: MAP_SIZES.medium, mapHeight: MAP_SIZES.medium },
   tileset: 'procedural',
+  renderer: 'gpu',
 };
 
 // Safe bands. Caps are perf ceilings (the floor keeps the game from emptying; the ceiling is a memory
@@ -95,5 +101,6 @@ export function clampSettings(partial?: DeepPartial<Settings>): Settings {
       mapHeight: clampInt(world.mapHeight, MAP_BOUNDS[0], MAP_BOUNDS[1], d.world.mapHeight),
     },
     tileset: typeof p.tileset === 'string' ? p.tileset : d.tileset,
+    renderer: p.renderer === 'cpu' || p.renderer === 'gpu' ? p.renderer : d.renderer,
   };
 }

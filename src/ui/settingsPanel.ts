@@ -11,6 +11,7 @@ import {
   type LiveCaps,
   type MapSizeKey,
   type PresetTier,
+  type RendererMode,
   type Settings,
   type WorldSettings,
 } from './settings';
@@ -31,6 +32,8 @@ export interface SettingsPanelCallbacks {
   onWorldChange(world: WorldSettings): void;
   /** A tileset (skin) change to apply IMMEDIATELY (hot-swap, no regen) and persist. */
   onTilesetChange(tileset: string): void;
+  /** A render-path change (cpu ⇄ gpu) to apply IMMEDIATELY (mount/unmount the WebGL layer) and persist. */
+  onRendererChange(renderer: RendererMode): void;
 }
 
 const PRESET_TIERS: PresetTier[] = ['low', 'medium', 'high'];
@@ -77,6 +80,40 @@ export function mountSettingsPanel(
     panel.appendChild(performanceSection(s));
     panel.appendChild(worldSection(s));
     panel.appendChild(tilesetSection(s));
+    panel.appendChild(rendererSection(s));
+  };
+
+  // — Renderer (GPU hybrid shader ⇄ CPU), instant —
+  const webgl2 = (): boolean => {
+    try {
+      return document.createElement('canvas').getContext('webgl2') !== null;
+    } catch {
+      return false;
+    }
+  };
+  const rendererSection = (s: Settings): HTMLElement => {
+    const sec = section('Renderer — applies instantly');
+    const r = row('Mode');
+    const select = document.createElement('select');
+    const has = webgl2();
+    for (const [val, label] of [['gpu', 'GPU shader (WebGL2)'], ['cpu', 'CPU (Canvas2D)']] as const) {
+      const o = document.createElement('option');
+      o.value = val;
+      o.textContent = label + (val === 'gpu' && !has ? ' — unavailable' : '');
+      o.selected = s.renderer === val;
+      if (val === 'gpu' && !has) o.disabled = true;
+      select.appendChild(o);
+    }
+    select.addEventListener('change', () => cb.onRendererChange(select.value as RendererMode));
+    r.appendChild(select);
+    sec.appendChild(r);
+    const note = document.createElement('div');
+    note.className = 'settings-panel__note';
+    note.textContent = has
+      ? 'GPU jeujés the baked tiles with water, shadows, day/night + clouds. CPU is the fallback.'
+      : 'WebGL2 unavailable in this browser — using the CPU renderer.';
+    sec.appendChild(note);
+    return sec;
   };
 
   // — Performance (live caps, instant) —
