@@ -16,11 +16,15 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { submit, awaitOutput, fetchImage, buildTxt2imgGraph, whiteToAlpha, seedFor, COMFY_URL } from './lib.mjs';
-import { isTopDown, facesForward, isIntact, overallOpacity } from './validate.mjs';
+import { isTopDown, facesForward, isIntact, overallOpacity, centerOpacity } from './validate.mjs';
 
 // A keyed sprite must have removed SOME background (object on transparency). Above this mean alpha it's
 // a SOLID BOX — the floodfill keyed nothing out (a framed block, not a subject, e.g. the white-box ped).
 const MAX_SPRITE_OPACITY = 0.85;
+// Peds/cyclists are SMALL FIGURES (a head + shoulders from above), not tile-filling blobs. Cap the
+// centre fill so a bake that came out big/boxy (the green-coat walk-1) retries for a small one.
+const SMALL_FIGURE = new Set(['peds', 'cyclists']);
+const MAX_FIGURE_CENTER = 0.55;
 
 // Categories the renderer rotates to a travel heading, so the sprite's FRONT must point UP (north).
 // These get the extra forward-facing check on top of top-down (Maddy: taxi/van drove backwards).
@@ -160,8 +164,9 @@ async function worker(queue) {
         // Also reject a SOLID BOX (nothing keyed out → a framed block, not a subject — the white-box ped).
         const intact = isIntact(png);
         const keyed = overallOpacity(png) < MAX_SPRITE_OPACITY;
-        ok = v.ok && intact && keyed;
-        note = !intact ? 'floodfilled — retrying' : !keyed ? 'solid box — retrying' : v.text.split('\n')[0];
+        const small = !SMALL_FIGURE.has(cat) || centerOpacity(png) <= MAX_FIGURE_CENTER;
+        ok = v.ok && intact && keyed && small;
+        note = !intact ? 'floodfilled — retrying' : !keyed ? 'solid box — retrying' : !small ? 'too big/boxy — retrying' : v.text.split('\n')[0];
         if (ok) break;
       }
       mkdirSync(join(OUT, cat), { recursive: true });

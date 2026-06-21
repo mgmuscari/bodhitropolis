@@ -87,8 +87,8 @@ const GLYPH_MIN_TS = 16;
 // Procedural water frames: frame 0 is the static base (baked into the atlas); the set is the sloshy
 // flipbook cycled in the low-alpha overlay (the surface undulates) while it scrolls with the wind.
 const WATER_FRAMES = 16;
-const WATER_FPS = 12;
-const WATER_SLOSH_FPS = 5; // shear-cycle advance rate for the precomputed per-tile slosh flipbook
+const WATER_SLOSH_FPS = 5; // shear-cycle advance rate for the foam + precomputed per-tile slosh flipbook
+const WATER_LAYER_MARGIN = 96; // CSS-px margin around the memoized water layer (pans within it just re-blit)
 const ASPHALT_GROUND_COLOR = '#3a3833'; // paved-over redlined open ground
 const ASPHALT_GROUND_ALPHA = 0.72; // strength at full redline grade (faded by depaveAsphalt near greens)
 const GARBAGE_WEAR = 150; // wear at/above which a worn empty tile shows discarded junk
@@ -679,6 +679,14 @@ export class Renderer {
   // once on tileset load so the per-frame slosh is a plain blit per tile (not a live rotate+shear
   // drawImage, which murdered FPS over hundreds of water tiles — Maddy). Empty when no tileset.
   private waterSlosh = new Map<string, HTMLCanvasElement[][]>();
+  // Memoized composited water LAYER: the per-tile slosh only changes ~WATER_SLOSH_FPS×/sec, but the
+  // frame renders at 60 — so we render the water into this offscreen ONLY when the slosh frame or the
+  // camera changes, and blit it (one drawImage) the other frames. Kills the per-frame N-tile cost over
+  // large seas (Maddy: optimize water anim over large water areas).
+  private waterLayer: HTMLCanvasElement | null = null;
+  private waterLayerCtx: CanvasRenderingContext2D | null = null;
+  private waterLayerKey = '';
+  private waterLayerOrigin = { sx: 0, sy: 0 }; // camera origin when the layer was rendered (for pan-offset blits)
   // Cached screen-space clip masks (Path2D per kind: 'water', 'grass') so the animated overlays are
   // O(1) draws/frame (clip + pattern fill) instead of a per-tile row-major loop (the antipattern).
   private maskCache = new Map<string, { key: string; path: Path2D | null }>();
@@ -1275,49 +1283,81 @@ export class Renderer {
     if (this.hasTileset && this.waterSlosh.size > 0 && camera.zoom >= 2) {
       const path = this.tileMask(world, camera, 'water', (m, i) => m.water[i] !== 0);
       if (path) {
-        const t = performance.now() / 1000;
-        const map = world.map;
-        const range = camera.visibleTileRange();
-        const wx = ambient.wind.dx;
-        const wy = ambient.wind.dy;
-        const frameBase = Math.floor(t * WATER_SLOSH_FPS);
-        ctx.save();
-        ctx.clip(path);
-        for (let ty = range.y0; ty <= range.y1; ty++) {
-          for (let tx = range.x0; tx <= range.x1; tx++) {
-            const i = map.idx(tx, ty);
-            if (map.water[i] === 0) continue;
-            const fb = this.waterSlosh.get(`${kindOf(map, i)}-${bandOf(map.elevation[i]!)}`);
-            if (!fb || fb.length === 0) continue;
-            const { sx, sy } = camera.worldToScreen(tx, ty);
-            const rotB = Math.floor(waterTileTransform(tx, ty).rot * WATER_SLOSH_ROTS) % WATER_SLOSH_ROTS;
-            // phase = position projected on the wind → consecutive tiles downwind are one frame apart,
-            // so the shear cycle reads as waves travelling along the wind. (Modulo, kept non-negative.)
-            const phase = Math.round(tx * wx + ty * wy);
-            const frame = (((frameBase + phase) % WATER_SLOSH_FRAMES) + WATER_SLOSH_FRAMES) % WATER_SLOSH_FRAMES;
-            ctx.drawImage(fb[rotB]![frame]!, Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
+        const o = camera.worldToScreen(0, 0);
+        const frameIdx = Math.floor((performance.now() / 1000) * WATER_SLOSH_FPS);
+        // MEMOIZE, WORLD-ANCHORED: render the water into an offscreen that's MARGIN px bigger than the
+        // viewport on every side, and remember the camera origin it was rendered at. Re-render ONLY
+        // when the slosh frame advances (~WATER_SLOSH_FPS×/sec), zoom changes, or the pan exceeds the
+        // margin — so PANNING just blits the cached layer at the pan offset (no per-frame N-tile pass,
+        // which was the jaggy bit). Over a large sea this is one drawImage on the common frame.
+        const M = WATER_LAYER_MARGIN;
+        const dx = o.sx - this.waterLayerOrigin.sx;
+        const dy = o.sy - this.waterLayerOrigin.sy;
+        const dims = `${this.canvas.width}x${this.canvas.height}`;
+        const key = `${frameIdx}|${camera.zoom}|${dims}`;
+        const panned = Math.abs(dx) > M || Math.abs(dy) > M;
+        if (key !== this.waterLayerKey || panned || !this.waterLayer) {
+          const dw = Math.round((this.cssWidth + 2 * M) * this.dpr);
+          const dh = Math.round((this.cssHeight + 2 * M) * this.dpr);
+          if (!this.waterLayer || this.waterLayer.width !== dw || this.waterLayer.height !== dh) {
+            this.waterLayer = document.createElement('canvas');
+            this.waterLayer.width = dw;
+            this.waterLayer.height = dh;
+            this.waterLayerCtx = this.waterLayer.getContext('2d');
           }
-        }
-        // Foam twinkle: the sloshy flipbook scrolled at low alpha, present 100% of the time (Maddy:
-        // a subtle 10–20% twinkle always on), so crests sparkle over the sloshing base. O(1).
-        if (this.waterFrames.length > 0) {
-          const tex = this.waterFrames[Math.floor(t * WATER_FPS) % this.waterFrames.length]!;
-          const o = camera.worldToScreen(0, 0);
-          const wlen = Math.hypot(wx, wy) || 1;
-          const osc = Math.sin(t * 0.8) * ts * 0.5;
-          const pat = ctx.createPattern(tex, 'repeat');
-          if (pat) {
-            const m = new DOMMatrix();
-            m.translateSelf(o.sx + (wx / wlen) * osc, o.sy + (wy / wlen) * osc);
-            m.scaleSelf(ts / BASE_TILE, ts / BASE_TILE);
-            pat.setTransform(m);
-            ctx.globalAlpha = 0.14;
-            ctx.fillStyle = pat;
-            ctx.fillRect(0, 0, w, h);
-            ctx.globalAlpha = 1;
+          const wl = this.waterLayerCtx!;
+          // offscreen (0,0) = screen (−M,−M): translate the dpr transform by +M so CSS screen coords map in
+          wl.setTransform(this.dpr, 0, 0, this.dpr, M * this.dpr, M * this.dpr);
+          wl.clearRect(-M, -M, this.cssWidth + 2 * M, this.cssHeight + 2 * M);
+          wl.imageSmoothingEnabled = false;
+          wl.save();
+          wl.clip(path);
+          const map = world.map;
+          const range = camera.visibleTileRange();
+          const margTiles = Math.ceil(M / ts) + 1; // expand the range to fill the margin
+          const wx = ambient.wind.dx;
+          const wy = ambient.wind.dy;
+          for (let ty = range.y0 - margTiles; ty <= range.y1 + margTiles; ty++) {
+            for (let tx = range.x0 - margTiles; tx <= range.x1 + margTiles; tx++) {
+              if (!map.inBounds(tx, ty)) continue;
+              const i = map.idx(tx, ty);
+              if (map.water[i] === 0) continue;
+              const fb = this.waterSlosh.get(`${kindOf(map, i)}-${bandOf(map.elevation[i]!)}`);
+              if (!fb || fb.length === 0) continue;
+              const { sx, sy } = camera.worldToScreen(tx, ty);
+              const rotB = Math.floor(waterTileTransform(tx, ty).rot * WATER_SLOSH_ROTS) % WATER_SLOSH_ROTS;
+              // phase = position projected on the wind → waves travel downwind. (Modulo, non-negative.)
+              const phase = Math.round(tx * wx + ty * wy);
+              const frame = (((frameIdx + phase) % WATER_SLOSH_FRAMES) + WATER_SLOSH_FRAMES) % WATER_SLOSH_FRAMES;
+              wl.drawImage(fb[rotB]![frame]!, Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
+            }
           }
+          // Foam twinkle, quantized to the slosh frame so it stays inside the cache.
+          if (this.waterFrames.length > 0) {
+            const tex = this.waterFrames[frameIdx % this.waterFrames.length]!;
+            const wlen = Math.hypot(wx, wy) || 1;
+            const osc = Math.sin((frameIdx / WATER_SLOSH_FPS) * 0.8) * ts * 0.5;
+            const pat = wl.createPattern(tex, 'repeat');
+            if (pat) {
+              const m = new DOMMatrix();
+              m.translateSelf(o.sx + (wx / wlen) * osc, o.sy + (wy / wlen) * osc);
+              m.scaleSelf(ts / BASE_TILE, ts / BASE_TILE);
+              pat.setTransform(m);
+              wl.globalAlpha = 0.14;
+              wl.fillStyle = pat;
+              wl.fillRect(-M, -M, this.cssWidth + 2 * M, this.cssHeight + 2 * M);
+              wl.globalAlpha = 1;
+            }
+          }
+          wl.restore();
+          this.waterLayerKey = key;
+          this.waterLayerOrigin = { sx: o.sx, sy: o.sy };
         }
-        ctx.restore();
+        // Blit the memoized layer, shifted by the pan since it was rendered (cheap on pan frames).
+        const pdx = o.sx - this.waterLayerOrigin.sx;
+        const pdy = o.sy - this.waterLayerOrigin.sy;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(this.waterLayer!, -M + pdx, -M + pdy, this.cssWidth + 2 * M, this.cssHeight + 2 * M);
       }
     }
 
