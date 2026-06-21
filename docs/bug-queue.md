@@ -114,9 +114,14 @@ low luminance and got keyed away). Output = glowing-lights-on-transparent, align
 - ✅ **Pipeline + cruiser** (`4f2d74ee`, `ca8a902d`) — `tools/tileset/lights.mjs` (LoRA + PixelOE 32→16px);
   `AmbientSprites.emission` (index-free `cat/slug`, resilient loader); renderer draws it `'lighter'`
   (additive, evades shading) with the red/blue blink = the bar's two halves emphasized in alternation.
+- ✅ **Coal plant beacons** (`e80ff339`, `87fe558e`) — `lights.mjs` building source (stitch tier-0
+  footprint² atlas cells → inpaint → PixelOE → isolate → `<build>-lights.png`); `building/<kind>`
+  emission keys; drawBase collects light-bearing footprints, drawSprites overlays them additively with
+  a ~1 Hz aviation blink. Key learnings: keep the building prompt + JUDGE the PixelOE output (the raw
+  reads perspective); add `isometric` positive (the LoRA is iso-trained).
 - 🔴 **More sprite maps** — car tail/headlights, lit bus windows. Catalog-extend in `lights.mjs`.
-- 🔴 **Building beacons** — smokestack aviation lights (coal/gas), windmill nav light. Same method but
-  albedo sourced from the ATLAS, not the sprite dir (needs an atlas-albedo path in `lights.mjs`).
+- 🔴 **More building beacons** — gas flare (25), windmill nav light (28). Same building path; add to the
+  `lights.mjs` LIGHTS catalog + an `EMISSION_FILES` `building/<kind>` entry.
 - 🔴 **Night gating + spill** — emergency lights flash day+night (cruiser ✓); streetlights/windows are
   NIGHT-ONLY (fade in with `dayNightBrightness` from `lighting.ts`). Emissive maps spill weak light onto
   neighboring tiles → the foundation for **sodium-lamp nighttime light pollution** (Maddy's stated next).
