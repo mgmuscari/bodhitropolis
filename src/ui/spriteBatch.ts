@@ -79,7 +79,7 @@ function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLSh
 // ── Glow pass: emissive lights cast a soft ADDITIVE pool onto surrounding tiles (Maddy: "car
 //    headlights illuminating road in front"; emissive lights casting glow). Each source is a colored
 //    radial falloff quad, blended ONE,ONE over the scene so it brightens the ground + sprites around it.
-export const GLOW_FLOATS = 8; // pos(2) radius(1) color(3) intensity(1) [+1 pad]
+export const GLOW_FLOATS = 12; // pos(2) fwd(2) len(1) halfwidth(1) color(3) intensity(1) [+2 pad]
 
 export class GlowBatch {
   private program: WebGLProgram;
@@ -90,28 +90,46 @@ export class GlowBatch {
   private readonly u: Record<string, WebGLUniformLocation | null> = {};
 
   constructor(private readonly gl: WebGL2RenderingContext) {
+    // Two glow shapes: a forward CONE (headlights — cast ahead along travel, narrow at the car, widening
+    // and fading with distance) when a_len>0, else a RADIAL falloff (cruiser/beacon) using a_halfwidth.
     const vs = `#version 300 es
 layout(location=0) in vec2 a_corner;     // unit quad [-1,1]
-layout(location=1) in vec2 a_pos;        // world cell
-layout(location=2) in float a_radius;    // glow radius in cells
-layout(location=3) in vec3 a_color;
-layout(location=4) in float a_intensity;
+layout(location=1) in vec2 a_pos;        // world cell (cone origin / radial center)
+layout(location=2) in vec2 a_fwd;        // forward unit (travel dir); ignored when a_len==0
+layout(location=3) in float a_len;       // cone forward length in cells (0 = radial)
+layout(location=4) in float a_halfwidth; // cone half-width at the tip / radial radius
+layout(location=5) in vec3 a_color;
+layout(location=6) in float a_intensity;
 uniform vec2 u_origin; uniform vec2 u_view;
-out vec2 v_local; out vec3 v_color; out float v_int;
+out vec2 v_local; out vec3 v_color; out float v_int; out float v_cone; out float v_t; out float v_x;
 void main(){
-  vec2 world = a_pos + a_corner * a_radius;
+  vec2 world;
+  if (a_len > 0.0) {
+    vec2 side = vec2(-a_fwd.y, a_fwd.x);
+    float t = (a_corner.y + 1.0) * 0.5;            // 0 at the car .. 1 at the cone tip
+    float w = mix(a_halfwidth * 0.22, a_halfwidth, t);
+    world = a_pos + a_fwd * (t * a_len) + side * (a_corner.x * w);
+    v_cone = 1.0; v_t = t; v_x = a_corner.x; v_local = vec2(0.0);
+  } else {
+    world = a_pos + a_corner * a_halfwidth;
+    v_cone = 0.0; v_t = 0.0; v_x = 0.0; v_local = a_corner;
+  }
   vec2 ndc = ((world - u_origin)/u_view)*2.0 - 1.0;
   gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0);
-  v_local = a_corner; v_color = a_color; v_int = a_intensity;
+  v_color = a_color; v_int = a_intensity;
 }`;
     const fs = `#version 300 es
 precision highp float;
-in vec2 v_local; in vec3 v_color; in float v_int;
+in vec2 v_local; in vec3 v_color; in float v_int; in float v_cone; in float v_t; in float v_x;
 out vec4 fragColor;
 void main(){
-  float d = length(v_local);
-  float fall = smoothstep(1.0, 0.0, d);
-  fall *= fall; // softer core-to-edge
+  float fall;
+  if (v_cone > 0.5) {
+    fall = smoothstep(1.0, 0.0, v_t) * (1.0 - abs(v_x)); // fade forward + soft lateral edges
+    fall = max(fall, 0.0); fall *= fall;
+  } else {
+    float d = length(v_local); fall = smoothstep(1.0, 0.0, d); fall *= fall;
+  }
   fragColor = vec4(v_color * v_int * fall, 1.0);
 }`;
     const program = gl.createProgram()!;
@@ -132,7 +150,7 @@ void main(){
     gl.bindBuffer(gl.ARRAY_BUFFER, this.inst);
     const stride = GLOW_FLOATS * 4;
     const ptr = (loc: number, size: number, off: number): void => { gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, size, gl.FLOAT, false, stride, off * 4); gl.vertexAttribDivisor(loc, 1); };
-    ptr(1, 2, 0); ptr(2, 1, 2); ptr(3, 3, 3); ptr(4, 1, 6);
+    ptr(1, 2, 0); ptr(2, 2, 2); ptr(3, 1, 4); ptr(4, 1, 5); ptr(5, 3, 6); ptr(6, 1, 9);
     gl.bindVertexArray(null);
   }
 

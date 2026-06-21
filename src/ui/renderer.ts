@@ -800,6 +800,12 @@ export class Renderer {
     return this.base;
   }
 
+  /** Light-bearing building footprints collected during the last base build (world coords) — the GPU
+   *  glow pass casts a faint window/beacon glow from each (Maddy: windows/blinkies cast glow too). */
+  emissiveBuildingList(): readonly { x: number; y: number; w: number; h: number; kind: number }[] {
+    return this.emissiveBuildings;
+  }
+
   /** Increments each time the base is rebuilt — the GPU path re-uploads the base texture only when this
    *  changes (camera move / built-layer edit), not every frame. */
   baseVersion(): number {

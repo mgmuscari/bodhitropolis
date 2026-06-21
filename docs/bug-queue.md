@@ -18,6 +18,9 @@ The dated sections below this one are the **archive** (✅ done + diagnoses kept
 of each group. Branch `playtest/overnight-batch` (sequential, one branch).
 
 ### 1 — Live-game bugs (playtest loop, do first)
+- 🔴 **Train consist doesn't interpolate** (Maddy 2026-06-20) — the leading car (red locomotive) animates
+  smoothly but the white consist cars "tick along locked to the tiles behind it" (snap per-tile, no lerp).
+  The loco is interpolated; give the trailing cars the same smooth interpolation along the track.
 - 🔴 **Peds path into NON-destination plots** (Maddy 2026-06-20) — pedestrians should only be able to
   walk INTO a plot that is their own trip destination; right now they cut across/into arbitrary plots.
   Gate `isWalkable` (or the walkPath neighbour test) so a built plot tile is walkable for an agent ONLY
@@ -129,14 +132,27 @@ low luminance and got keyed away). Output = glowing-lights-on-transparent, align
   hazard baked as SEPARATE passes (not one map split by color — Maddy: the furnace was entangled). Static
   glow + per-building blink (per-anchor phase, no map-wide unison). Vehicles (8 cars + bus + 2 cyclists):
   headlights/taillights/bus-windows, NIGHT-GATED, parked cars OFF. Encampments (campfire) + bus-shelter.
-- 🟡 **ALL buildings (lit windows night-gated; power beacons)** — `lights.mjs` auto-scans the atlas
-  (1×1 `b-K-c` + multitile `b-K-WxH`), archetype prompts (WINDOW_KINDS vs POWER_BEACON), writes a
+- ✅ **ALL buildings (lit windows night-gated; power beacons)** (`45efb298`) — `lights.mjs` auto-scans the
+  atlas (1×1 `b-K-c` + multitile `b-K-WxH`), archetype prompts (WINDOW_KINDS vs POWER_BEACON), writes
   `lights-manifest.json` the loader reads; renderer derives each parcel's form stem + night-gates windows
-  while power (24–30) stays lit 24/7. Baking ~40 layers. (Maddy: "you missed ALL THE BUILDINGS", dark town.)
-- 🔴 **Light SPILL onto neighbour tiles** (Maddy 2026-06-20: "car headlights illuminating the road in
-  front") — take a sprite/building's emission and cast weak ambient light on surrounding tiles. The
-  foundation for **sodium-lamp nighttime light pollution**. Likely a GPU pass (additive bloom/spill from
-  emissive sources into a light buffer) once smog/effects are on GPU.
+  while power (24–30) stays lit 24/7. **1×1 maps were EMPTY** (tiny windows keyed away) → fix: brighter
+  windows prompt + gentler building isolation black-point (9%); re-baked all 1×1 forms.
+- ✅ **Sprites → GPU** (`98e7c9a7`, `1a37da72`) — the moving agents (cars/peds/cyclists/cruiser) render as
+  instanced quads in the base WebGL canvas, lit by the SAME pass as the ground (shared `now`), fixing the
+  CPU-buffer-vs-GPU day/night mismatch (Maddy: "sprite lighting not matching the game's ambient lighting";
+  "move sprites to gpu"). `spriteBatch.ts` (atlas + LIGHT_GLSL mirrors the base); CPU agent draws gated off.
+- ✅ **Emissive glow / light spill** (`2801aa79`) — `GlowBatch`: additive radial light pools cast onto the
+  surrounding ground (Maddy: "car headlights illuminating road in front"). Car headlights pool ahead
+  (night), cruiser bars flash red/blue. Foundation for sodium-lamp light pollution.
+- ✅ **Smog → GPU** (`617a000a`) — `smogOverlay.ts`: a transparent WebGL canvas at z2 (above the sprites)
+  sampling the live pollution field (R8 tex) + wind-drifted fBm haze. CPU plume draw gated off in gpuMode.
+- 🔴 **1×1 residential DIVERSITY** (Maddy 2026-06-20) — all single-tile residences share ONE light map (and
+  the albedo variant-selection makes auto-gen vs placed each use one variant). Bake N light variants per
+  high-frequency 1×1 kind + per-parcel selection (reuse the albedo variant hash). Also fix the albedo
+  variant selection so auto-gen residences vary (separate from lighting).
+- 🔵 **Building emission → GPU** (optional) — building windows/beacons still draw on CPU (#game z1, above
+  the GPU agents). Works (additive glow, ~7ms gate skew) but could move into the GPU pipeline for full
+  consistency + to feed the glow pass (window glow spilling onto streets).
 
 ### Done this session (2026-06-19 → 06-20, satellite polish)
 

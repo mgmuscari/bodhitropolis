@@ -19,6 +19,9 @@ import type { GameMap } from '../engine/map';
 import type { Camera } from './camera';
 
 type Rect = readonly [number, number, number, number];
+/** A light-bearing building footprint (world coords) — the renderer collects these; the glow pass casts
+ *  a faint window/beacon glow from each (Maddy: windows/hazard blinkies should cast glows too). */
+export type EmissiveBuilding = { x: number; y: number; w: number; h: number; kind: number };
 
 const SUN: readonly [number, number] = [0.65, 0.78]; // sun direction in tile space (shadows trace toward it)
 const SHADOW = 0.45;
@@ -103,7 +106,7 @@ export class GpuRenderer {
 
   /** Draw the moving agents as instanced quads in the base canvas (AFTER render()), lit by the shared
    *  lighting. Headlights/taillights are emission, night-gated; parked cars are off. */
-  renderAgents(ambient: AmbientState, camera: Camera, cssWidth: number, cssHeight: number, timeSec: number): void {
+  renderAgents(ambient: AmbientState, camera: Camera, cssWidth: number, cssHeight: number, timeSec: number, buildings: readonly EmissiveBuilding[] = []): void {
     const gl = this.gl;
     if (!gl || !this.batch || this.carRects.length === 0) return;
     const night = Math.min(1, Math.max(0, (0.8 - dayNightBrightness(timeSec)) / 0.3));
@@ -175,39 +178,58 @@ export class GpuRenderer {
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       this.batch.render(data, count, origin, view, timeSec, DAYSPEED);
     }
-    this.renderGlow(ambient, origin, view, timeSec, night);
+    this.renderGlow(ambient, origin, view, timeSec, night, buildings);
     gl.disable(gl.BLEND); // leave blend OFF so the next frame's opaque base pass isn't additive
   }
 
-  /** Emissive GLOW: soft additive light pools cast onto the surrounding tiles (Maddy: "car headlights
-   *  illuminating road in front"; emissive lights casting glow). Car headlights pool AHEAD of the car
-   *  (night), cruiser bars flash red/blue. Additive (ONE,ONE) over the lit scene. */
-  private renderGlow(ambient: AmbientState, origin: readonly [number, number], view: readonly [number, number], timeSec: number, night: number): void {
+  /** Emissive GLOW: soft additive light cast onto the surrounding tiles (Maddy: "car headlights
+   *  illuminating road in front" as a forward CONE; windows/hazard blinkies cast faint glows too).
+   *  Headlights = forward cone (night); cruiser bars flash red/blue (radial); building windows a faint
+   *  warm pool (night), power plants a faint warm glow + a blinking red beacon glow. Additive (ONE,ONE). */
+  private renderGlow(ambient: AmbientState, origin: readonly [number, number], view: readonly [number, number], timeSec: number, night: number, buildings: readonly EmissiveBuilding[]): void {
     const gl = this.gl;
     if (!gl || !this.glow) return;
-    const cap = ambient.cars.length + ambient.cruisers.length;
+    const cap = ambient.cars.length + ambient.cruisers.length + buildings.length * 2;
     if (this.glowData.length < cap * GLOW_FLOATS) this.glowData = new Float32Array(cap * GLOW_FLOATS);
     const g = this.glowData;
     let n = 0;
-    const put = (x: number, y: number, radius: number, r: number, gr: number, b: number, inten: number): void => {
+    // pos(2) fwd(2) len(1) halfwidth(1) color(3) intensity(1)
+    const cone = (x: number, y: number, fx: number, fy: number, len: number, hw: number, r: number, gr: number, b: number, inten: number): void => {
       const o = n * GLOW_FLOATS;
-      g[o] = x; g[o + 1] = y; g[o + 2] = radius; g[o + 3] = r; g[o + 4] = gr; g[o + 5] = b; g[o + 6] = inten;
+      g[o] = x; g[o + 1] = y; g[o + 2] = fx; g[o + 3] = fy; g[o + 4] = len; g[o + 5] = hw;
+      g[o + 6] = r; g[o + 7] = gr; g[o + 8] = b; g[o + 9] = inten;
       n++;
     };
+    const radial = (x: number, y: number, radius: number, r: number, gr: number, b: number, inten: number): void => cone(x, y, 0, 0, 0, radius, r, gr, b, inten);
     if (night > 0.02) {
       for (const c of ambient.cars) {
         if (c.parked) continue;
         const off = laneOffset(c.dir);
         const fwd = dirVector(c.dir);
-        // a warm pool just AHEAD of the car (headlight throw)
-        put(c.x + 0.5 + off.dx + fwd.dx * 0.8, c.y + 0.5 + off.dy + fwd.dy * 0.8, 1.4, 1.0, 0.88, 0.62, night * 0.5);
+        // a forward CONE cast from the car's nose along travel — subtle so dense traffic doesn't blow out
+        cone(c.x + 0.5 + off.dx + fwd.dx * 0.3, c.y + 0.5 + off.dy + fwd.dy * 0.3, fwd.dx, fwd.dy, 2.2, 0.7, 1.0, 0.92, 0.72, night * 0.13);
       }
     }
     const blue = Math.floor(timeSec * 1000 / 180) % 2 === 0;
     for (const c of ambient.cruisers) {
       const off = laneOffset(c.dir);
-      if (blue) put(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, 1.3, 0.3, 0.4, 1.0, 0.8);
-      else put(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, 1.3, 1.0, 0.25, 0.2, 0.8);
+      if (blue) radial(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, 1.0, 0.3, 0.45, 1.0, 0.35);
+      else radial(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy, 1.0, 1.0, 0.28, 0.22, 0.35);
+    }
+    // Building windows + hazard beacons cast a FAINT glow onto their surroundings.
+    for (const bld of buildings) {
+      const cx = bld.x + bld.w / 2;
+      const cy = bld.y + bld.h / 2;
+      const span = Math.max(bld.w, bld.h);
+      const isPower = bld.kind >= 24 && bld.kind <= 30;
+      if (isPower) {
+        radial(cx, cy, span * 0.5, 1.0, 0.62, 0.38, 0.07); // faint warm machinery glow (always)
+        const hash = (((bld.x * 73856093) ^ (bld.y * 19349663)) >>> 0);
+        const period = 420 + (hash % 6) * 90;
+        if ((timeSec * 1000 + (hash % period)) % period < period * 0.45) radial(cx, cy, span * 0.55, 1.0, 0.2, 0.16, 0.28); // red beacon glow
+      } else if (night > 0.02) {
+        radial(cx, cy, span * 0.6, 1.0, 0.86, 0.62, night * 0.1); // faint warm window glow (night)
+      }
     }
     if (n === 0) return;
     gl.enable(gl.BLEND);

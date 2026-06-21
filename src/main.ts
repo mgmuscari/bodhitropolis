@@ -998,7 +998,7 @@ export function main(): void {
     // it samples the freshest baked tiles. The base re-uploads only when its version changed.
     gpuRenderer?.render(camera, cssWidth, cssHeight, now / 1000, renderer.baseCanvas(), renderer.baseVersion());
     // GPU agents: the moving sprites lit by the SAME pass as the ground (drawn over the base, under UI).
-    if (gpuRenderer && ambientOn) gpuRenderer.renderAgents(ambientState, camera, cssWidth, cssHeight, now / 1000);
+    if (gpuRenderer && ambientOn) gpuRenderer.renderAgents(ambientState, camera, cssWidth, cssHeight, now / 1000, renderer.emissiveBuildingList());
     // GPU smog overlay (z2, above sprites): the atmospheric haze, now on the GPU instead of CPU plumes.
     if (smogOverlay && ambientOn) smogOverlay.render(camera, cssWidth, cssHeight, now / 1000, ambientState.pollution, ambientState.wind);
     // Sim-gated (Y5): re-derive the dock/panel signatures + refresh on change ONLY
