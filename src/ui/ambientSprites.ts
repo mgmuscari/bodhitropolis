@@ -26,7 +26,10 @@ const FILES: Readonly<Record<Exclude<keyof AmbientSprites, 'emission'>, readonly
 const EMISSION_FILES: Readonly<Record<string, string>> = {
   'police/cruiser': 'sprites/ambient/police/cruiser-lights.png',
   // Buildings keyed `building/<BuiltKind>` — the renderer overlays these on the footprint anchor.
-  'building/24': 'tilesets/satellite/buildings/b-24-3x3-lights.png', // coal plant: aviation beacons + furnace glow
+  // A `…/blink` sibling is the HAZARD layer (drawn only on the blink on-phase); the base key is the
+  // STATIC glow (drawn steady). Coal: red aviation beacons blink, the furnace glow stays lit.
+  'building/24': 'tilesets/satellite/buildings/b-24-3x3-lights.png',
+  'building/24/blink': 'tilesets/satellite/buildings/b-24-3x3-blink.png',
 };
 
 export interface AmbientSprites {

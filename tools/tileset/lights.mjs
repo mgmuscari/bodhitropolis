@@ -44,6 +44,8 @@ const LIGHTS = [
   },
   {
     type: 'building', slug: 'coal', build: 'b-24-3x3', footprint: 3, tier: 0, seed: 24024,
+    blink: 'red', // split the red beacons into a BLINK layer; the orange/warm glow stays STATIC (Maddy:
+    // the furnace looked "on fire" only because the glow blinked WITH the hazard lights).
     prompt:
       'A coal power plant with two tall smokestacks seen from directly above, orthographic top-down. ' +
       'Bright glowing RED aviation warning lights on top of each of the two tall smokestacks, and a ' +
@@ -71,6 +73,13 @@ function emissionToAlpha(buf) {
     '(', '+clone', '-separate', '-evaluate-sequence', 'max', '-level', '22%,88%', ')',
     '-alpha', 'off', '-compose', 'CopyOpacity', '-composite', 'png:-'], buf);
 }
+// Split an emission map by red-dominance into a BLINK layer (saturated-red hazard beacons) and a
+// STATIC layer (the steady glow: orange furnace, warm windows). Keeps each pixel's original alpha;
+// zeroes alpha outside its layer. `-fx` over the alpha channel — the map is tiny so it's cheap.
+// True red beacon vs orange furnace: an ABSOLUTE low-green/blue cutoff (orange has g≈0.5 → stays static).
+const RED_HAZARD = '(r>0.4 && g<0.28 && b<0.32)';
+const splitBlink = (buf) => mg(['png:-', '-channel', 'A', '-fx', `${RED_HAZARD} ? a : 0`, '+channel', 'png:-'], buf);
+const splitStatic = (buf) => mg(['png:-', '-channel', 'A', '-fx', `${RED_HAZARD} ? 0 : a`, '+channel', 'png:-'], buf);
 
 // Inpaint graph: black init + shape mask → diffuse the prompt into the shape; PixelOE to the grid.
 function lightGraph({ initName, maskName, prompt, seed, pixel }) {
@@ -118,9 +127,16 @@ for (const job of LIGHTS) {
     const out = await awaitOutput(await submit(lightGraph({ initName, maskName, prompt: job.prompt, seed: job.seed, pixel: r.pixel })), { timeoutMs: 180000 });
     const lit = emissionToAlpha(await fetchImage(out));
     mkdirSync(dirname(r.dst), { recursive: true });
-    writeFileSync(r.dst, lit);
+    if (job.blink === 'red') {
+      // Two layers: -lights is the STATIC glow, -blink is the hazard beacons (renderer blinks only it).
+      writeFileSync(r.dst, splitStatic(lit));
+      writeFileSync(r.dst.replace(/-lights\.png$/, '-blink.png'), splitBlink(lit));
+      console.log(`✓ ${r.label}-lights (static) + -blink`);
+    } else {
+      writeFileSync(r.dst, lit);
+      console.log(`✓ ${r.label}-lights`);
+    }
     done++;
-    console.log(`✓ ${r.label}-lights`);
   } catch (e) {
     failed++;
     console.error(`✗ ${job.slug}: ${e.message}`);

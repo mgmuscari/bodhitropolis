@@ -1872,22 +1872,31 @@ export class Renderer {
     }
 
     // Light-bearing BUILDINGS (collected in drawBase): overlay the emission map additively over the
-    // whole footprint, evading shading. Blinks like aviation/emergency lights — a ~1 Hz pulse between a
-    // steady glow floor and full bright (the furnace stays lit, the red beacons read as blinking).
+    // whole footprint, evading shading. Two layers — the STATIC glow (furnace/windows) draws steady;
+    // the BLINK layer (red aviation/hazard beacons) draws only on the on-phase, so the glow no longer
+    // flickers WITH the hazard lights (Maddy: the glow should be static, only the beacons blink).
     if (this.emissiveBuildings.length > 0) {
-      const beaconOn = Math.floor(performance.now() / 500) % 2 === 0;
+      const now = performance.now();
+      const emission = this.ambientSprites?.emission;
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       ctx.imageSmoothingEnabled = false;
+      ctx.globalAlpha = 1;
       for (const b of this.emissiveBuildings) {
-        const img = this.ambientSprites?.emission[b.key];
-        if (!img) continue;
         const { sx, sy } = camera.worldToScreen(b.x, b.y);
         const w = b.w * ts;
         const h = b.h * ts;
         if (!onScreen(sx + w / 2, sy + h / 2)) continue;
-        ctx.globalAlpha = beaconOn ? 1 : 0.5;
-        ctx.drawImage(img, sx, sy, w, h);
+        const stat = emission?.[b.key]; // steady glow — always drawn
+        if (stat) ctx.drawImage(stat, sx, sy, w, h);
+        // Hazard beacons blink on a PER-BUILDING phase + period (hashed from its anchor), so beacons
+        // across the map don't pulse in unison (Maddy: global blink reads fake). Deterministic.
+        const blinkImg = emission?.[`${b.key}/blink`];
+        if (blinkImg) {
+          const hash = (((b.x * 73856093) ^ (b.y * 19349663)) >>> 0);
+          const period = 420 + (hash % 6) * 90; // 420..870 ms, varies per building
+          if ((now + (hash % period)) % period < period * 0.45) ctx.drawImage(blinkImg, sx, sy, w, h);
+        }
       }
       ctx.restore();
     }
