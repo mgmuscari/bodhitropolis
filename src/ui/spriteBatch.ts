@@ -92,6 +92,10 @@ export class GlowBatch {
   constructor(private readonly gl: WebGL2RenderingContext) {
     // Two glow shapes: a forward CONE (headlights — cast ahead along travel, narrow at the car, widening
     // and fading with distance) when a_len>0, else a RADIAL falloff (cruiser/beacon) using a_halfwidth.
+    // The falloff is computed in the fragment from the TRUE world geometry (lateral distance from the
+    // cone's actual centerline), NOT from an interpolated corner attribute — a trapezoid drawn as two
+    // triangles interpolates a corner attribute asymmetrically across the centerline (one side brighter
+    // than the other — Maddy). Measuring lateral offset from the centerline per-pixel is symmetric.
     const vs = `#version 300 es
 layout(location=0) in vec2 a_corner;     // unit quad [-1,1]
 layout(location=1) in vec2 a_pos;        // world cell (cone origin / radial center)
@@ -101,7 +105,8 @@ layout(location=4) in float a_halfwidth; // cone half-width at the tip / radial 
 layout(location=5) in vec3 a_color;
 layout(location=6) in float a_intensity;
 uniform vec2 u_origin; uniform vec2 u_view;
-out vec2 v_local; out vec3 v_color; out float v_int; out float v_cone; out float v_t; out float v_x;
+out vec2 v_world; out vec3 v_color; out float v_int;
+flat out vec2 v_pos; flat out vec2 v_fwd; flat out float v_len; flat out float v_hw;
 void main(){
   vec2 world;
   if (a_len > 0.0) {
@@ -109,26 +114,33 @@ void main(){
     float t = (a_corner.y + 1.0) * 0.5;            // 0 at the car .. 1 at the cone tip
     float w = mix(a_halfwidth * 0.22, a_halfwidth, t);
     world = a_pos + a_fwd * (t * a_len) + side * (a_corner.x * w);
-    v_cone = 1.0; v_t = t; v_x = a_corner.x; v_local = vec2(0.0);
   } else {
     world = a_pos + a_corner * a_halfwidth;
-    v_cone = 0.0; v_t = 0.0; v_x = 0.0; v_local = a_corner;
   }
   vec2 ndc = ((world - u_origin)/u_view)*2.0 - 1.0;
   gl_Position = vec4(ndc.x, -ndc.y, 0.0, 1.0);
-  v_color = a_color; v_int = a_intensity;
+  v_world = world; v_color = a_color; v_int = a_intensity;
+  v_pos = a_pos; v_fwd = a_fwd; v_len = a_len; v_hw = a_halfwidth;
 }`;
     const fs = `#version 300 es
 precision highp float;
-in vec2 v_local; in vec3 v_color; in float v_int; in float v_cone; in float v_t; in float v_x;
+in vec2 v_world; in vec3 v_color; in float v_int;
+flat in vec2 v_pos; flat in vec2 v_fwd; flat in float v_len; flat in float v_hw;
 out vec4 fragColor;
 void main(){
+  vec2 rel = v_world - v_pos;
   float fall;
-  if (v_cone > 0.5) {
-    fall = smoothstep(1.0, 0.0, v_t) * (1.0 - abs(v_x)); // fade forward + soft lateral edges
-    fall = max(fall, 0.0); fall *= fall;
+  if (v_len > 0.0) {
+    float fd = dot(rel, v_fwd);                       // distance ahead along travel
+    float t = fd / v_len;
+    if (t < 0.0 || t > 1.0) discard;
+    vec2 side = vec2(-v_fwd.y, v_fwd.x);
+    float hw = mix(v_hw * 0.22, v_hw, t);
+    float lf = dot(rel, side) / hw;                   // lateral fraction from the centerline (symmetric)
+    fall = (1.0 - clamp(abs(lf), 0.0, 1.0)) * smoothstep(1.0, 0.0, t);
   } else {
-    float d = length(v_local); fall = smoothstep(1.0, 0.0, d); fall *= fall;
+    float d = length(rel) / max(v_hw, 1e-4);
+    fall = smoothstep(1.0, 0.0, d); fall *= fall;
   }
   fragColor = vec4(v_color * v_int * fall, 1.0);
 }`;
