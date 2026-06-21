@@ -18,6 +18,12 @@ The dated sections below this one are the **archive** (✅ done + diagnoses kept
 of each group. Branch `playtest/overnight-batch` (sequential, one branch).
 
 ### 1 — Live-game bugs (playtest loop, do first)
+- 🔴 **Peds path into NON-destination plots** (Maddy 2026-06-20) — pedestrians should only be able to
+  walk INTO a plot that is their own trip destination; right now they cut across/into arbitrary plots.
+  Gate `isWalkable` (or the walkPath neighbour test) so a built plot tile is walkable for an agent ONLY
+  if it's that agent's destination parcel (roads/paths/green always walkable; other plots blocked).
+- ✅ **Coal plant emission not visible** — STALE SESSION, not a bug: the running session predated the
+  baked asset + render code; a reload loads the emission map and the beacons show. (Confirmed working.)
 - ✅ **Travelers path THROUGH dividers/medians — blocked** (`9e0e7946`). Cars were already blocked
   (`canDrive`/`carPassable` exclude the median via its lane-role + `isRoadKind(11)=false`); the gap was
   peds — `isWalkable` let them cut across the planted median (not a zoned plot). Now excluded from the
@@ -119,12 +125,18 @@ low luminance and got keyed away). Output = glowing-lights-on-transparent, align
   emission keys; drawBase collects light-bearing footprints, drawSprites overlays them additively with
   a ~1 Hz aviation blink. Key learnings: keep the building prompt + JUDGE the PixelOE output (the raw
   reads perspective); add `isometric` positive (the LoRA is iso-trained).
-- 🔴 **More sprite maps** — car tail/headlights, lit bus windows. Catalog-extend in `lights.mjs`.
-- 🔴 **More building beacons** — gas flare (25), windmill nav light (28). Same building path; add to the
-  `lights.mjs` LIGHTS catalog + an `EMISSION_FILES` `building/<kind>` entry.
-- 🔴 **Night gating + spill** — emergency lights flash day+night (cruiser ✓); streetlights/windows are
-  NIGHT-ONLY (fade in with `dayNightBrightness` from `lighting.ts`). Emissive maps spill weak light onto
-  neighboring tiles → the foundation for **sodium-lamp nighttime light pollution** (Maddy's stated next).
+- ✅ **Per-layer bake + all vehicle/sprite lights** (`bac4e7ab`) — `layers:[{out,seed,prompt}]`: glow +
+  hazard baked as SEPARATE passes (not one map split by color — Maddy: the furnace was entangled). Static
+  glow + per-building blink (per-anchor phase, no map-wide unison). Vehicles (8 cars + bus + 2 cyclists):
+  headlights/taillights/bus-windows, NIGHT-GATED, parked cars OFF. Encampments (campfire) + bus-shelter.
+- 🟡 **ALL buildings (lit windows night-gated; power beacons)** — `lights.mjs` auto-scans the atlas
+  (1×1 `b-K-c` + multitile `b-K-WxH`), archetype prompts (WINDOW_KINDS vs POWER_BEACON), writes a
+  `lights-manifest.json` the loader reads; renderer derives each parcel's form stem + night-gates windows
+  while power (24–30) stays lit 24/7. Baking ~40 layers. (Maddy: "you missed ALL THE BUILDINGS", dark town.)
+- 🔴 **Light SPILL onto neighbour tiles** (Maddy 2026-06-20: "car headlights illuminating the road in
+  front") — take a sprite/building's emission and cast weak ambient light on surrounding tiles. The
+  foundation for **sodium-lamp nighttime light pollution**. Likely a GPU pass (additive bloom/spill from
+  emissive sources into a light buffer) once smog/effects are on GPU.
 
 ### Done this session (2026-06-19 → 06-20, satellite polish)
 

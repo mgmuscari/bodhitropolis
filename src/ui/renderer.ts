@@ -724,7 +724,7 @@ export class Renderer {
   // Light-bearing building footprints (WORLD coords) collected during drawBase, redrawn each frame in
   // drawSprites: an emission map (e.g. coal aviation beacons) overlaid additively over the footprint,
   // blinking + evading shading (the building twin of the cruiser's emissive bar).
-  private emissiveBuildings: { x: number; y: number; w: number; h: number; key: string }[] = [];
+  private emissiveBuildings: { x: number; y: number; w: number; h: number; key: string; kind: number }[] = [];
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -1185,10 +1185,12 @@ export class Renderer {
                 this.powered !== null && isPowerConsumer(pp.kind) && !this.powered.has(i);
               marks.push({ dx, dy, w: pp.width, h: pp.height, kind: pp.kind, density: pp.density, unpowered });
               // Light-bearing building? Collect its footprint (world coords) for the per-frame emissive
-              // overlay (drawSprites). Keyed `building/<kind>`; absent key → no map → not collected.
-              const ekey = `building/${pp.kind}`;
+              // overlay (drawSprites). The emission stem is the build FORM (kind + footprint), matching
+              // the baked atlas: `b-<kind>-c` (1×1) or `b-<kind>-<w>x<h>`. Absent key → not collected.
+              const form = pp.width === 1 && pp.height === 1 ? 'c' : `${pp.width}x${pp.height}`;
+              const ekey = `building/b-${pp.kind}-${form}`;
               if (this.ambientSprites?.emission[ekey]) {
-                this.emissiveBuildings.push({ x: pp.x, y: pp.y, w: pp.width, h: pp.height, key: ekey });
+                this.emissiveBuildings.push({ x: pp.x, y: pp.y, w: pp.width, h: pp.height, key: ekey, kind: pp.kind });
               }
             }
           }
@@ -1883,9 +1885,10 @@ export class Renderer {
       ctx.imageSmoothingEnabled = false;
       ctx.globalAlpha = night;
       for (const c of ambient.cars) {
+        if (c.parked) continue; // a parked car is OFF — no headlights/taillights (Maddy)
         const li = carLights[(c.tint ?? 0) % carLights.length];
         if (!li) continue;
-        const off = c.parked ? { dx: 0, dy: 0 } : laneOffset(c.dir);
+        const off = laneOffset(c.dir);
         const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
         if (!onScreen(sx, sy)) continue;
         const size = c.parked ? parkedSize : carSize;
@@ -1944,21 +1947,29 @@ export class Renderer {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       ctx.imageSmoothingEnabled = false;
-      ctx.globalAlpha = 1;
       for (const b of this.emissiveBuildings) {
         const { sx, sy } = camera.worldToScreen(b.x, b.y);
         const w = b.w * ts;
         const h = b.h * ts;
         if (!onScreen(sx + w / 2, sy + h / 2)) continue;
-        const stat = emission?.[b.key]; // steady glow — always drawn
-        if (stat) ctx.drawImage(stat, sx, sy, w, h);
+        // Power plants (24–30) run 24/7 → glow always on; everything else is lit WINDOWS → night-gated.
+        const isPower = b.kind >= 24 && b.kind <= 30;
+        const a = isPower ? 1 : night;
+        const stat = emission?.[b.key];
+        if (stat && a > 0.02) {
+          ctx.globalAlpha = a;
+          ctx.drawImage(stat, sx, sy, w, h);
+        }
         // Hazard beacons blink on a PER-BUILDING phase + period (hashed from its anchor), so beacons
-        // across the map don't pulse in unison (Maddy: global blink reads fake). Deterministic.
+        // across the map don't pulse in unison (Maddy: global blink reads fake). Always-on (aviation).
         const blinkImg = emission?.[`${b.key}/blink`];
         if (blinkImg) {
           const hash = (((b.x * 73856093) ^ (b.y * 19349663)) >>> 0);
           const period = 420 + (hash % 6) * 90; // 420..870 ms, varies per building
-          if ((now + (hash % period)) % period < period * 0.45) ctx.drawImage(blinkImg, sx, sy, w, h);
+          if ((now + (hash % period)) % period < period * 0.45) {
+            ctx.globalAlpha = 1;
+            ctx.drawImage(blinkImg, sx, sy, w, h);
+          }
         }
       }
       ctx.restore();

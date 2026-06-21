@@ -1,23 +1,19 @@
 // DIFFUSION-BASED LIGHTING MAPS for game assets (Maddy 2026-06-20 — "our prototype for
-// diffusion-based lighting"). For each light-bearing asset we generate EMISSION map LAYERS the
-// renderer draws additively, evading day/night shading.
+// diffusion-based lighting"; "you missed ALL THE BUILDINGS"). Emission map LAYERS the renderer draws
+// additively, evading day/night shading. Covers ambient SPRITES (vehicles, cruiser, encampments) AND
+// every relevant BUILDING (lit windows night-gated; aviation beacons + glow on power plants), so the
+// city lights up at night instead of reading as a dark grid.
 //
-// LAYERS, not one combined map (Maddy: a single bake split by color leaves the glow entangled with
-// the hazard beacons). Each layer is its OWN diffusion pass with its OWN prompt → a clean map:
-//   • out:'lights' → STATIC glow (furnace, windows, headlights) — renderer draws it steady.
-//   • out:'blink'  → HAZARD beacons (red aviation/emergency) — renderer blinks it per-instance.
+// LAYERS, not one combined map: each is its OWN diffusion pass with its OWN prompt → a clean map.
+//   • out:'lights' → STATIC glow (furnace, windows, headlights). Windows are night-gated by the renderer.
+//   • out:'blink'  → HAZARD beacons (red aviation/emergency). Renderer blinks per-instance.
 //
-// METHOD per layer — the inpaint reframe that killed the "keep the albedo" bias:
-//   1. SHAPE: the baked albedo's own alpha → a white-on-black silhouette MASK (shared by all layers).
-//   2. INIT: a pure-black canvas → outside the mask stays black → transparent in the map.
-//   3. INPAINT: diffuse ONLY this layer's lights into the masked region. Pixel-art LoRA + `isometric`
-//      positive (the LoRA is iso-trained; naming it stabilizes the render) + PixelOE to the grid —
-//      JUDGE the PixelOE output, not the raw.
-//   4. ISOLATE: saturation boost → alpha from MAX-channel brightness (not luminance — saturated red has
-//      low luminance) → level black-point drops the dark body, leaving the glowing lights.
+// METHOD per layer — the inpaint reframe: albedo alpha → black-init INPAINT of ONLY this layer's lights
+// → PixelOE to the grid → isolate by MAX-channel brightness. JUDGE the PixelOE output, not the raw.
+// Buildings auto-scan the atlas (1×1 `b-K-c` + multitile `b-K-WxH`); a manifest lists what was baked.
 //
-//   node tools/tileset/lights.mjs [--slug cruiser|coal|...] [--force]
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
+//   node tools/tileset/lights.mjs [--slug coal|cruiser|...] [--only buildings|sprites] [--force]
+import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -31,54 +27,76 @@ const mg = (args, input) => execFileSync('magick', args, { input, maxBuffer: 64 
 const EMIT = ' Emission map at night on a pure solid black background: ONLY the named lights glow, ' +
   'everything else is pure black. High-contrast points of colored light with soft glow halos. isometric';
 const TOPDOWN_CAR = 'seen from directly above, top-down, orthographic. The FRONT of the vehicle points UP.';
+const TOPDOWN_GEN = 'seen from directly above, top-down, orthographic.';
+const WINDOWS = `A building ${TOPDOWN_GEN} Many small warm-yellow and pale-white lit windows scattered across the rooftop and facade edges.${EMIT}`;
+const POWER_GLOW = `An industrial power plant ${TOPDOWN_GEN} A warm orange machinery glow and a few dim lit windows, NO red lights.${EMIT}`;
+const POWER_BLINK = `An industrial power plant with tall structures ${TOPDOWN_GEN} Two or more bright glowing RED aviation warning lights on the tall structures, NOTHING else lit (no orange, no windows).${EMIT}`;
 
-// Each entry has `layers: [{ out, seed, prompt }]`. `out` ∈ {'lights' (static), 'blink' (hazard)} →
-// the `<base>-<out>.png` filename + the renderer's draw mode. type 'sprite' (16px, gen 512 / PixelOE 32)
-// or 'building' (footprint² atlas cells stitched, gen footprint·256 / PixelOE 16).
-const LIGHTS = [
-  // Police cruiser keeps a SINGLE map (the renderer's red/blue half-split alternation drives the bar).
-  { type: 'sprite', slug: 'cruiser', cat: 'police', layers: [
-    { out: 'lights', seed: 70077, prompt: `A police car ${TOPDOWN_CAR} One glowing RED light and one glowing BLUE light on the rooftop light bar, small warm white headlights at the front.${EMIT}` },
-  ] },
-  // Coal plant: SEPARATE passes — static orange furnace/window glow + blinking red aviation beacons.
-  { type: 'building', slug: 'coal', build: 'b-24-3x3', footprint: 3, tier: 0, layers: [
-    { out: 'lights', seed: 24024, prompt: 'A coal power plant with two tall smokestacks seen from directly above, orthographic top-down. A hot glowing ORANGE furnace glow in the centre and a few tiny dim warm-yellow lit windows, NO red lights.' + EMIT },
-    { out: 'blink', seed: 24090, prompt: 'A coal power plant with two tall smokestacks seen from directly above, orthographic top-down. Two bright glowing RED aviation warning lights, one on top of each tall smokestack, and NOTHING else lit (no orange, no windows).' + EMIT },
-  ] },
-  // ── Vehicles: warm white headlights at the front, red taillights at the rear (STATIC, night-only). ──
+// ── Sprite catalog (16px, gen 512 / PixelOE 32) ──────────────────────────────────────────────────
+const SPRITE_LIGHTS = [
+  { slug: 'cruiser', cat: 'police', layers: [{ out: 'lights', seed: 70077, prompt: `A police car ${TOPDOWN_CAR} One glowing RED light and one glowing BLUE light on the rooftop light bar, small warm white headlights at the front.${EMIT}` }] },
   ...['sedan-red', 'hatchback-blue', 'pickup-white', 'taxi-yellow', 'suv-green', 'van-silver', 'boxtruck'].map((slug, i) => ({
-    type: 'sprite', slug, cat: 'cars', layers: [
-      { out: 'lights', seed: 31000 + i * 131, prompt: `A car ${TOPDOWN_CAR} Two small warm white headlights at the FRONT (top) edge and two small red taillights at the REAR (bottom) edge.${EMIT}` },
-    ],
+    slug, cat: 'cars', layers: [{ out: 'lights', seed: 31000 + i * 131, prompt: `A car ${TOPDOWN_CAR} Two small warm white headlights at the FRONT (top) edge and two small red taillights at the REAR (bottom) edge.${EMIT}` }],
   })),
-  { type: 'sprite', slug: 'bus-city', cat: 'cars', layers: [
-    { out: 'lights', seed: 32100, prompt: `A long city transit bus ${TOPDOWN_CAR} A row of small lit warm-yellow windows down each side, two warm white headlights at the FRONT (top) edge, red taillights at the REAR.${EMIT}` },
-  ] },
-  ...['cyclist-1', 'cyclist-2'].map((slug, i) => ({
-    type: 'sprite', slug, cat: 'cyclists', layers: [
-      { out: 'lights', seed: 33000 + i * 211, prompt: `A bicycle ${TOPDOWN_CAR} One small white headlight at the FRONT and one small red tail light at the REAR.${EMIT}` },
-    ],
-  })),
-];
+  { slug: 'bus-city', cat: 'cars', layers: [{ out: 'lights', seed: 32100, prompt: `A long city transit bus ${TOPDOWN_CAR} A row of small lit warm-yellow windows down each side, two warm white headlights at the FRONT (top) edge, red taillights at the REAR.${EMIT}` }] },
+  ...['cyclist-1', 'cyclist-2'].map((slug, i) => ({ slug, cat: 'cyclists', layers: [{ out: 'lights', seed: 33000 + i * 211, prompt: `A bicycle ${TOPDOWN_CAR} One small white headlight at the FRONT and one small red tail light at the REAR.${EMIT}` }] })),
+  ...['tent-1', 'tent-2', 'tent-3'].map((slug, i) => ({ slug, cat: 'encampments', layers: [{ out: 'lights', seed: 34000 + i * 151, prompt: `A small camping tent ${TOPDOWN_GEN} A warm glowing orange campfire and a small lantern light beside the tent entrance.${EMIT}` }] })),
+  { slug: 'bus-shelter', cat: 'props', layers: [{ out: 'lights', seed: 35000, prompt: `A bus stop shelter ${TOPDOWN_GEN} A dim warm-white interior ceiling light.${EMIT}` }] },
+].map((j) => ({ type: 'sprite', ...j }));
 
-// Stitch a building's tier-0 footprint² atlas cells into one albedo (row-major append).
-function stitchBuilding(build, footprint, tier) {
+// ── Building archetypes ──────────────────────────────────────────────────────────────────────────
+const POWER_BEACON = new Set([24, 25, 27, 30]); // coal/gas/nuclear/fusion → glow + red aviation beacons
+// Lit windows (residential/commercial/civic/services/industrial/eco-with-structure + minor power).
+const WINDOW_KINDS = new Set([16, 17, 18, 19, 20, 21, 23, 26, 28, 29, 31, 32, 33, 34, 35, 51, 54, 55, 56, 57, 58, 59, 60]);
+
+// Scan the atlas → one job per distinct build FORM (1×1 `b-K-c` + multitile `b-K-WxH`), tier 0.
+function buildingJobs() {
+  const files = readdirSync(BUILDINGS);
+  const forms = new Map(); // stem → { kind, w, h, oneByOne }
+  for (const f of files) {
+    let m;
+    if ((m = /^b-(\d+)-(\d+)x(\d+)-c0-r0-0\.png$/.exec(f))) {
+      forms.set(`b-${m[1]}-${m[2]}x${m[3]}`, { kind: +m[1], w: +m[2], h: +m[3] });
+    } else if ((m = /^b-(\d+)-c-0(?:-v1)?\.png$/.exec(f))) {
+      const stem = `b-${m[1]}-c`;
+      if (!forms.has(stem)) forms.set(stem, { kind: +m[1], w: 1, h: 1, oneByOne: true });
+    }
+  }
+  const jobs = [];
+  for (const [stem, fp] of forms) {
+    const power = POWER_BEACON.has(fp.kind);
+    if (!power && !WINDOW_KINDS.has(fp.kind)) continue; // open/green/no-light kinds skipped
+    const layers = power
+      ? [{ out: 'lights', seed: hashSeed(stem) + 1, prompt: POWER_GLOW }, { out: 'blink', seed: hashSeed(stem) + 2, prompt: POWER_BLINK }]
+      : [{ out: 'lights', seed: hashSeed(stem) + 1, prompt: WINDOWS }];
+    jobs.push({ type: 'building', slug: stem, stem, ...fp, layers });
+  }
+  return jobs;
+}
+function hashSeed(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return h >>> 0; }
+
+// Stitch a building's tier-0 footprint cells (multitile) or read the single 1×1 cell (prefer v1).
+function buildingAlbedo(fp, stem) {
+  if (fp.oneByOne) {
+    const v1 = join(BUILDINGS, `b-${fp.kind}-c-0-v1.png`);
+    return readFileSync(existsSync(v1) ? v1 : join(BUILDINGS, `b-${fp.kind}-c-0.png`));
+  }
   const rows = [];
-  for (let r = 0; r < footprint; r++) {
+  for (let r = 0; r < fp.h; r++) {
     const cols = [];
-    for (let c = 0; c < footprint; c++) cols.push(join(BUILDINGS, `${build}-c${c}-r${r}-${tier}.png`));
+    for (let c = 0; c < fp.w; c++) cols.push(join(BUILDINGS, `${stem}-c${c}-r${r}-0.png`));
     rows.push(['(', ...cols, '+append', ')']);
   }
   return mg([...rows.flat(), '-append', '-background', 'none', 'png:-']);
 }
+
 // White-on-black shape mask from the albedo's alpha (the inpaint region).
-const shapeMask = (albedoBuf, g) => mg(['png:-', '-alpha', 'extract', '-resize', `${g}x${g}`, '-threshold', '20%', 'png:-'], albedoBuf);
+const shapeMask = (albedoBuf, gw, gh) => mg(['png:-', '-alpha', 'extract', '-resize', `${gw}x${gh}!`, '-threshold', '20%', 'png:-'], albedoBuf);
 // Emission → alpha: saturation boost, then alpha from MAX-channel brightness with a level black-point.
 const emissionToAlpha = (buf) => mg(['png:-', '-modulate', '100,140,100',
   '(', '+clone', '-separate', '-evaluate-sequence', 'max', '-level', '22%,88%', ')',
   '-alpha', 'off', '-compose', 'CopyOpacity', '-composite', 'png:-'], buf);
 
-// Inpaint graph: black init + shape mask → diffuse the prompt into the shape; PixelOE to the grid.
 function lightGraph({ initName, maskName, prompt, seed, pixel }) {
   return {
     1: { class_type: 'UNETLoader', inputs: { unet_name: 'z_image_turbo_bf16.safetensors', weight_dtype: 'default' } },
@@ -98,40 +116,51 @@ function lightGraph({ initName, maskName, prompt, seed, pixel }) {
   };
 }
 
-// Resolve a job → albedo buffer + base path (no suffix) + generation res, for sprite or building.
+// Resolve a job → albedo buffer + base path (no suffix) + generation res + pixel size.
 function resolveJob(job) {
   if (job.type === 'building') {
-    return { albedo: stitchBuilding(job.build, job.footprint, job.tier), base: join(BUILDINGS, job.build), gen: job.footprint * 256, pixel: 16, label: job.build };
+    if (job.oneByOne) return { albedo: buildingAlbedo(job, job.stem), base: join(BUILDINGS, job.stem), gw: 512, gh: 512, pixel: 32, label: job.stem };
+    return { albedo: buildingAlbedo(job, job.stem), base: join(BUILDINGS, job.stem), gw: job.w * 256, gh: job.h * 256, pixel: 16, label: job.stem };
   }
-  return { albedo: readFileSync(join(SPRITES, job.cat, `${job.slug}.png`)), base: join(SPRITES, job.cat, job.slug), gen: 512, pixel: 32, label: `${job.cat}/${job.slug}` };
+  return { albedo: readFileSync(join(SPRITES, job.cat, `${job.slug}.png`)), base: join(SPRITES, job.cat, job.slug), gw: 512, gh: 512, pixel: 32, label: `${job.cat}/${job.slug}` };
 }
 
 const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d; };
 const force = process.argv.includes('--force');
 const onlySlug = arg('slug', '');
+const only = arg('only', ''); // 'buildings' | 'sprites'
 
-console.log(`ComfyUI: ${COMFY_URL}`);
+let LIGHTS = [...SPRITE_LIGHTS, ...buildingJobs()];
+if (only === 'sprites') LIGHTS = LIGHTS.filter((j) => j.type === 'sprite');
+if (only === 'buildings') LIGHTS = LIGHTS.filter((j) => j.type === 'building');
+if (onlySlug) LIGHTS = LIGHTS.filter((j) => j.slug === onlySlug);
+
+console.log(`ComfyUI: ${COMFY_URL}\n${LIGHTS.length} assets`);
 let done = 0, failed = 0;
 for (const job of LIGHTS) {
-  if (onlySlug && job.slug !== onlySlug) continue;
   let r;
   try { r = resolveJob(job); } catch (e) { console.error(`✗ ${job.slug}: ${e.message}`); failed++; continue; }
   const layers = job.layers.filter((l) => force || !existsSync(`${r.base}-${l.out}.png`));
-  if (layers.length === 0) { console.log(`· ${r.label} (all layers exist, skip)`); continue; }
+  if (layers.length === 0) { console.log(`· ${r.label} (exists)`); continue; }
   try {
     mkdirSync(dirname(r.base), { recursive: true });
-    const maskName = await uploadImage(shapeMask(r.albedo, r.gen), `lm-${job.slug}-mask.png`);
-    const initName = await uploadImage(mg(['-size', `${r.gen}x${r.gen}`, 'xc:black', 'png:-']), `lm-${job.slug}-init.png`);
+    const maskName = await uploadImage(shapeMask(r.albedo, r.gw, r.gh), `lm-${job.slug}-mask.png`);
+    const initName = await uploadImage(mg(['-size', `${r.gw}x${r.gh}`, 'xc:black', 'png:-']), `lm-${job.slug}-init.png`);
     for (const layer of layers) {
       const out = await awaitOutput(await submit(lightGraph({ initName, maskName, prompt: layer.prompt, seed: layer.seed, pixel: r.pixel })), { timeoutMs: 180000 });
       writeFileSync(`${r.base}-${layer.out}.png`, emissionToAlpha(await fetchImage(out)));
       console.log(`✓ ${r.label}-${layer.out}`);
       done++;
     }
-  } catch (e) {
-    failed++;
-    console.error(`✗ ${job.slug}: ${e.message}`);
-  }
+  } catch (e) { failed++; console.error(`✗ ${job.slug}: ${e.message}`); }
 }
-console.log(`\ndone: ${done} layers, ${failed} failed`);
+
+// Manifest of building light maps (the browser loader can't readdir) — scan ALL committed `-lights`.
+const manifest = {};
+for (const f of readdirSync(BUILDINGS)) {
+  const m = /^(b-\d+-(?:c|\d+x\d+))-lights\.png$/.exec(f);
+  if (m) manifest[m[1]] = { blink: existsSync(join(BUILDINGS, `${m[1]}-blink.png`)) };
+}
+writeFileSync(join(BUILDINGS, 'lights-manifest.json'), JSON.stringify(manifest));
+console.log(`\ndone: ${done} layers, ${failed} failed · manifest: ${Object.keys(manifest).length} buildings`);
 process.exit(failed > 0 ? 1 : 0);

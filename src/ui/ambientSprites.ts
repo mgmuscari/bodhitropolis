@@ -25,12 +25,11 @@ const FILES: Readonly<Record<Exclude<keyof AmbientSprites, 'emission' | 'carLigh
 // `sprites/ambient/<cat>/<slug>-lights.png`; a 404 just leaves the key absent.
 const EMISSION_FILES: Readonly<Record<string, string>> = {
   'police/cruiser': 'sprites/ambient/police/cruiser-lights.png',
-  // Buildings keyed `building/<BuiltKind>` — the renderer overlays these on the footprint anchor.
-  // A `…/blink` sibling is the HAZARD layer (drawn only on the blink on-phase); the base key is the
-  // STATIC glow (drawn steady). Coal: red aviation beacons blink, the furnace glow stays lit.
-  'building/24': 'tilesets/satellite/buildings/b-24-3x3-lights.png',
-  'building/24/blink': 'tilesets/satellite/buildings/b-24-3x3-blink.png',
+  // Buildings are NOT listed here — there are ~45 forms; the loader fetches them from a generated
+  // manifest (lights.mjs writes it). Keyed `building/<stem>` (e.g. 'building/b-24-3x3') + a `…/blink`
+  // hazard sibling for power plants. The renderer derives the stem from each parcel's kind+footprint.
 };
+const BUILDING_LIGHTS_DIR = 'tilesets/satellite/buildings/';
 
 export interface AmbientSprites {
   cars: CanvasImageSource[];
@@ -93,6 +92,36 @@ export async function loadAmbientSprites(
       const img = await loadImage(`${base}${path}`);
       if (img) out.emission[key] = img; // a 404 leaves the key absent (resilient like the base loader)
     }),
+    // Building emission maps from the manifest (the browser can't readdir the atlas). Each stem gets a
+    // `building/<stem>` static map + an optional `…/blink` hazard layer. No manifest → no building lights.
+    loadBuildingEmission(base, loadImage, out.emission),
   ]);
   return out;
+}
+
+/** Fetch the building light-map manifest and load each listed map into `emission`. Resilient: any
+ *  fetch/parse failure (e.g. tests with no server) just leaves buildings unlit. */
+async function loadBuildingEmission(
+  base: string,
+  loadImage: SpriteLoader,
+  emission: Record<string, CanvasImageSource>,
+): Promise<void> {
+  try {
+    if (typeof fetch !== 'function') return;
+    const res = await fetch(`${base}${BUILDING_LIGHTS_DIR}lights-manifest.json`);
+    if (!res.ok) return;
+    const manifest = (await res.json()) as Record<string, { blink?: boolean }>;
+    await Promise.all(
+      Object.entries(manifest).map(async ([stem, info]) => {
+        const lit = await loadImage(`${base}${BUILDING_LIGHTS_DIR}${stem}-lights.png`);
+        if (lit) emission[`building/${stem}`] = lit;
+        if (info.blink) {
+          const bl = await loadImage(`${base}${BUILDING_LIGHTS_DIR}${stem}-blink.png`);
+          if (bl) emission[`building/${stem}/blink`] = bl;
+        }
+      }),
+    );
+  } catch {
+    /* no manifest / offline → buildings stay unlit (graceful) */
+  }
 }
