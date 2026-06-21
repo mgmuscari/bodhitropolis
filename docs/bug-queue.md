@@ -105,6 +105,22 @@ the no-WebGL fallback. Shippable increments (each verifiable via `?shader`):
 > **Watch:** multitile commercial only baked `2×1` (not `1×2`) — if vertical commercial appears, add it
 > to `PLOTS` and re-bake (`tools/tileset/generate-multitile.mjs`).
 
+### 7 — Diffusion-based lighting / emission maps (Maddy 2026-06-20: "our prototype for diffusion-based lighting")
+The INPAINT reframe that finally worked (3 prior img2img-from-albedo tests just restyled the asset
+grey — the colored init biased "keep the building"). Per-asset emission map via: albedo alpha → SHAPE
+mask → BLACK init → inpaint the asset's OWN subject + top-down orientation + an emission clause into
+the masked region → key alpha off **MAX-channel brightness** (not luminance — saturated red/blue have
+low luminance and got keyed away). Output = glowing-lights-on-transparent, aligned to the albedo grid.
+- ✅ **Pipeline + cruiser** (`4f2d74ee`, `ca8a902d`) — `tools/tileset/lights.mjs` (LoRA + PixelOE 32→16px);
+  `AmbientSprites.emission` (index-free `cat/slug`, resilient loader); renderer draws it `'lighter'`
+  (additive, evades shading) with the red/blue blink = the bar's two halves emphasized in alternation.
+- 🔴 **More sprite maps** — car tail/headlights, lit bus windows. Catalog-extend in `lights.mjs`.
+- 🔴 **Building beacons** — smokestack aviation lights (coal/gas), windmill nav light. Same method but
+  albedo sourced from the ATLAS, not the sprite dir (needs an atlas-albedo path in `lights.mjs`).
+- 🔴 **Night gating + spill** — emergency lights flash day+night (cruiser ✓); streetlights/windows are
+  NIGHT-ONLY (fade in with `dayNightBrightness` from `lighting.ts`). Emissive maps spill weak light onto
+  neighboring tiles → the foundation for **sodium-lamp nighttime light pollution** (Maddy's stated next).
+
 ### Done this session (2026-06-19 → 06-20, satellite polish)
 
 Complete tileset bake (216 buildings + multitile, 0 fail); building variety; terrain dihedral anti-plaid;
