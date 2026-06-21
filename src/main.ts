@@ -975,11 +975,18 @@ export function main(): void {
     }
   });
   let last = performance.now();
+  let lastBaseRefresh = 0;
   const frame = (now: number): void => {
     // Sim path is VERBATIM today's — two independent clocks (YP3): `last` drives the
     // sim (its FixedTickLoop clamp owns catch-up); never fold the ambient dt into it.
     sim.advance(now - last);
     last = now;
+    // Wear/junk/tents are baked into the cached base (under the agents); refresh it on a slow cadence so
+    // newly-worn ground + encampments appear even with a static camera (they evolve over many seconds).
+    if (now - lastBaseRefresh > 2000) {
+      lastBaseRefresh = now;
+      renderer.invalidateBase();
+    }
     if (ambientOn && !document.hidden) {
       // Continuous ambient path: step the ambient sim on its OWN clock (its Task-1
       // clamp owns catch-up), then composite + sprites. The base rebuilds inside

@@ -888,7 +888,7 @@ export class Renderer {
    * Uses the exact transform/smoothing setup the legacy render used so the base is
    * pixel-identical to today's terrain+built+overlay layer (CRITIC-YP2 / YP5).
    */
-  private drawBase(world: WorldState, camera: Camera): void {
+  private drawBase(world: WorldState, camera: Camera, ambient?: AmbientState): void {
     const { map, parcels } = world;
     const ctx = this.baseCtx;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
@@ -1219,6 +1219,53 @@ export class Renderer {
       }
     }
 
+    // Desire-path WEAR + the static JUNK/TENTS it accrues — GROUND level, baked into the cached base so
+    // it sits UNDER the moving agents (Maddy: tents/junk are static, go under agents). Brown tint by
+    // wear; discarded junk from GARBAGE_WEAR up; encampment tents from ENCAMPMENT_WEAR up — junk + tents
+    // COEXIST, and a heavily-worn tile grows MULTIPLE tents (a tent houses more than one unhoused person).
+    if (ambient) {
+      const tents = this.hasTileset ? this.ambientSprites?.encampments : undefined;
+      const junk = this.hasTileset ? this.ambientSprites?.junk : undefined;
+      const mapW2 = world.map.width;
+      for (const [tile, wear] of ambient.wear) {
+        const wx = tile % mapW2;
+        const wy = (tile - wx) / mapW2;
+        const { sx, sy } = camera.worldToScreen(wx, wy);
+        if (sx < -ts || sx > this.cssWidth + ts || sy < -ts || sy > this.cssHeight + ts) continue;
+        ctx.globalAlpha = 0.7 * (wear / 255); // browns the green underneath, proportional to wear
+        ctx.fillStyle = '#6e5d3f';
+        ctx.fillRect(Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
+        ctx.globalAlpha = 1;
+        const tileHash = Math.imul(((wx * 73856093) ^ (wy * 19349663)) >>> 0, 0x9e3779b1) >>> 0;
+        // JUNK (coexists with tents): 1–2 small pieces, scattered + jittered, more as the path deepens.
+        if (camera.zoom >= 2 && junk && junk.length > 0 && wear >= GARBAGE_WEAR) {
+          const pieces = wear >= (GARBAGE_WEAR + ENCAMPMENT_WEAR) / 2 ? 2 : 1;
+          for (let pc = 0; pc < pieces; pc++) {
+            const hh = Math.imul((tileHash ^ Math.imul(pc + 1, 0x85ebca6b)) >>> 0, 0xc2b2ae35) >>> 0;
+            const img = junk[(hh >>> 16) % junk.length]!;
+            const js = ts * (0.32 + ((hh & 0x7) / 7) * 0.12);
+            ctx.drawImage(img, sx + ((hh & 0xff) / 255) * (ts - js), sy + (((hh >>> 8) & 0xff) / 255) * (ts - js), js, js);
+          }
+        }
+        // TENTS: 1+ from ENCAMPMENT_WEAR, growing to several as the tile worsens (more unhoused gather).
+        if (camera.zoom >= 2 && tents && tents.length > 0 && wear >= ENCAMPMENT_WEAR) {
+          const nTents = Math.min(3, 1 + Math.floor((wear - ENCAMPMENT_WEAR) / 12));
+          const es = ts * 0.5; // a tent, scaled down so several coexist on the tile
+          for (let tc = 0; tc < nTents; tc++) {
+            const hh = Math.imul((tileHash ^ Math.imul(tc + 7, 0x27d4eb2f)) >>> 0, 0x165667b1) >>> 0;
+            const img = tents[(hh >>> 16) % tents.length]!;
+            ctx.drawImage(img, sx + ((hh & 0xff) / 255) * (ts - es), sy + (((hh >>> 8) & 0xff) / 255) * (ts - es), es, es);
+          }
+        } else if (!this.hasTileset && wear > 120) {
+          ctx.fillStyle = '#2e2a22'; // procedural fallback: trash specks
+          const specks: ReadonlyArray<readonly [number, number]> = [[0.3, 0.35], [0.65, 0.5], [0.45, 0.72]];
+          const n = wear > 210 ? 3 : wear > 170 ? 2 : 1;
+          const sp = Math.max(1, ts * 0.12);
+          for (let k = 0; k < n; k++) ctx.fillRect(Math.floor(sx + specks[k]![0] * ts), Math.floor(sy + specks[k]![1] * ts), sp, sp);
+        }
+      }
+    }
+
     // Second pass: parcel anchor marks ON TOP of every tile + the overlay, so a
     // multi-tile footprint's own tiles (and the heatmap tint) can't hide them.
     // The unpowered pip sits in the footprint's top-right; the legibility glyph is
@@ -1261,13 +1308,13 @@ export class Renderer {
    *  3. draw the preview on top under the DPR transform (it lives in the composite
    *     now, NOT the base — so a hover never invalidates the base).
    */
-  private composite(world: WorldState, camera: Camera): void {
+  private composite(world: WorldState, camera: Camera, ambient?: AmbientState): void {
     // The CPU base (terrain + buildings + roads + ALL the line/divider/marking rules) is rendered the
     // SAME in both modes — Maddy: "draw the base layer with CPU and jeuje it up by the shader." In GPU
     // mode the shader samples this base canvas as its albedo and adds the dynamics (water/shadows/
     // day-night/grass/clouds); the visible Canvas2D is cleared transparent so the shader shows through.
     if (this.baseDirty) {
-      this.drawBase(world, camera);
+      this.drawBase(world, camera, ambient);
       this.baseDirty = false;
       this.baseTexVersion++; // signals the GPU path to re-upload the base texture
     }
@@ -1308,7 +1355,7 @@ export class Renderer {
    * sprites on top, culled to the viewport — the O(visible sprites) draw.
    */
   renderFrame(world: WorldState, camera: Camera, ambient: AmbientState): void {
-    this.composite(world, camera);
+    this.composite(world, camera, ambient); // ambient → drawBase bakes wear/junk/tents under the agents
     this.drawSprites(world, camera, ambient);
   }
 
@@ -1447,53 +1494,8 @@ export class Renderer {
       }
     }
 
-    // Desire-path WEAR: pedestrians beat wild-green ground into brown dirt + litter. Drawn
-    // first (ground level), browning the tile by wear and dropping trash specks as it deepens.
-    for (const [tile, wear] of ambient.wear) {
-      const wx = tile % mapW;
-      const wy = (tile - wx) / mapW;
-      const { sx, sy } = camera.worldToScreen(wx, wy);
-      if (sx < -ts || sx > w + ts || sy < -ts || sy > h + ts) continue;
-      const f = wear / 255;
-      ctx.globalAlpha = 0.7 * f; // browns the green underneath, proportional to wear
-      ctx.fillStyle = '#6e5d3f';
-      ctx.fillRect(Math.floor(sx), Math.floor(sy), Math.ceil(ts), Math.ceil(ts));
-      ctx.globalAlpha = 1;
-      // Heavily demand-pathed empty ground accumulates JUNK (discarded mattresses/couches/debris) and,
-      // at the worst-worn, an ENCAMPMENT tent — the neglect + displacement made visible (Maddy). The
-      // sprites are SCALED DOWN and SCATTERED at a stable per-tile jitter (not dead-centre) so they read
-      // naturally (Maddy). Sprite branch gated to zoom ≥ 2 (at zoom 1 they're sub-pixel + too many to
-      // blit); the brown wear tint + procedural specks cover the rest. Stable picks → no frame flicker.
-      const tents = this.hasTileset ? this.ambientSprites?.encampments : undefined;
-      const junk = this.hasTileset ? this.ambientSprites?.junk : undefined;
-      const tileHash = Math.imul(((wx * 73856093) ^ (wy * 19349663)) >>> 0, 0x9e3779b1) >>> 0;
-      if (camera.zoom >= 2 && tents && tents.length > 0 && wear >= ENCAMPMENT_WEAR) {
-        const img = tents[(tileHash >>> 16) % tents.length]!;
-        const es = ts * 0.55; // scaled down — a tent, not a tile-filling blob
-        ctx.drawImage(img, sx + ((tileHash & 0xff) / 255) * (ts - es), sy + (((tileHash >>> 8) & 0xff) / 255) * (ts - es), es, es);
-      } else if (camera.zoom >= 2 && junk && junk.length > 0 && wear >= GARBAGE_WEAR) {
-        // scatter 1–2 small junk pieces across the tile (more as the path deepens), each jittered
-        const pieces = wear >= (GARBAGE_WEAR + ENCAMPMENT_WEAR) / 2 ? 2 : 1;
-        for (let pc = 0; pc < pieces; pc++) {
-          const hh = Math.imul((tileHash ^ Math.imul(pc + 1, 0x85ebca6b)) >>> 0, 0xc2b2ae35) >>> 0;
-          const img = junk[(hh >>> 16) % junk.length]!;
-          const js = ts * (0.32 + ((hh & 0x7) / 7) * 0.12); // 0.32..0.44, varied small
-          ctx.drawImage(img, sx + ((hh & 0xff) / 255) * (ts - js), sy + (((hh >>> 8) & 0xff) / 255) * (ts - js), js, js);
-        }
-      } else if (!this.hasTileset && wear > 120) {
-        ctx.fillStyle = '#2e2a22'; // procedural: trash specks, more as the path deepens
-        const specks: ReadonlyArray<readonly [number, number]> = [
-          [0.3, 0.35],
-          [0.65, 0.5],
-          [0.45, 0.72],
-        ];
-        const n = wear > 210 ? 3 : wear > 170 ? 2 : 1;
-        const sp = Math.max(1, ts * 0.12);
-        for (let k = 0; k < n; k++) {
-          ctx.fillRect(Math.floor(sx + specks[k]![0] * ts), Math.floor(sy + specks[k]![1] * ts), sp, sp);
-        }
-      }
-    }
+    // (Desire-path WEAR + its JUNK/TENTS are now baked into the cached BASE in drawBase — ground level,
+    // under the moving agents — so they no longer draw over pedestrians here.)
 
     // Water pollution: runoff murks the coastal water green-brown, deepening with accumulation.
     for (const [tile, poll] of ambient.waterPollution) {
