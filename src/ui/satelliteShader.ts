@@ -95,24 +95,31 @@ void main() {
   // tiles undulate — the wang-tiled base + this displacement = the slosh, now per-pixel on the GPU.
   vec2 baseUv = v_uv;
   if (type == SAT_WATER) {
+    // AFFINE slosh: warp the sampled UV by flowing noise so the baked water tiles ripple/distort
+    // (the dynamic-water transform Maddy wants, now per-pixel on the GPU). ~0.5 tile of displacement.
     vec2 flow = vec2(
-      fbm(g * 0.7 + vec2(u_time * 0.05, u_time * 0.04)),
-      fbm(g * 0.7 + vec2(40.0 - u_time * 0.04, 9.0 + u_time * 0.05))
+      fbm(g * 0.9 + vec2(u_time * 0.10, u_time * 0.07)),
+      fbm(g * 0.9 + vec2(40.0 - u_time * 0.08, 9.0 + u_time * 0.11))
     ) - 0.5;
-    baseUv += (flow * 0.22) / u_view; // displacement in screen-UV, ~0.1 tile
+    baseUv += (flow * 0.5) / u_view;
   }
   vec3 col = texture(u_base, baseUv).rgb;
 
   if (type == SAT_WATER) {
-    // animated swell + specular glint + an SDF-ish shoreline foam band, OVER the baked water albedo
-    float wn = fbm(g * 0.6 + vec2(u_time * 0.04, u_time * 0.03));
-    float wn2 = fbm(g * 1.7 - vec2(u_time * 0.07, u_time * 0.05));
-    float spec = pow(max(wn, wn2), 4.0);
-    col = mix(col, col * 1.22, wn * 0.6) + spec * 0.16;
+    // DEEP water must read alive everywhere (not just the shore): a moving two-octave swell modulates
+    // brightness, whitecap crests pop on the wave peaks, and a slow sun-glint sheen drifts across.
+    float w1 = fbm(g * 0.8 + vec2(u_time * 0.09, u_time * 0.06));
+    float w2 = fbm(g * 2.0 + vec2(-u_time * 0.07, u_time * 0.10));
+    float wave = w1 * 0.6 + w2 * 0.4;
+    col *= 0.80 + 0.42 * wave;                                   // visible moving light/dark swell
+    float crest = smoothstep(0.62, 0.86, wave);                 // whitecaps on the peaks
+    col = mix(col, vec3(0.78, 0.86, 0.92), crest * 0.5);
+    float glint = pow(0.5 + 0.5 * sin((g.x * 0.7 + g.y * 0.5) * 2.4 - u_time * 1.1 + wave * 6.0), 6.0);
+    col += vec3(0.85, 0.9, 0.96) * glint * 0.22;                // drifting sun-glint
     float land = isLand(ci + vec2(1, 0)) + isLand(ci + vec2(-1, 0)) + isLand(ci + vec2(0, 1)) + isLand(ci + vec2(0, -1));
     if (land > 0.0) {
       float foam = (0.5 + 0.5 * sin(u_time * 2.0 + (g.x + g.y) * 3.0)) * clamp(land, 0.0, 1.0);
-      col = mix(col, vec3(0.80, 0.88, 0.92), foam * 0.22);
+      col = mix(col, vec3(0.84, 0.90, 0.94), foam * 0.30);       // shoreline foam band
     }
   } else if (type == SAT_TERRAIN || type == SAT_GREEN) {
     // grass sheen: a travelling wind-gust shimmer over the baked green (bare band 0 stays still)
