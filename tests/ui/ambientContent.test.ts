@@ -3311,4 +3311,22 @@ describe('mover collision / following (Maddy: bounding boxes, no overlap, pause 
     const sidecar = mk(10.5, 11, 1); // ahead but a full tile to the side
     expect(blockedAhead(buildMoverGrid([me, sidecar], W), W, me)).toBe(false);
   });
+
+  it('blocks cross-traffic only for the LOWER-priority vehicle (deadlock-free)', () => {
+    // a south-bound car crossing just ahead of an east-bound car, in its lane
+    const east = { x: 10, y: 10, dir: 1, tx: 10, ty: 10, id: 1 };
+    const south = { x: 10.6, y: 10.2, dir: 2, tx: 10, ty: 10, id: 2 };
+    const grid = buildMoverGrid([east, south], W);
+    expect(blockedAhead(grid, W, east)).toBe(true); // east (id 1) yields to south (id 2)
+    expect(blockedAhead(grid, W, south)).toBe(false); // south (higher id) never yields → cluster drains
+  });
+
+  it('a rear car stops far enough that its front does not enter the car ahead', () => {
+    const lead = mk(11.3, 10, 1); // ahead by ~1.3 in the same lane
+    const rear = mk(10, 10, 1);
+    // at ~1.3 ahead it is clear; within a sprite-length+step it must block
+    expect(blockedAhead(buildMoverGrid([lead, rear], W), W, rear)).toBe(false);
+    const near = mk(10.7, 10, 1);
+    expect(blockedAhead(buildMoverGrid([near, rear], W), W, rear)).toBe(true);
+  });
 });

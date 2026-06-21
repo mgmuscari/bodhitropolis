@@ -225,8 +225,8 @@ export class GpuRenderer {
       const sy = fwd.dx; // perpendicular (the car's lateral axis)
       const fxC = cx + fwd.dx * 0.18;
       const fyC = cy + fwd.dy * 0.18; // front bumper
-      cone(fxC + sx * 0.13, fyC + sy * 0.13, fwd.dx, fwd.dy, 1.7, 0.22, 1.0, 0.92, 0.74, 0.12 * mul);
-      cone(fxC - sx * 0.13, fyC - sy * 0.13, fwd.dx, fwd.dy, 1.7, 0.22, 1.0, 0.92, 0.74, 0.12 * mul);
+      cone(fxC + sx * 0.11, fyC + sy * 0.11, fwd.dx, fwd.dy, 1.7, 0.22, 1.0, 0.92, 0.74, 0.12 * mul);
+      cone(fxC - sx * 0.11, fyC - sy * 0.11, fwd.dx, fwd.dy, 1.7, 0.22, 1.0, 0.92, 0.74, 0.12 * mul);
       radial(cx - fwd.dx * 0.24, cy - fwd.dy * 0.24, 0.4, 1.0, 0.18, 0.12, 0.16 * mul); // red taillight at the rear
     };
     if (night > 0.02) {

@@ -1370,28 +1370,43 @@ export function buildMoverGrid(movers: readonly Mover[], mapW: number): Map<numb
   return g;
 }
 
-/** True when another SAME-DIRECTION vehicle occupies the bounding-box space just ahead of `m`, so `m`
- *  must pause rather than overlap it (Maddy: movers can't overlap; pause for space ahead → queues +
- *  longer trips). Same-direction only → a lane queues without oncoming/cross-traffic deadlock. `gap` is
- *  the follow distance (≈ a car length), `halfWidth` the lateral lane tolerance. */
-export function blockedAhead(grid: Map<number, Mover[]>, mapW: number, m: Mover, gap = 0.7, halfWidth = 0.38): boolean {
+/** True when another vehicle occupies the bounding-box space just ahead of `m` (at the RENDERED, lane-
+ *  offset sprite positions), so `m` must pause rather than overlap it (Maddy: movers can't overlap;
+ *  pause for space ahead → queues + longer trips, no orthogonal cross-overs). Yield rule, deadlock-free:
+ *    • SAME direction → the rear yields to the car ahead (positional).
+ *    • CROSS direction → yield only to the HIGHER-priority (id) vehicle, so in any conflict the top-id
+ *      car never yields → it clears → the cluster drains (no 4-way gridlock).
+ *  ONCOMING (opposite dir) sit in the other lane: rendered ≈ 2·LANE apart laterally > halfWidth → they
+ *  fall outside the claim box and never block. `gap` ≈ a car length, `halfWidth` the lane tolerance. */
+// `gap` (centre-to-centre) must cover BOTH sprites' length (≈0.58) PLUS the max per-substep step
+// (freeway ≈0.24) so a car STOPS before its front overshoots into the car ahead (Maddy: front of a
+// sprite cannot enter any part of another sprite). `halfWidth` stays below the oncoming-lane separation
+// (2·LANE ≈ 0.44) so opposing traffic in the other lane never blocks (no head-on deadlock).
+export function blockedAhead(grid: Map<number, Mover[]>, mapW: number, m: Mover, gap = 0.85, halfWidth = 0.34): boolean {
   const fdx = DIR_DX[m.dir]!;
   const fdy = DIR_DY[m.dir]!;
-  const ti = Math.round(m.x + fdx * gap);
-  const tj = Math.round(m.y + fdy * gap);
+  const mlo = laneOffset(m.dir);
+  const mx = m.x + mlo.dx; // rendered (sprite) position
+  const my = m.y + mlo.dy;
+  const ti = Math.round(mx + fdx * gap);
+  const tj = Math.round(my + fdy * gap);
   const pdx = DIR_DX[(m.dir + 1) & 3]!; // perpendicular unit (lateral)
   const pdy = DIR_DY[(m.dir + 1) & 3]!;
+  const mprio = m.id ?? 0;
   for (let dj = -1; dj <= 1; dj++) {
     for (let di = -1; di <= 1; di++) {
       const cell = grid.get((tj + dj) * mapW + (ti + di));
       if (!cell) continue;
       for (const o of cell) {
-        if (o === m || o.dir !== m.dir) continue;
-        const dx = o.x - m.x;
-        const dy = o.y - m.y;
+        if (o === m) continue;
+        const olo = laneOffset(o.dir);
+        const dx = o.x + olo.dx - mx;
+        const dy = o.y + olo.dy - my;
         const fwd = dx * fdx + dy * fdy; // distance ahead of m
-        if (fwd <= 0.02 || fwd > gap) continue; // must be ahead, within the follow gap
-        if (Math.abs(dx * pdx + dy * pdy) < halfWidth) return true; // and in the same lane
+        if (fwd <= 0.02 || fwd > gap) continue; // must be ahead, within the claim box
+        if (Math.abs(dx * pdx + dy * pdy) >= halfWidth) continue; // and in-lane (oncoming fall outside)
+        if (o.dir === m.dir) return true; // same direction → rear yields to the car ahead
+        if ((o.id ?? 0) > mprio) return true; // cross direction → yield to the higher-priority vehicle
       }
     }
   }
