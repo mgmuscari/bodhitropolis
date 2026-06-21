@@ -146,20 +146,37 @@ void main() {
     col += vec3(0.9, 0.88, 0.8) * glint * 0.18 * edge;
   }
 
-  // single-pass raymarched drop shadows: step toward the sun (optionally sweeping a day cycle),
-  // occlude under taller neighbours
-  vec2 sun = u_dayspeed > 0.0 ? rot2(u_sun, u_time * u_dayspeed) : u_sun;
+  // Day/night: the sun ARCS east→west across the sky (NOT a full orbit around the map — that read as
+  // flat-earth, Maddy). Altitude = sin(day): >0 daytime, <0 night. Azimuth sweeps via cos(day), with a
+  // fixed downward bias so shadows fall consistently. Shadows lengthen at dawn/dusk + vanish at night;
+  // the scene dims + cools toward night. With dayspeed 0 the sun is a fixed mid-morning (no cycle).
+  vec2 sun = u_sun;
+  float shadowStrength = u_shadow;
+  float shadowLen = 1.0;
+  float alt = 1.0;
+  if (u_dayspeed > 0.0) {
+    float day = u_time * u_dayspeed;
+    alt = sin(day);
+    float dayAmt = clamp(alt, 0.0, 1.0);
+    sun = vec2(cos(day), -0.55);                 // azimuth arcs E↔W; downward bias
+    shadowStrength = u_shadow * dayAmt;          // soft → none at night
+    shadowLen = mix(1.0, 2.4, 1.0 - dayAmt);     // long shadows when the sun is low
+  }
   float shadow = 1.0;
   vec2 stepv = normalize(sun);
   for (int i = 1; i <= 12; i++) {
-    vec2 sc = floor(ci + stepv * float(i));
+    vec2 sc = floor(ci + stepv * float(i) * shadowLen);
     if (sc.x < 0.0 || sc.y < 0.0 || sc.x >= u_grid.x || sc.y >= u_grid.y) break;
     vec4 nd = cell(sc);
     int nt = int(nd.r * 255.0 + 0.5);
     bool building = nt >= SAT_RESIDENTIAL && nt <= SAT_POWER;
-    if (building && nd.g * 255.0 > float(i) * 22.0) { shadow = 1.0 - u_shadow; break; }
+    if (building && nd.g * 255.0 > float(i) * 22.0) { shadow = 1.0 - shadowStrength; break; }
   }
   col *= shadow;
+  if (u_dayspeed > 0.0) {
+    col *= mix(0.45, 1.0, smoothstep(-0.2, 0.3, alt));          // dusk/night dim
+    col = mix(col, col * vec3(0.72, 0.8, 1.06), clamp(-alt, 0.0, 1.0) * 0.6); // cool blue at night
+  }
 
   fragColor = vec4(col, 1.0);
 }`;
