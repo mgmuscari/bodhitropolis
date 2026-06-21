@@ -36,6 +36,8 @@ import {
   reachedPlot,
   congestionSpeedMult,
   congestionCount,
+  buildMoverGrid,
+  blockedAhead,
   walkPath,
   stopReachable,
   usesCommittedPath,
@@ -3278,5 +3280,35 @@ describe('usesCommittedPath (Maddy: looping cyclists — bike legs need committe
     expect(usesCommittedPath(TravelMode.Streetcar)).toBe(false);
     expect(usesCommittedPath(TravelMode.ElevatedRail)).toBe(false);
     expect(usesCommittedPath(TravelMode.Drive)).toBe(false); // Drive uses the road A* (roadPath)
+  });
+});
+
+describe('mover collision / following (Maddy: bounding boxes, no overlap, pause for space ahead)', () => {
+  const mk = (x: number, y: number, dir: number) => ({ x, y, dir, tx: x, ty: y });
+  const W = 64;
+
+  it('blocks when a same-direction vehicle sits just ahead in-lane', () => {
+    const me = mk(10, 10, 1); // heading EAST
+    const ahead = mk(10.5, 10, 1); // half a tile ahead, same lane
+    const grid = buildMoverGrid([me, ahead], W);
+    expect(blockedAhead(grid, W, me)).toBe(true);
+  });
+
+  it('does NOT block with clear road ahead', () => {
+    const me = mk(10, 10, 1);
+    const far = mk(13, 10, 1); // 3 tiles ahead — beyond the follow gap
+    expect(blockedAhead(buildMoverGrid([me, far], W), W, me)).toBe(false);
+  });
+
+  it('does NOT block an oncoming (opposite-direction) vehicle — no deadlock', () => {
+    const me = mk(10, 10, 1); // EAST
+    const oncoming = mk(10.5, 10, 3); // just ahead but heading WEST (other lane)
+    expect(blockedAhead(buildMoverGrid([me, oncoming], W), W, me)).toBe(false);
+  });
+
+  it('does NOT block a same-dir vehicle in a different lane (lateral offset)', () => {
+    const me = mk(10, 10, 1); // EAST
+    const sidecar = mk(10.5, 11, 1); // ahead but a full tile to the side
+    expect(blockedAhead(buildMoverGrid([me, sidecar], W), W, me)).toBe(false);
   });
 });

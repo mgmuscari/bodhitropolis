@@ -1357,12 +1357,55 @@ function flockTile(map: GameMap, f: Flock): { x: number; y: number } {
  *  bounded `recent` history is updated on arrival and passed to `pickNext` for loop
  *  avoidance. Returns false when the mover is boxed in / isolated (pickNext < 0) so the
  *  caller despawns it instead of leaving it frozen or circling; true otherwise. */
+/** Bucket moving vehicles by the tile their centre sits on, for the O(1)-neighbourhood collision check.
+ *  Rebuilt each substep before any vehicle moves (a one-substep-stale read is fine at these speeds). */
+export function buildMoverGrid(movers: readonly Mover[], mapW: number): Map<number, Mover[]> {
+  const g = new Map<number, Mover[]>();
+  for (const m of movers) {
+    const k = Math.round(m.y) * mapW + Math.round(m.x);
+    const arr = g.get(k);
+    if (arr) arr.push(m);
+    else g.set(k, [m]);
+  }
+  return g;
+}
+
+/** True when another SAME-DIRECTION vehicle occupies the bounding-box space just ahead of `m`, so `m`
+ *  must pause rather than overlap it (Maddy: movers can't overlap; pause for space ahead → queues +
+ *  longer trips). Same-direction only → a lane queues without oncoming/cross-traffic deadlock. `gap` is
+ *  the follow distance (≈ a car length), `halfWidth` the lateral lane tolerance. */
+export function blockedAhead(grid: Map<number, Mover[]>, mapW: number, m: Mover, gap = 0.7, halfWidth = 0.38): boolean {
+  const fdx = DIR_DX[m.dir]!;
+  const fdy = DIR_DY[m.dir]!;
+  const ti = Math.round(m.x + fdx * gap);
+  const tj = Math.round(m.y + fdy * gap);
+  const pdx = DIR_DX[(m.dir + 1) & 3]!; // perpendicular unit (lateral)
+  const pdy = DIR_DY[(m.dir + 1) & 3]!;
+  for (let dj = -1; dj <= 1; dj++) {
+    for (let di = -1; di <= 1; di++) {
+      const cell = grid.get((tj + dj) * mapW + (ti + di));
+      if (!cell) continue;
+      for (const o of cell) {
+        if (o === m || o.dir !== m.dir) continue;
+        const dx = o.x - m.x;
+        const dy = o.y - m.y;
+        const fwd = dx * fdx + dy * fdy; // distance ahead of m
+        if (fwd <= 0.02 || fwd > gap) continue; // must be ahead, within the follow gap
+        if (Math.abs(dx * pdx + dy * pdy) < halfWidth) return true; // and in the same lane
+      }
+    }
+  }
+  return false;
+}
+
 function advanceMover(
   m: Mover,
   speed: number,
   map: GameMap,
   pickNext: (x: number, y: number, fromDir: number, recent: readonly number[]) => number,
+  blocked?: (m: Mover) => boolean,
 ): boolean {
+  if (blocked?.(m)) return true; // space ahead occupied → pause this substep (alive, just waiting)
   const dist = Math.abs(m.tx - m.x) + Math.abs(m.ty - m.y);
   if (dist <= speed) {
     // Arrive at the target tile centre, record it, and recommit to the next leg.
@@ -2971,8 +3014,9 @@ export function nextPatrolStep(
  * counting down its patrol life so the fleet recirculates from the precincts. Renderer-side;
  * deterministic in `rng`.
  */
-export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng, safe?: ReadonlySet<number>): void {
+export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng, safe?: ReadonlySet<number>, grid?: Map<number, Mover[]>): void {
   const chasing = policePhase(state.policeTick) === 'chase';
+  const blocked = grid ? (mm: Mover): boolean => blockedAhead(grid, map.width, mm) : undefined;
   state.cruisers = state.cruisers.filter((c) => {
     if ((c.dwell ?? 0) <= 0) return false; // shift over → recycle (respawn tops up from the precinct)
     c.dwell! -= 1;
@@ -2980,7 +3024,7 @@ export function stepCruisers(state: AmbientState, map: GameMap, rng: Rng, safe?:
     // Chase → aim per the cruiser's ghost personality; scatter → no target, so it seeks redlined streets.
     const target = chasing ? huntTarget(c, state.peds) : null;
     return advanceMover(c, CAR_SPEED, map, (x, y, fromDir, recent) =>
-      nextPatrolStep(map, x, y, fromDir, rng, recent, target, safe),
+      nextPatrolStep(map, x, y, fromDir, rng, recent, target, safe), blocked,
     );
   });
 }
@@ -3145,6 +3189,15 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     return h ? base * congestionSpeedMult(congestionCount(h, dir)) : base;
   };
 
+  // Collision/following: vehicles can't overlap — a car PAUSES if a same-direction vehicle sits in the
+  //    bounding-box space just ahead (Maddy: queues form, trips take longer). Grid built from the moving
+  //    cars + cruisers at substep start; cruisers share it (stepCruisers below).
+  const moverGrid = buildMoverGrid(
+    [...state.cars.filter((c) => !c.parked && !c.abandoned), ...state.cruisers], // PARKED cars don't count (Maddy)
+    map.width,
+  );
+  const blocked = (mm: Mover): boolean => blockedAhead(moverGrid, map.width, mm);
+
   // 3. Move the cars. A PARKED car waits for its pedestrian (its bound ped zeroes `dwell` on
   //    return; the countdown is just a safety release). A moving trip-car follows its path
   //    and, on arrival, PARKS (a lot stall, or a street curb if none) — it no longer vanishes
@@ -3167,11 +3220,11 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
     const onFreeway = map.built[map.idx(cx, cy)] === BuiltKind.RoadHighway;
     const sp = speedAt(onFreeway ? CAR_SPEED * 2 : CAR_SPEED, cx, cy, c.dir) * (c.speedMul ?? 1);
     if (c.path !== undefined) {
-      const alive = advanceMover(c, sp, map, (x, y) => pathStep(map, c, x, y));
+      const alive = advanceMover(c, sp, map, (x, y) => pathStep(map, c, x, y), blocked);
       return alive ? true : tryPark(state, c, map);
     }
     return advanceMover(c, sp, map, (x, y, fromDir, recent) =>
-      nextRoadStep(map, x, y, fromDir, rng, recent),
+      nextRoadStep(map, x, y, fromDir, rng, recent), blocked,
     );
   });
 
@@ -3181,7 +3234,7 @@ function substep(state: AmbientState, map: GameMap, rng: Rng): void {
   state.policeTick += 1;
   // Community safe-zones the cruisers avoid + never sweep (built fresh only when there ARE cruisers).
   const safe = state.cruisers.length > 0 ? buildSafeZones(map) : undefined;
-  stepCruisers(state, map, rng, safe);
+  stepCruisers(state, map, rng, safe, moverGrid);
   state.arrestTick += 1;
   if (state.arrestTick % ARREST_CADENCE === 0 && policePhase(state.policeTick) === 'chase') {
     stepArrests(state, map, rng, safe);
