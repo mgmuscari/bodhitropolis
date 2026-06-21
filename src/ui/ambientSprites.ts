@@ -16,6 +16,7 @@ const FILES: Readonly<Record<keyof AmbientSprites, readonly string[]>> = {
   // displacement + neglect made visible (Maddy). Drawn over high-wear tiles in the desire-path render.
   encampments: ['tent-1', 'tent-2', 'tent-3'],
   junk: ['mattress', 'junk-pile', 'old-couch', 'debris'],
+  police: ['cruiser'],
 };
 
 export interface AmbientSprites {
@@ -27,6 +28,7 @@ export interface AmbientSprites {
   props: CanvasImageSource[];
   encampments: CanvasImageSource[];
   junk: CanvasImageSource[];
+  police: CanvasImageSource[];
 }
 
 /** Loads one sprite URL, resolving to the decoded image or null on any failure (never rejects). */
@@ -47,7 +49,7 @@ export async function loadAmbientSprites(
   base = '/',
   loadImage: SpriteLoader = domImageLoader,
 ): Promise<AmbientSprites> {
-  const out: AmbientSprites = { cars: [], peds: [], cyclists: [], flora: [], smog: [], props: [], encampments: [], junk: [] };
+  const out: AmbientSprites = { cars: [], peds: [], cyclists: [], flora: [], smog: [], props: [], encampments: [], junk: [], police: [] };
   await Promise.all(
     (Object.keys(FILES) as (keyof AmbientSprites)[]).map(async (cat) => {
       const imgs = await Promise.all(FILES[cat].map((n) => loadImage(`${base}sprites/ambient/${cat}/${n}.png`)));

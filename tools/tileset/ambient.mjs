@@ -24,11 +24,12 @@ const MAX_SPRITE_OPACITY = 0.85;
 // Peds/cyclists are SMALL FIGURES (a head + shoulders from above), not tile-filling blobs. Cap the
 // centre fill so a bake that came out big/boxy (the green-coat walk-1) retries for a small one.
 const SMALL_FIGURE = new Set(['peds', 'cyclists']);
+// (DIRECTIONAL also gains 'police' below — the cruiser is a car drawn rotated to its heading.)
 const MAX_FIGURE_CENTER = 0.55;
 
 // Categories the renderer rotates to a travel heading, so the sprite's FRONT must point UP (north).
 // These get the extra forward-facing check on top of top-down (Maddy: taxi/van drove backwards).
-const DIRECTIONAL = new Set(['cars', 'cyclists']);
+const DIRECTIONAL = new Set(['cars', 'cyclists', 'police']);
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(HERE, '../..', 'public/sprites/ambient');
@@ -84,6 +85,11 @@ const CATALOG = {
   cyclists: [
     ['cyclist-1', 'a person riding a bicycle, rider and bike frame from directly above'],
     ['cyclist-2', 'a cyclist on a bicycle in a green jersey, from directly above'],
+  ],
+  // Police cruiser: a black/dark car (the renderer overlays the flashing red/blue light bar). Black
+  // body survives the white→alpha floodfill; directional → facing-validated like the other cars.
+  police: [
+    ['cruiser', 'a black police car sedan, roof visible, seen from directly above'],
   ],
   smog: [
     ['smoke-gray', 'a soft puff of light gray smoke'],

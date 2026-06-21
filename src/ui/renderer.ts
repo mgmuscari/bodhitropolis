@@ -1586,20 +1586,28 @@ export class Renderer {
       ctx.globalAlpha = 1;
     }
 
-    // Police cruisers: a dark institutional body with a FLASHING red/blue light bar (alternating
-    // ~5x/sec) — the over-policing of the redlined districts made visible as it patrols.
+    // Police cruisers: a black CAR (sprite, rotated to heading like the other vehicles) — its BODY is
+    // lit normally (dims at night). The flashing red/blue light bar is drawn LATER, after the lighting
+    // buffer, so the LIGHTS evade shading (a flasher glows full-bright; the car doesn't — Maddy).
     const cruiserSize = Math.max(2, ts * 0.26);
-    const flashRed = Math.floor(performance.now() / 180) % 2 === 0;
+    const policeSprites = this.hasTileset ? this.ambientSprites?.police : undefined;
     for (const c of ambient.cruisers) {
       const off = laneOffset(c.dir);
       const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
       if (!onScreen(sx, sy)) continue;
-      ctx.fillStyle = '#1c2235'; // dark cruiser body
-      ctx.fillRect(Math.floor(sx - cruiserSize / 2), Math.floor(sy - cruiserSize / 2), cruiserSize, cruiserSize);
-      // The flashing light bar on top (half the body), alternating red/blue.
-      const lb = Math.max(1, cruiserSize * 0.5);
-      ctx.fillStyle = flashRed ? '#ff3b30' : '#3b6bff';
-      ctx.fillRect(Math.floor(sx - lb / 2), Math.floor(sy - cruiserSize / 2), lb, Math.max(1, cruiserSize * 0.34));
+      if (policeSprites && policeSprites.length > 0) {
+        const hv = dirVector(c.dir);
+        const angle = Math.atan2(hv.dx, -hv.dy); // sprite faces north; rotate to heading (like cars)
+        const ss = ts * 0.55;
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(angle);
+        ctx.drawImage(policeSprites[0]!, -ss / 2, -ss / 2, ss, ss);
+        ctx.restore();
+      } else {
+        ctx.fillStyle = '#1c2235'; // procedural fallback: dark cruiser body
+        ctx.fillRect(Math.floor(sx - cruiserSize / 2), Math.floor(sy - cruiserSize / 2), cruiserSize, cruiserSize);
+      }
     }
 
     // Trains: a snake of cars riding the rails (Maddy: rails need trains). Each cell is drawn as a
@@ -1810,6 +1818,24 @@ export class Renderer {
         ctx.globalCompositeOperation = 'source-over';
         ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       }
+    }
+
+    // EMISSIVE lights — drawn AFTER the lighting buffer so they EVADE shading (a flashing light glows
+    // full-bright regardless of day/night/cloud; only the lights, not the cruiser body — Maddy). A
+    // flashing red/blue bar on each cruiser. (Casting weak light onto nearby tiles is the next step —
+    // folded into the streetlight light-pollution system.)
+    const flashRed = Math.floor(performance.now() / 180) % 2 === 0;
+    const lb = Math.max(1, ts * 0.2);
+    for (const c of ambient.cruisers) {
+      const off = laneOffset(c.dir);
+      const { sx, sy } = camera.worldToScreen(c.x + 0.5 + off.dx, c.y + 0.5 + off.dy);
+      if (!onScreen(sx, sy)) continue;
+      // a soft glow + the bright bar (the glow sells "emissive" even in daylight)
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = flashRed ? '#ff3b30' : '#3b6bff';
+      ctx.fillRect(Math.floor(sx - lb), Math.floor(sy - lb), Math.ceil(lb * 2), Math.ceil(lb * 2));
+      ctx.globalAlpha = 1;
+      ctx.fillRect(Math.floor(sx - lb / 2), Math.floor(sy - lb / 2), Math.ceil(lb), Math.ceil(lb * 0.7));
     }
   }
 }
